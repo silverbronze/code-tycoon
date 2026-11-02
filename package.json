@@ -1,0 +1,50 @@
+{
+  "name": "code-tycoon",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Live isometric city of a project's architecture and the Claude Code sessions working on it.",
+  "license": "AGPL-3.0-only",
+  "author": "archigold",
+  "homepage": "https://github.com/archigold/code-tycoon#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/archigold/code-tycoon.git"
+  },
+  "bugs": "https://github.com/archigold/code-tycoon/issues",
+  "keywords": ["claude-code", "visualization", "isometric", "architecture", "three.js", "developer-tools"],
+  "bin": {
+    "code-tycoon": "bin/code-tycoon.mjs"
+  },
+  "files": [
+    "bin",
+    "server",
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "prepublishOnly": "npx tsc --noEmit -p . && vite build",
+    "start": "node --no-warnings server/index.mjs",
+    "index": "node --no-warnings server/cli.mjs index",
+    "hooks:install": "node server/hooks-install.mjs install",
+    "hooks:uninstall": "node server/hooks-install.mjs uninstall",
+    "autostart:install": "node scripts/autostart.mjs install",
+    "autostart:uninstall": "node scripts/autostart.mjs uninstall"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "gsap": "^3.12.5",
+    "playwright": "^1.64.1",
+    "three": "^0.170.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
