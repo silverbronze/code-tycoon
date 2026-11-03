@@ -19,10 +19,13 @@ The city is live. Every Claude Code session is a drone flying over it: you watch
 
 ```
 npx code-tycoon                  # opens http://127.0.0.1:4400
-npx code-tycoon hooks install    # optional: instant live updates
 ```
 
-Needs Node 22.13+ and a project you have used Claude Code in. Everything runs and stays on your machine.
+The page then offers to turn on live updates and start at login, one click each. Needs Node 22.13+ and a project you have used Claude Code in. Everything runs and stays on your machine.
+
+**Not a terminal person?** Paste this into Claude Code and it does the rest:
+
+> Install Code Tycoon for me. Check that Node.js 22.13 or newer is installed (install or update it if not, and tell me if I need to restart anything), then run `npx -y code-tycoon` in the background so it keeps running, and tell me to open http://127.0.0.1:4400 and click "Turn on" in the "Finish setting up" box.
 
 ## Screenshots
 
@@ -99,7 +102,11 @@ npx code-tycoon                  # http://127.0.0.1:4400, opens the browser
 npx code-tycoon hooks install    # instant live updates; backs up ~/.claude/settings.json first
                                  # (an HTTP hook with a token header; VISUALIZER_HOOK=command for the old node hook)
 npx code-tycoon hooks uninstall  # removes them again
+npx code-tycoon autostart install    # start hidden at every login (copies the app to ~/.visualizer/app)
+npx code-tycoon autostart uninstall
 ```
+
+Both are also the "live updates" and "start at login" switches on the overview.
 
 Pick a project on the overview to track it; the first index of a large history takes a minute.
 Without hooks the live view still works from transcript tailing, a second or two behind.
@@ -115,7 +122,7 @@ npm run hooks:install
 ```
 
 `npm run dev` runs the API and Vite with hot reload (http://127.0.0.1:5173).
-`npm run autostart:install` starts the server hidden at every login (logs to `~/.visualizer/server.log`): a Startup-folder launcher on Windows, a LaunchAgent on macOS, a systemd user service on Linux. `npm run autostart:uninstall` removes it.
+`npm run autostart:install` starts the server hidden at every login from this checkout (logs to `~/.visualizer/server.log`): a Startup-folder launcher on Windows, a LaunchAgent on macOS, a systemd user service on Linux. `npm run autostart:uninstall` removes it. Run through npx, autostart copies the app to `~/.visualizer/app` instead, since npm may clear its cache, and a newer `npx code-tycoon` refreshes that copy.
 
 ## Privacy and how it works
 

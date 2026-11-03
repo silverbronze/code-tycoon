@@ -1,4 +1,4 @@
-import { api, live, type Project, type OpenSession, type Weekly } from './api';
+import { api, live, type Project, type OpenSession, type Weekly, type Setup } from './api';
 import { h, put, ago, bytes, dur, tail, money } from './util';
 import { notify } from './notify';
 import { Pulse } from './pulse';
@@ -15,11 +15,15 @@ export class Overview {
   private confirmUntrack: string | null = null;
   private pulse = new Pulse('big');
   private coach = new CoachPanel();
+  private setup: Setup | null = null;
+  private setupBusy = false;
+  private setupError = '';
 
   constructor(parent: HTMLElement) {
     this.root = h('div', { class: 'overview' });
     parent.appendChild(this.root);
     this.render();
+    api.setup().then(s => { this.setup = s; this.render(); }).catch(() => {});
     this.timer = window.setInterval(() => this.render(), 5000);
     live.subscribe(null);
     this.off = live.on(m => { if (m.type === 'session' || m.type === 'indexed') this.render(); });
@@ -38,7 +42,10 @@ export class Overview {
         h('div', { class: 'ov-stats' },
           this.pulse.el,
           notify.supported ? h('button', { class: 'big notif' + (notify.on ? ' on' : ''), title: 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
-            onclick: async () => { await notify.toggle(); this.render(); } }, h('b', {}, notify.on ? 'On' : 'Off'), h('span', {}, 'desktop alerts')) : null)),
+            onclick: async () => { await notify.toggle(); this.render(); } }, h('b', {}, notify.on ? 'On' : 'Off'), h('span', {}, 'desktop alerts')) : null,
+          this.setupToggle('hooks', 'live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
+          this.setupToggle('autostart', 'start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
+      this.setupBanner(),
       res.sessions.length ? this.openSessions(res.sessions) : null,
       tracked.length ? this.coach.el : null,
       tracked.length ? h('h2', { class: 'ov-h' }, 'Tracked') : null,
@@ -48,6 +55,39 @@ export class Overview {
       h('div', { class: 'grid small' }, ...other.map(p => this.card(p))),
     );
     this.root.scrollTop = scroll;
+  }
+
+  private async changeSetup(change: Partial<Record<'hooks' | 'autostart', boolean>>) {
+    this.setupBusy = true; this.setupError = ''; this.render();
+    try { this.setup = await api.setSetup(change); } catch (e) { this.setupError = (e as Error).message; }
+    this.setupBusy = false; this.render();
+  }
+
+  private setupToggle(k: 'hooks' | 'autostart', label: string, tip: string) {
+    const on = this.setup?.[k];
+    if (on == null) return null;
+    return h('button', { class: 'big notif' + (on ? ' on' : ''), title: tip, disabled: this.setupBusy,
+      onclick: () => this.changeSetup({ [k]: !on }) }, h('b', {}, on ? 'On' : 'Off'), h('span', {}, label));
+  }
+
+  // First run: both switches in one place, until they are on or put off for later.
+  private setupBanner() {
+    const s = this.setup;
+    let later = false;
+    try { later = localStorage.getItem('vz-setup-later') === '1'; } catch {}
+    if (!s || (s.hooks && s.autostart !== false) || (later && !this.setupError)) return null;
+    const missing = { hooks: !s.hooks, autostart: s.autostart === false };
+    return h('section', { class: 'setup' },
+      h('div', { class: 'setup-text' },
+        h('b', {}, 'Finish setting up'),
+        h('ul', {},
+          missing.hooks ? h('li', {}, h('em', {}, 'Live updates'), ': see each session read, write and run commands the moment it happens.') : null,
+          missing.autostart ? h('li', {}, h('em', {}, 'Start at login'), ': keep Code Tycoon running in the background, so this page is always ready.') : null),
+        this.setupError ? h('p', { class: 'setup-err' }, 'Could not finish: ', this.setupError) : null),
+      h('div', { class: 'setup-acts' },
+        h('button', { class: 'chip go', disabled: this.setupBusy, onclick: () => this.changeSetup({ ...(missing.hooks ? { hooks: true } : {}), ...(missing.autostart ? { autostart: true } : {}) }) },
+          this.setupBusy ? 'Setting up…' : 'Turn on'),
+        h('button', { class: 'chip', onclick: () => { try { localStorage.setItem('vz-setup-later', '1'); } catch {} this.setupError = ''; this.render(); } }, 'Not now')));
   }
 
   // Every open session in every project, the ones waiting on you first.

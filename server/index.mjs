@@ -20,6 +20,8 @@ import { systemLoad, processBreakdown } from './system.mjs';
 import { scanIdle, idleSummary, stopIdle } from './idle.mjs';
 import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
 import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize } from './optimize.mjs';
+import { hooksInstalled, setHooks } from './hooks-install.mjs';
+import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
 const TOKEN_FILE = path.join(VIS_DIR, 'token');
@@ -310,6 +312,18 @@ const server = http.createServer(async (req, res) => {
         const b = JSON.parse(await readBody(req) || '{}');
         if (!Array.isArray(b.pids) || !b.pids.length) return send(res, 400, { error: 'pids' }, req);
         return send(res, 200, await stopIdle(b.pids), req);
+      }
+      // first-run setup: Claude Code hooks for live updates, start at login. JSON only, like procs/stop
+      if (parts[1] === 'setup') {
+        if (req.method === 'POST') {
+          if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+          const b = JSON.parse(await readBody(req) || '{}');
+          try {
+            if (typeof b.hooks === 'boolean') setHooks(b.hooks ? 'install' : 'uninstall');
+            if (typeof b.autostart === 'boolean') setAutostart(b.autostart ? 'install' : 'uninstall');
+          } catch (e) { return send(res, 500, { error: e.message }, req); }
+        }
+        return send(res, 200, { hooks: hooksInstalled(), autostart: autostartSupported() ? autostartInstalled() : null }, req);
       }
       // how sessions use context and cache, machine-wide or for one project (?pid=)
       if (parts[1] === 'coach') {

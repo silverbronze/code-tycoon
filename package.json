@@ -30,8 +30,8 @@
     "index": "node --no-warnings server/cli.mjs index",
     "hooks:install": "node server/hooks-install.mjs install",
     "hooks:uninstall": "node server/hooks-install.mjs uninstall",
-    "autostart:install": "node scripts/autostart.mjs install",
-    "autostart:uninstall": "node scripts/autostart.mjs uninstall"
+    "autostart:install": "node server/autostart.mjs install",
+    "autostart:uninstall": "node server/autostart.mjs uninstall"
   },
   "engines": {
     "node": ">=22.13"

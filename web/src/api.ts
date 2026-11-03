@@ -55,14 +55,14 @@ export interface LiveEvent { ts: number; s: string; a: string | null; k: number;
 export interface Alert { id: number; kind: 'collision' | 'overlap' | 'needs-you' | 'loop' | 'failing' | 'cost' | 'red-stop' | 'cold-resume' | 'context-big' | 'topic-switch' | 'compacted'; pid: string; sessions: string[]; text: string; ts: number; path?: string | null; module?: string | null; resolved?: boolean }
 // Coaching on context and cache use (server/coach.mjs). Money is API-equivalent.
 export type CoachKind = 'cold-resume' | 'big-context' | 'topic-switch' | 'compacted' | 'model-switch' | 'cache-reset' | 'model-fit' | 'big-results' | 'heavy-start';
-export interface CoachFinding { kind: CoachKind; ts: number; text: string; fix: string; lost: number; save: number; task?: string }
+export interface CoachFinding { kind: CoachKind; ts: number; text: string; fix: string; lost: number; save: number; task?: string; tasks?: string[] }
 export interface CoachSession {
   id: string; pid: string; project: string | null; title: string; first: number; last: number; model: string; cost: number; agentCost: number; agents: number;
   calls: number; tasks: number; per10k: number; hit: number; base: number; peak: number; ttl: number; compactions: number;
   findings: CoachFinding[]; lost: number; save: number;
   curve?: [number, number][]; marks?: { ts: number; kind: string; pre?: number; post?: number }[];
 }
-export interface CoachHabit { kind: CoachKind; label: string; habit: string; n: number; sessions: number; lost: number; save: number }
+export interface CoachHabit { kind: CoachKind; label: string; habit: string; steps?: string[]; n: number; sessions: number; lost: number; save: number }
 export interface CoachRoll {
   sessions: number; cost: number; calls: number; hit: number; save: number; lost: number; compactions: number; coldResumes: number; coldLost: number;
   fitSave: number; bigShare: number; base: number; per10k: number; peak: number; habits: CoachHabit[];
@@ -147,6 +147,9 @@ export interface OptJob {
   changed?: string[]; created?: string[]; kept?: string[]; undo: boolean;
 }
 
+// hooks: live updates from Claude Code; autostart: null where the platform has none
+export interface Setup { hooks: boolean; autostart: boolean | null }
+
 const enc = encodeURIComponent;
 const post = (url: string, body?: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
 async function get<T>(url: string): Promise<T> {
@@ -159,6 +162,12 @@ export const api = {
   pulse: () => get<PulseT>('/api/pulse'),
   pulseDetail: (k: string) => get<PulseDetail>(`/api/pulse/${enc(k)}`),
   stopProcs: async (pids: number[]) => { const r = await post('/api/procs/stop', { pids }); if (!r.ok) throw new Error(String(r.status)); return r.json() as Promise<StopResult>; },
+  setup: () => get<Setup>('/api/setup'),
+  setSetup: async (change: Partial<Record<'hooks' | 'autostart', boolean>>) => {
+    const r = await post('/api/setup', change), d = await r.json();
+    if (!r.ok) throw new Error(d.error || String(r.status));
+    return d as Setup;
+  },
   track: (id: string) => post(`/api/projects/${enc(id)}/track`),
   untrack: (id: string) => post(`/api/projects/${enc(id)}/untrack`),
   coach: (days: number, pid?: string | null) => get<Coach>(`/api/coach?days=${days}${pid ? '&pid=' + enc(pid) : ''}`),

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // npx code-tycoon [start] [--no-open]   - run the server and open the city
 // npx code-tycoon hooks install|uninstall - live updates from Claude Code hooks
+// npx code-tycoon autostart install|uninstall - start the server at login
 // npx code-tycoon index [project]       - backfill one project (or all tracked)
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -36,12 +37,16 @@ async function up() {
 }
 
 if (cmd === 'start') {
+  const { refreshAutostart } = await import('../server/autostart.mjs');
+  refreshAutostart();
   if (await up()) { console.log(`Code Tycoon is already running on ${url}`); open(); process.exit(0); }
   await import('../server/index.mjs');
   for (let i = 0; i < 50 && !(await up()); i++) await new Promise(r => setTimeout(r, 200));
   open();
 } else if (cmd === 'hooks' && ['install', 'uninstall'].includes(args[1])) {
   run('hooks-install.mjs', [args[1]]);
+} else if (cmd === 'autostart' && ['install', 'uninstall'].includes(args[1])) {
+  run('autostart.mjs', [args[1]]);
 } else if (cmd === 'index' || cmd === 'stats') {
   run('cli.mjs', args);
 } else {
@@ -49,6 +54,8 @@ if (cmd === 'start') {
   npx code-tycoon [--no-open]          start the server on ${url} and open it
   npx code-tycoon hooks install        instant live updates (backs up ~/.claude/settings.json first)
   npx code-tycoon hooks uninstall      remove the hooks
+  npx code-tycoon autostart install    start the server hidden at every login
+  npx code-tycoon autostart uninstall  stop starting it at login
   npx code-tycoon index [project]      backfill one project, or every tracked one`);
   process.exit(cmd === 'help' ? 0 : 1);
 }
