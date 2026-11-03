@@ -4,13 +4,13 @@
   "type": "module",
   "description": "Live isometric city of a project's architecture and the Claude Code sessions working on it.",
   "license": "AGPL-3.0-only",
-  "author": "archigold",
-  "homepage": "https://github.com/archigold/code-tycoon#readme",
+  "author": "silverbronze",
+  "homepage": "https://github.com/silverbronze/code-tycoon#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/archigold/code-tycoon.git"
+    "url": "git+https://github.com/silverbronze/code-tycoon.git"
   },
-  "bugs": "https://github.com/archigold/code-tycoon/issues",
+  "bugs": "https://github.com/silverbronze/code-tycoon/issues",
   "keywords": ["claude-code", "visualization", "isometric", "architecture", "three.js", "developer-tools"],
   "bin": {
     "code-tycoon": "bin/code-tycoon.mjs"
