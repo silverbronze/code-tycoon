@@ -22,7 +22,7 @@ const q = {
   paths: db.prepare(`SELECT task_id, lower(path) p FROM events WHERE session_id=? AND agent_id IS NULL AND path IS NOT NULL
     AND kind IN ('read','write','search') AND inferred=0 AND task_id IS NOT NULL`),
   tasks: db.prepare('SELECT id, ts, n_write, n_cmd, title, prompt FROM tasks WHERE session_id=? ORDER BY ts'),
-  big: db.prepare(`SELECT ts, tool, path, detail, res_len FROM events WHERE session_id=? AND agent_id IS NULL AND res_len > ?
+  big: db.prepare(`SELECT ts, tool, path, detail, res_len, task_id FROM events WHERE session_id=? AND agent_id IS NULL AND res_len > ?
     AND kind IN ('read','search','cmd','remote','other') ORDER BY ts`),
   session: db.prepare(`SELECT s.id, s.project_id, s.title, s.last_prompt, s.first_ts, s.last_ts, p.name, p.root FROM sessions s
     LEFT JOIN projects p ON p.id=s.project_id WHERE s.id=?`),
@@ -65,6 +65,30 @@ export const HABITS = {
   'big-results': 'Large tool output stays in context for every later turn. Read files with offset/limit, pipe long logs through tail, or let a subagent explore and report back.',
   'heavy-start': 'Every turn starts with this many tokens before your first word: system prompt, tool definitions, MCP servers, CLAUDE.md and memory. Turn off servers this project does not use.',
 };
+// Concrete steps that keep each one from happening again.
+export const STEPS = {
+  'cold-resume': ['Before a break longer than the cache lasts, run /compact so less is written again on return.',
+    'Coming back to something new? Start a fresh session and paste a two-line handoff instead of resuming.',
+    'For long, interrupted work, a 1-hour cache (where available) outlives short breaks.'],
+  'big-context': ['Watch the context meter: at ~150k, /compact with a note on what to keep.',
+    'End a session when its task is done; the next task starts lean.',
+    'Send exploration (searching, reading many files) to a subagent so only its summary lands in context.'],
+  'topic-switch': ['When the next prompt is about another part of the code, open a new session.',
+    'Keep a short handoff note (CLAUDE.md or a scratch file) so a fresh session needs no history.'],
+  'compacted': ['Run /compact yourself at a natural break and say what to keep, before the limit forces it.',
+    'Plan long work as a list of tasks and give each its own session.'],
+  'model-switch': ['Choose the model with /model at the start of a session, not halfway.',
+    'Need a second opinion from another model? Ask it in a new session with a short summary.'],
+  'cache-reset': ['Add or remove MCP servers, tools and settings between sessions, not during one.',
+    'Edits to CLAUDE.md or memory mid-session change the cached prefix too; batch them for later.'],
+  'model-fit': ['Use Sonnet for questions, lookups, reviews and explanations; switch to Opus or Fable in a new session for the change.',
+    'Set a cheaper default model and pick the big one on purpose.'],
+  'big-results': ['Read files with offset/limit, and grep before reading whole files.',
+    'Pipe long command output through tail or head, or filter it to the lines that matter.',
+    'Let a subagent explore and report a summary back.'],
+  'heavy-start': ['Disable MCP servers this project does not use (/mcp).',
+    'Trim CLAUDE.md and memory to what every session needs; move the rest into files read on demand.'],
+};
 export const LABEL = { 'cold-resume': 'Cold resume', 'big-context': 'Large context', 'topic-switch': 'New topic, old session', 'compacted': 'Auto-compacted',
   'model-switch': 'Model switched', 'cache-reset': 'Cache rebuilt', 'model-fit': 'Pricier model than needed', 'big-results': 'Bulky tool output', 'heavy-start': 'Heavy start' };
 
@@ -100,6 +124,10 @@ function analyze(sid, totalCost) {
   for (const r of rows) { sumCtx += ctxOf(r); sumRead += r.tcr; }
   const promptIn = (a, b) => tasks.some(t => t.ts > a && t.ts <= b);
   const compactIn = (a, b) => compacts.some(c => c.ts > a && c.ts <= b);
+  // the prompts a finding happened in, by title
+  const taskName = new Map(tasks.map(t => [t.id, clip(t.title || t.prompt, 90)]));
+  const taskAt = ts => { let id = null; for (const t of tasks) { if (t.ts > ts) break; id = t.id; } return id; };
+  const names = ids => [...new Set(ids.filter(Boolean))].map(id => taskName.get(id)).filter(Boolean);
 
   // 2, 6: the cache written again from scratch
   for (let i = 1; i < rows.length; i++) {
@@ -129,7 +157,7 @@ function analyze(sid, totalCost) {
     const maxCtx = Math.max(...ctxs);
     const extra = heavy.reduce((a, r) => a + readUsd(r.model, ctxOf(r) - BIG), 0);
     const lastBig = heavy[heavy.length - 1];
-    findings.push({ kind: 'big-context', ts: heavy[0].ts, lost: extra, save: extra,
+    findings.push({ kind: 'big-context', ts: heavy[0].ts, lost: extra, save: extra, tasks: names(heavy.map(r => r.task_id || taskAt(r.ts))),
       text: `${heavy.length} turns ran with more than ${k(BIG)} tokens in context (peak ${k(maxCtx)}); at that size each turn costs about ${money(readUsd(lastBig.model, ctxOf(lastBig)))} just to re-read it.`,
       fix: `Keeping it under ${k(BIG)} with /compact or a fresh session would have saved about ${money(extra)}.` });
   }
@@ -140,7 +168,7 @@ function analyze(sid, totalCost) {
   if (auto.length) {
     const before = rows.filter(r => auto.some(c => r.ts <= c.ts && c.ts - r.ts < 30 * 60e3) && ctxOf(r) > BIG);
     const extra = before.reduce((a, r) => a + readUsd(r.model, ctxOf(r) - BIG), 0);
-    findings.push({ kind: 'compacted', ts: auto[0].ts, lost: 0, save: 0,
+    findings.push({ kind: 'compacted', ts: auto[0].ts, lost: 0, save: 0, tasks: names(auto.map(c => taskAt(c.ts))),
       text: `Compacted automatically ${auto.length}× at about ${k(Math.max(...auto.map(c => c.pre)))} tokens, dropping ${k(auto.reduce((a, c) => a + c.pre - c.post, 0))} tokens of history it had paid to carry.`,
       fix: extra > 0.01 ? `The half hour before each compaction spent ${money(extra)} re-reading context above ${k(BIG)}.` : 'Splitting the work keeps what matters instead of an automatic summary.' });
   }
@@ -170,14 +198,15 @@ function analyze(sid, totalCost) {
 
   // 8: read-only tasks on the priciest models
   let fitSave = 0, fitN = 0;
+  const fitIds = [];
   for (const t of tasks) {
     if (t.n_write > 0 || t.n_cmd > 3) continue;
     const calls = (byTask.get(t.id) || []).filter(r => pricey(r.model));
     if (!calls.length) continue;
     const now = calls.reduce((a, r) => a + r.cost, 0), alt = calls.reduce((a, r) => a + costAt(r, SONNET), 0);
-    if (now - alt > 0.05) { fitSave += now - alt; fitN++; }
+    if (now - alt > 0.05) { fitSave += now - alt; fitN++; fitIds.push(t.id); }
   }
-  if (fitSave > 0.25) findings.push({ kind: 'model-fit', ts: rows[0].ts, lost: fitSave, save: fitSave,
+  if (fitSave > 0.25) findings.push({ kind: 'model-fit', ts: rows[0].ts, lost: fitSave, save: fitSave, tasks: names(fitIds),
     text: `${fitN} task${fitN === 1 ? '' : 's'} only read and answered, on ${model}.`,
     fix: `On Sonnet they would have cost about ${money(fitSave)} less.` });
 
@@ -195,7 +224,7 @@ function analyze(sid, totalCost) {
       const g = by.get(what) || { what, n: 0, tk: 0 }; g.n++; g.tk += tk; by.set(what, g);
     }
     const top = [...by.values()].sort((a, b) => b.tk - a.tk).slice(0, 3);
-    if (usd > 0.05) findings.push({ kind: 'big-results', ts: big[0].ts, lost: usd, save: usd * 0.7, top,
+    if (usd > 0.05) findings.push({ kind: 'big-results', ts: big[0].ts, lost: usd, save: usd * 0.7, top, tasks: names(big.map(e => e.task_id || taskAt(e.ts))),
       text: `${big.length} tool result${big.length === 1 ? '' : 's'} added about ${k(tokens)} tokens, re-read on every later turn for ${money(usd)}. Largest: ${top.map(x => `${x.what} (${k(x.tk)}${x.n > 1 ? `, ${x.n}×` : ''})`).join('; ')}.`,
       fix: 'Ask for the part you need: line ranges, a tail of the log, a grep, or a subagent summary.' });
   }
@@ -203,11 +232,12 @@ function analyze(sid, totalCost) {
   // 7: what every turn pays before the user types
   if (base > HEAVY && rows.length >= 5) {
     const usd = rows.reduce((a, r) => a + readUsd(r.model, base - SETUP), 0);
-    findings.push({ kind: 'heavy-start', ts: rows[0].ts, lost: usd, save: usd,
+    findings.push({ kind: 'heavy-start', ts: rows[0].ts, lost: usd, save: usd, tasks: [],
       text: `The first turn already held ${k(base)} tokens; each of ${rows.length} turns re-read it.`,
       fix: `Each 10k tokens of setup trimmed would save about ${money(rows.reduce((a, r) => a + readUsd(r.model, 10e3), 0))} in a session like this.` });
   }
 
+  for (const f of findings) f.tasks ??= names([f.task || taskAt(f.ts)]);
   for (const f of findings) if (!['big-context', 'heavy-start', 'model-fit', 'compacted'].includes(f.kind)) marks.push({ ts: f.ts, kind: f.kind });
   return {
     id: sid, pid: s.project_id, project: s.name, title: s.title || clip(s.last_prompt, 60) || sid.slice(0, 8),
@@ -248,7 +278,7 @@ export function coach({ pid = null, days = 7 } = {}) {
       compactions: sum(list, s => s.compactions), coldResumes: by['cold-resume']?.n || 0, coldLost: by['cold-resume']?.lost || 0,
       fitSave: by['model-fit']?.save || 0, bigShare: calls ? sum(list, s => s.findings.find(f => f.kind === 'big-context') ? s.calls : 0) / calls : 0,
       base: median(list.map(s => s.base)), per10k: sum(list, s => s.per10k), peak: Math.max(0, ...list.map(s => s.peak)),
-      habits: Object.values(by).sort((a, b) => b.save - a.save).map(b => ({ ...b, label: LABEL[b.kind], habit: HABITS[b.kind] })) };
+      habits: Object.values(by).sort((a, b) => b.save - a.save).map(b => ({ ...b, label: LABEL[b.kind], habit: HABITS[b.kind], steps: STEPS[b.kind] || [] })) };
   };
   const byP = new Map();
   for (const s of all) (byP.get(s.pid) || byP.set(s.pid, []).get(s.pid)).push(s);

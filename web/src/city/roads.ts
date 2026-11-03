@@ -75,7 +75,7 @@ export class Roads {
   traffic = true;
 
   // rects: every place's plot (by plate), t0: the city's start (ms)
-  constructor(public city: City, rects: { ref: Ref; x: number; z: number; w: number; h: number }[], t0: number, uT: { value: number }, uTime: { value: number }) {
+  constructor(public city: City, private rects: { ref: Ref; x: number; z: number; w: number; h: number }[], t0: number, uT: { value: number }, uTime: { value: number }) {
     rects.forEach((r, k) => { this.places.push(r.ref); this.placeIdx.set(refKey(r.ref), k); });
     this.grid = new StreetGrid(rects.map(r => ({ x0: r.x, z0: r.z, x1: r.x + r.w, z1: r.z + r.h })));
     const G = this.grid, nx = G.nx;
@@ -221,8 +221,8 @@ export class Roads {
   }
 
   // A drivable way from one place to another for the city's own vehicles (buses,
-  // ambulances): the laid street if the two are tied, else a route that keeps to the
-  // streets where it can. Routes are cached until the roads are rebuilt.
+  // ambulances): the laid street if the two are tied, else a way over the laid
+  // streets (null if they don't connect). Routes are cached until the roads are rebuilt.
   private routes = new Map<string, Pt[] | null>();
   routeBetween(from: Ref, to: Ref): Pt[] | null {
     const key = refKey(from) + '|' + refKey(to);
@@ -232,11 +232,47 @@ export class Roads {
     if (k != null) { pts = this.linkPts.get(k)!; if (refKey(this.city.links[k].a as Ref) !== refKey(from)) pts = [...pts].reverse(); }
     else {
       const a = this.placeIdx.get(refKey(from)), b = this.placeIdx.get(refKey(to));
-      const p = a != null && b != null && a !== b ? this.grid.route(a, b, ROAD_COST) : null;
+      const p = a != null && b != null && a !== b ? this.grid.route(a, b, ROAD_COST, true) : null;
       if (p && p.length > 1) pts = this.grid.corners(p);
     }
     this.routes.set(key, pts);
     return pts;
+  }
+
+  // The loop a district's patrol drives: place to nearest place of the district over
+  // the streets, then home; where a street leaves a place from another side than the
+  // last came in, the car cuts through under its plate. When no two of its places
+  // connect, it drives out to a place tied to it and back. Null when none is on a street.
+  patrol(refs: Ref[]): Pt[] | null {
+    const ins = refs.filter(r => this.placeIdx.has(refKey(r))).slice(0, 12);
+    for (const home of ins) { const loop = this.tour(home, ins.filter(r => r !== home)); if (loop) return loop; }
+    for (const home of ins) for (const key of this.pairs.keys()) if (key.startsWith(refKey(home) + '|')) {
+      const loop = this.tour(home, [key.split('|')[1].split(':').map(Number) as Ref]); if (loop) return loop;
+    }
+    return null;
+  }
+  private tour(home: Ref, left: Ref[]): Pt[] | null {
+    const mid = (r: Ref): Pt => { const x = this.rects[this.placeIdx.get(refKey(r))!]; return [x.x + x.w / 2, x.z + x.h / 2]; };
+    left = [...left];
+    const out: Pt[] = [], join = (at: Ref, leg: Pt[]) => {
+      const l = out[out.length - 1];
+      const gap = l ? Math.hypot(l[0] - leg[0][0], l[1] - leg[0][1]) : 1;
+      if (l && gap > 0.05) out.push(mid(at));
+      out.push(...(gap > 0.05 ? leg : leg.slice(1)));
+    };
+    let at = home;
+    while (left.length) {
+      const [ax, az] = mid(at);
+      left.sort((p, q) => { const [px, pz] = mid(p), [qx, qz] = mid(q); return Math.hypot(px - ax, pz - az) - Math.hypot(qx - ax, qz - az); });
+      const k = left.findIndex(r => this.routeBetween(at, r)); if (k < 0) break;
+      const next = left.splice(k, 1)[0];
+      join(at, this.routeBetween(at, next)!); at = next;
+    }
+    if (!out.length) return null;
+    const back = this.routeBetween(at, home);
+    if (back) { join(at, back); join(home, [out[0]]); }
+    else out.push(...[...out].reverse().slice(1));
+    return out;
   }
 
   clear() { this.glow.fill(0); this.cars.length = 0; }

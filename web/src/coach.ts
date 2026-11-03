@@ -1,5 +1,5 @@
 import './coach.css';
-import { api, type Coach, type CoachSession, type CoachKind, type CoachRoll } from './api';
+import { api, type Coach, type CoachSession, type CoachKind, type CoachRoll, type CoachHabit } from './api';
 import { h, put, ago, dur, money } from './util';
 
 // How sessions use context and cache, for the whole machine or one project, with
@@ -58,7 +58,7 @@ export class CoachPanel {
         proj ? h('b', { class: 'co-chip on' }, proj.name) : null,
         this.pid ? h('a', { class: 'co-go', href: '#/p/' + encodeURIComponent(this.pid), title: 'Open this project as a city' }, 'Open the city →') : null),
       t.sessions ? this.tiles(t) : h('div', { class: 'co-empty' }, `No API calls in tracked projects in the last ${this.days} days.`),
-      t.sessions ? h('div', { class: 'co-cols' + (this.pid ? ' one' : '') }, this.habits(t), this.pid ? null : this.projects(d)) : null,
+      t.sessions ? h('div', { class: 'co-cols' + (this.pid ? ' one' : '') }, this.habits(t, d), this.pid ? null : this.projects(d)) : null,
       t.sessions ? this.sessions(d) : null,
       h('p', { class: 'co-note' }, `Amounts are ${PRICE_NOTE} Only tracked projects are measured.`));
     return this.el;
@@ -76,15 +76,46 @@ export class CoachPanel {
       tile(money(t.save), 'could have been saved', 'Sum of the estimates below. They overlap a little (a large context also makes a cold resume dearer), so read it as an upper bound.'));
   }
 
-  private habits(t: CoachRoll) {
+  private habits(t: CoachRoll, d: Coach) {
     const list = t.habits.filter(x => x.save > 0.01 || x.kind === 'compacted');
     return h('div', { class: 'co-box' },
       h('div', { class: 'co-bh' }, 'Habits that cost the most', this.kind ? h('button', { class: 'co-clear', onclick: () => this.set({ kind: null }) }, 'show all sessions') : null),
-      list.length ? list.map(x => h('div', { class: 'co-habit' + (this.kind === x.kind ? ' on' : ''), onclick: () => this.set({ kind: this.kind === x.kind ? null : x.kind }),
-        title: 'Show the sessions this happened in' },
-        h('div', { class: 'co-hrow' }, h('b', {}, x.label), h('span', { class: 'co-n' }, `${x.sessions} session${x.sessions === 1 ? '' : 's'}`),
-          h('span', { class: 'co-save' }, x.save > 0.01 ? '≈' + money(x.save) : '')),
-        h('p', {}, x.habit))) : h('div', { class: 'co-empty' }, 'Nothing worth changing. Sessions stay small and hit the cache.'));
+      list.length ? list.map(x => {
+        const on = this.kind === x.kind;
+        return h('div', { class: 'co-habit' + (on ? ' on' : ''), onclick: () => this.set({ kind: on ? null : x.kind }),
+          title: on ? 'Collapse' : 'Show where this happened and how to avoid it', 'aria-expanded': String(on) },
+          h('div', { class: 'co-hrow' }, h('i', { class: 'co-caret' }, on ? '▾' : '▸'), h('b', {}, x.label), h('span', { class: 'co-n' }, `${x.sessions} session${x.sessions === 1 ? '' : 's'}`),
+            h('span', { class: 'co-save' }, x.save > 0.01 ? '≈' + money(x.save) : '')),
+          h('p', {}, x.habit),
+          on ? this.habitDetail(x, d) : null);
+      }) : h('div', { class: 'co-empty' }, 'Nothing worth changing. Sessions stay small and hit the cache.'));
+  }
+
+  // One habit opened: each time it happened (session, the prompts involved, what went wrong,
+  // what would have been better), then the steps that keep it from happening again.
+  private habitDetail(x: CoachHabit, d: Coach) {
+    const MAX = 8;
+    const hits = d.sessions.flatMap(s => s.findings.filter(f => f.kind === x.kind).map(f => ({ s, f }))).sort((a, b) => b.f.save - a.f.save || b.f.ts - a.f.ts);
+    const goTo = (sid: string) => {
+      this.open = sid; this.render();
+      this.el.querySelector(`[data-sid="${CSS.escape(sid)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    return h('div', { class: 'co-hd', onclick: (e: Event) => e.stopPropagation() },
+      h('div', { class: 'co-hsub' }, 'Where it happened'),
+      hits.length ? h('div', { class: 'co-finds' }, ...hits.slice(0, MAX).map(({ s, f }) => h('div', { class: 'co-find' },
+        h('div', { class: 'co-fh' },
+          h('button', { class: 'co-slink', onclick: () => goTo(s.id), title: 'Open this session below' }, s.title),
+          this.pid ? null : h('span', { class: 'co-n' }, s.project || ''),
+          h('span', { class: 'co-age' }, ago(f.ts)),
+          f.save > 0.01 ? h('span', { class: 'co-save' }, '≈' + money(f.save)) : null),
+        f.tasks?.length ? h('div', { class: 'co-tasks' }, h('span', {}, f.tasks.length === 1 ? 'Task' : 'Tasks'),
+          ...f.tasks.slice(0, 3).map(n => h('q', {}, n)), f.tasks.length > 3 ? h('span', {}, `+${f.tasks.length - 3} more`) : null) : null,
+        h('p', {}, h('b', { class: 'co-prob' }, 'Problem: '), f.text),
+        h('p', { class: 'co-fix' }, h('b', {}, 'Better: '), f.fix)))) :
+        h('div', { class: 'co-empty' }, 'The sessions behind this are older or smaller than the ones listed below.'),
+      hits.length > MAX ? h('div', { class: 'co-n co-more' }, `${hits.length - MAX} more in the sessions below`) : null,
+      x.steps?.length ? h('div', { class: 'co-steps' }, h('div', { class: 'co-hsub' }, 'Next time'),
+        h('ul', {}, ...x.steps.map(st => h('li', {}, st)))) : null);
   }
 
   private projects(d: Coach) {
@@ -115,7 +146,7 @@ export class CoachPanel {
       h('span', { class: 'co-num', title: 'Peak context' }, k(s.peak)),
       h('span', { class: 'co-save co-num', title: 'Estimated saving with the habits below' }, s.save > 0.01 ? '≈' + money(s.save) : ''),
       h('span', { class: 'co-age' }, ago(s.last)));
-    return h('div', { class: 'co-sess' }, row, open ? this.detail(s) : null);
+    return h('div', { class: 'co-sess', 'data-sid': s.id }, row, open ? this.detail(s) : null);
   }
 
   private detail(s: CoachSession) {

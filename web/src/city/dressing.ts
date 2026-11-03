@@ -114,7 +114,6 @@ export class Dressing {
   airport = { x: 0, z: 0, len: 14 };      // runway start (planes roll toward -z)
   helipad = { x: 0, z: 0 };
   rail = { z: 0, x0: 0, x1: 0, station: 0 }; // the railway along the front of the city
-  rings: Pt[][] = [];                      // per district, the loop its patrols drive
   parks: { x: number; z: number }[] = [];  // trees birds settle over
   ticker: { x: number; y: number; z: number } | null = null; // the commit ticker's billboard
   private K = kit();
@@ -134,7 +133,7 @@ export class Dressing {
 
   build() {
     for (const o of [...this.group.children]) { this.group.remove(o); if (o instanceof THREE.InstancedMesh && o !== this.statues && o !== this.statueFig) o.dispose(); }
-    this.beams = []; this.rings = []; this.parks = [];
+    this.beams = []; this.parks = [];
     const c = this.city, W = this.world, roads = W.roads, B = new Batch();
     const free = (x: number, z: number, r = 0) => roads.free(x, z) && (!r || [[r, 0], [-r, 0], [0, r], [0, -r]].every(([a, b]) => roads.free(x + a, z + b)));
 
@@ -147,7 +146,6 @@ export class Dressing {
 
     // ---- districts
     c.districts.forEach((d, di) => {
-      this.rings[di] = ringOf(d, 0.45);
       if (!d.members.length) return;
       const st = W.styles[di], born = d.born, hue = d.hue / 360;
       const pts = along(ringOf(d, 0.62), 1.3).filter(p => free(p.x, p.z));

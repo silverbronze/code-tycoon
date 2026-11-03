@@ -7,7 +7,7 @@ import { blocked, fitDistricts, places, saveMove, shift } from './layout';
 import { DistrictGrounds } from './districts';
 import { ENV } from './env';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { FACADE, RoofKit, SHAPE, styleOf, type Style } from './themes';
+import { FACADE, RoofKit, SHAPE, hash, styleOf, type Style } from './themes';
 import { Dressing } from './dressing';
 import { Life } from './life';
 
@@ -74,9 +74,9 @@ function buildingMaterial(rise: { value: number }) {
         win *= 1.0 - ivy;
         lit *= 0.35 + 0.65 * uNight;
         if (fc > 8.5 && fc < 9.5) { // media: LED screens wrap the walls
-          float band = step(0.15, fract(vWPos.y * 0.9)) * step(fract(vWPos.y * 0.9), 0.85);
-          vec3 led = 0.5 + 0.5 * cos(6.2831 * (vec3(0.0, 0.33, 0.67) + (g.x * 0.05 + vWPos.y * 0.08 - uTime * 0.15)));
-          totalEmissiveRadiance += side * band * led * 0.22 * (1.0 - ivy);
+          float band = step(0.3, fract(vWPos.y * 0.9)) * step(fract(vWPos.y * 0.9), 0.7);
+          vec3 led = 0.5 + 0.35 * cos(6.2831 * (vec3(0.0, 0.33, 0.67) + (g.x * 0.05 + vWPos.y * 0.08 - uTime * 0.15)));
+          totalEmissiveRadiance += side * band * led * 0.08 * (1.0 - ivy); // soft: whole walls of it bloom into glare
         }
         // district colour on the roofs, so neighbourhoods read at a glance
         #ifdef USE_INSTANCING_COLOR
@@ -323,6 +323,10 @@ export class World {
     this.modRoofs = new RoofKit(this.modules, k => this.styles[c.modules[this.modInstToModule[k]].district], this.modRise, true);
     this.fileRoofs.paint('sign', i => tmpC.setHSL(c.districts[c.modules[c.files[i].m].district].hue / 360, 0.9, 0.62).clone());
     this.modRoofs.paint('sign', k => tmpC.setHSL(c.districts[c.modules[this.modInstToModule[k]].district].hue / 360, 0.9, 0.62).clone());
+    // billboards: dim, under the bloom threshold, so a block of them doesn't blind
+    const screen = (d: number, i: number) => tmpC.setHSL(c.districts[d].hue / 360 + (hash(i * 3.7) - 0.5) * 0.15, 0.45, 0.3 + hash(i * 5.1) * 0.08).clone();
+    this.fileRoofs.paint('screen', i => screen(c.modules[c.files[i].m].district, i));
+    this.modRoofs.paint('screen', k => screen(c.modules[this.modInstToModule[k]].district, k));
     this.group.add(this.fileRoofs.group, this.modRoofs.group);
     // scaffolding around files with uncommitted changes
     this.scaffold = new THREE.InstancedMesh(scaffoldGeo(), new THREE.MeshStandardMaterial({ color: '#c9a25a', emissive: '#6a4a14', emissiveIntensity: 0.5, roughness: 0.8 }), 512);

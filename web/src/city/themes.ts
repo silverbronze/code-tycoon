@@ -79,7 +79,7 @@ function pieces(): Record<Style, Piece[]> {
     ],
     media: [{ geo: merge(box(0.92, 0.46, 0.05, 0, 0.3, 0)), color: '#ffffff', fit: 'span', glow: true, tag: 'screen' },
       { geo: merge(box(0.05, 0.32, 0.05, -0.35, 0, 0.05), box(0.05, 0.32, 0.05, 0.35, 0, 0.05)), color: '#3a4152', fit: 'span' }],
-    gallery: [{ geo: new THREE.ConeGeometry(0.5, 0.42, 4).rotateY(Math.PI / 4).translate(0, 0.21, 0), color: '#9fd8ff', fit: 'span', glow: true }],
+    gallery: [{ geo: new THREE.ConeGeometry(0.5, 0.42, 4).rotateY(Math.PI / 4).translate(0, 0.21, 0), color: '#6f97b8', fit: 'span' }], // a glass roof, lit, not glowing: unlit it blinds
     library: [
       { geo: merge(prism(1.04, 0.3, 1.04, 0.5, 0), box(1.06, 0.04, 1.06)), color: '#5b4636', fit: 'span' },
       { geo: merge(box(0.9, 0.06, 0.18, 0, 0, 0.56), ...[-0.3, 0, 0.3].map(x => cyl(0.04, 0.045, 0.42, x, 0.06, 0.56, 8))), color: '#d8cfbd', fit: 'span', at: 'ground' },

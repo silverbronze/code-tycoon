@@ -68,7 +68,8 @@ export class StreetGrid {
   center(c: number): Pt { const i = c % this.nx; return [this.ox + (i + 0.5) * this.S, this.oz + ((c - i) / this.nx + 0.5) * this.S]; }
 
   // Cheapest street from place a to place b, as a list of cells; null if walled in.
-  route(a: number, b: number, cost: RouteCost): number[] | null {
+  // `laid` keeps to the streets already laid (for vehicles), null if they don't connect.
+  route(a: number, b: number, cost: RouteCost, laid = false): number[] | null {
     const A = this.rings[a], B = this.rings[b];
     if (!A?.length || !B?.length || a === b) return null;
     for (const c of B) this.goal[c] = 1;
@@ -86,6 +87,7 @@ export class StreetGrid {
       for (let d = 0; d < 4; d++) {
         const n = ns[d];
         if (n < 0 || this.owner[n] !== -1) continue;
+        if (laid && !this.use[this.edge(c, d)]) continue;
         let w = this.use[this.edge(c, d)] ? cost.share : 1;
         if (d0 !== 4 && d0 !== d) w += cost.turn;
         if (this.near[n]) w += cost.near;

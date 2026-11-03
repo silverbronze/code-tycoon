@@ -27,6 +27,19 @@
 .co-habit:hover { background: rgba(255, 255, 255, 0.04); }
 .co-habit.on { background: rgba(124, 240, 255, 0.07); box-shadow: inset 2px 0 0 var(--cyan); }
 .co-hrow { display: flex; gap: 10px; align-items: baseline; font-size: 13.5px; }
+.co-caret { font-style: normal; color: var(--dim); font-size: 11px; width: 10px; }
+.co-hd { margin-top: 10px; cursor: default; display: flex; flex-direction: column; gap: 8px; }
+.co-hsub { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+.co-hd .co-find p { color: var(--text); font-size: 12.5px; }
+.co-hd .co-find .co-fix { color: var(--muted); }
+.co-prob { color: #ffab4a; font-weight: 600; }
+.co-slink { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.co-slink:hover, .co-slink:focus-visible { color: var(--cyan); text-decoration: underline; }
+.co-tasks { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; font-size: 12px; color: var(--dim); }
+.co-tasks q { color: var(--muted); quotes: '“' '”'; }
+.co-more { padding-left: 2px; }
+.co-steps ul { margin: 4px 0 0; padding-left: 18px; }
+.co-steps li { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 2px 0; }
 .co-habit p { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 .co-n { color: var(--dim); font-size: 12px; }
 .co-save { color: var(--green); font-family: var(--mono); font-size: 12.5px; margin-left: auto; white-space: nowrap; }

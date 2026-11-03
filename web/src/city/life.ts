@@ -87,6 +87,7 @@ export class Life {
   private lastPlace = new Map<string, Ref>(); private agents = new Set<string>();
   private flown = new Map<number, number>();
   private litterD = new Set<number>(); private crowdKeys = new Set<string>();
+  private patrols: (Pt[] | null)[] = []; // per district, the street loop its police and garbage trucks drive
 
   constructor(private world: World, private dress: Dressing, private city: City) {
     const person = merge(new THREE.CylinderGeometry(0.035, 0.05, 0.17, 6).translate(0, 0.085, 0), new THREE.SphereGeometry(0.04, 8, 6).translate(0, 0.21, 0));
@@ -148,10 +149,12 @@ export class Life {
         this.walkers.push({ p, s: seed * p.len, v: 0.45 + seed * 0.25, loop: true, color: new THREE.Color().setHSL(seed, 0.35, 0.62), badge: null, hold: 0, lantern: seed < 0.3, seed, kind: 'com' });
       }
     }
-    // police patrol the security districts
+    // police patrol the security districts, on their streets
+    this.patrols = c.districts.map(d => d.members.length ? W.roads.patrol(d.members as Ref[]) : null);
     c.districts.forEach((d, di) => {
-      if (W.styles[di] !== 'fortress' || !d.members.length) return;
-      this.cars.push({ type: 'police', p: path(this.dress.rings[di]), s: 0, v: 1.6, loop: true, color: new THREE.Color('#e9eef7'), siren: 0, hold: 0, key: 'd' + di });
+      const loop = this.patrols[di];
+      if (W.styles[di] !== 'fortress' || !loop) return;
+      this.cars.push({ type: 'police', p: path(loop), s: 0, v: 1.6, loop: true, color: new THREE.Color('#e9eef7'), siren: 0, hold: 0, key: 'd' + di });
     });
     this.setLitter([...this.litterD]);
     // flocks over the parks (or over district centres when there are none)
@@ -223,8 +226,8 @@ export class Life {
     this.litterD = new Set(districts);
     this.cars = this.cars.filter(v => v.type !== 'garbage' || this.litterD.has(+v.key!.slice(1)));
     for (const di of this.litterD) {
-      if (this.cars.some(v => v.type === 'garbage' && v.key === 'g' + di) || !this.dress.rings[di]) continue;
-      this.cars.push({ type: 'garbage', p: path(offset(this.dress.rings[di], -0.2)), s: 0, v: 1.0, loop: true, color: new THREE.Color('#3f8f4f'), siren: 0, hold: 0, key: 'g' + di });
+      if (this.cars.some(v => v.type === 'garbage' && v.key === 'g' + di) || !this.patrols[di]) continue;
+      this.cars.push({ type: 'garbage', p: path([...this.patrols[di]!].reverse()), s: 0, v: 1.0, loop: true, color: new THREE.Color('#3f8f4f'), siren: 0, hold: 0, key: 'g' + di });
     }
   }
 
