@@ -32,16 +32,14 @@ The page then offers to turn on live updates and start at login, one click each.
 
 | | |
 |---|---|
-| ![The city of a Next.js app: districts for auth, payments, database, UI and API](docs/media/city.png) | ![Every Claude Code session is a drone: scan beams for reads, sparks for writes](docs/media/sessions.png) |
-| **The city.** Districts are what each part does, not where it sits in the folder tree. | **Sessions at work.** One drone per session, live or replayed. |
-| ![Zoomed in to files, with the inspect panel open on one file](docs/media/inspect.png) | ![The same project as an architecture diagram](docs/media/schematic.png) |
-| **Zoom in and click.** Files, imports, history and the tasks that touched them. | **Architecture diagram.** The same map as boxes and connectors. |
-| ![Task log: one entry per prompt, with everything it changed](docs/media/tasklog.png) | ![Collision alert: two sessions edited the same file](docs/media/alerts.png) |
-| **Task log.** Every prompt you gave, titled, with what it changed, read and ran. | **Alerts.** Two sessions on one file, or a session waiting for you. |
-| ![Replay from the first commit](docs/media/replay.png) | ![Insights: cost per landed task, rework, habits](docs/media/insights.png) |
-| **Replay.** The city grows from empty ground, commit by commit. | **Insights.** What landed, rework, habits, and rules worth adding to CLAUDE.md. |
-| ![Daily digest](docs/media/digest.png) | ![Overview of every open session in every project](docs/media/overview.png) |
-| **Daily digest.** Tasks, commits, busiest modules, files several sessions touched. | **Overview.** Every open session in every project, waiting ones first. |
+| ![Every Claude Code session is a drone: scan beams for reads, sparks for writes](docs/media/sessions.png) | ![Collision alert: two sessions edited the same file](docs/media/alerts.png) |
+| **Sessions at work.** One drone per session, live or replayed. Districts are what each part does, not where it sits in the folder tree. | **Alerts.** Two sessions on one file, or a session waiting for you. |
+| ![The same project as an architecture diagram, with one file open in the inspect panel](docs/media/schematic.png) | ![The architecture diagram while sessions work: the modules they touch light up in their colour](docs/media/schematic-live.png) |
+| **Architecture diagram.** The same map as boxes and connectors. Click a module for its files, imports and history. | **Sessions on the diagram.** Each session lights up the modules it is reading and changing. |
+
+![Dashboard: every open session in every project, waiting ones first](docs/media/overview.png)
+
+**Dashboard.** Every open session in every project, waiting ones first, with the machine's Claude processes, CPU and RAM.
 
 The screenshots show [shadcn-ui/taxonomy](https://github.com/shadcn-ui/taxonomy), an open-source Next.js app, after a dozen real Claude Code sessions. ▶ [Watch the full one-minute video](docs/media/demo.mp4).
 
