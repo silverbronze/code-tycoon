@@ -7,7 +7,7 @@ import { h, put, ago, dur, money } from './util';
 const LABEL: Record<string, string> = { 'cold-resume': 'Cold resume', 'big-context': 'Large context', 'topic-switch': 'New topic, old session',
   compacted: 'Auto-compacted', 'model-switch': 'Model switched', 'cache-reset': 'Cache rebuilt', 'model-fit': 'Pricier model than needed',
   'big-results': 'Bulky tool output', 'heavy-start': 'Heavy start', compact: 'Compaction' };
-const MARK: Record<string, string> = { 'cold-resume': '#ffab4a', compact: '#a37bff', 'topic-switch': '#6fb0ff', 'model-switch': '#ff4d6a', 'cache-reset': '#ff4d6a', 'big-results': '#3fc1b0' };
+const MARK: Record<string, string> = { 'cold-resume': '#111111', compact: '#5c5c5c', 'topic-switch': '#9a9a9a', 'model-switch': '#d2232a', 'cache-reset': '#d2232a', 'big-results': '#bdbdbd' };
 const BIG = 150e3;
 const k = (n: number) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n));
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -141,7 +141,7 @@ export class CoachPanel {
     const row = h('div', { class: 'co-srow' + (open ? ' open' : ''), onclick: () => { this.open = open ? null : s.id; this.render(); } },
       h('span', { class: 'co-sp' }, s.project || '—'),
       h('span', { class: 'co-st' }, s.title),
-      h('span', { class: 'co-kinds' }, ...kinds.slice(0, 3).map(x => h('i', { class: 'co-k', style: '--k:' + (MARK[x] || '#8790a6') }, LABEL[x])), kinds.length > 3 ? h('i', { class: 'co-k more' }, '+' + (kinds.length - 3)) : null),
+      h('span', { class: 'co-kinds' }, ...kinds.slice(0, 3).map(x => h('i', { class: 'co-k', style: '--k:' + (MARK[x] || '#8c8c8c') }, LABEL[x])), kinds.length > 3 ? h('i', { class: 'co-k more' }, '+' + (kinds.length - 3)) : null),
       h('span', { class: 'co-num', title: 'Spent (API-equivalent)' }, money(s.cost)),
       h('span', { class: 'co-num', title: 'Peak context' }, k(s.peak)),
       h('span', { class: 'co-save co-num', title: 'Estimated saving with the habits below' }, s.save > 0.01 ? '≈' + money(s.save) : ''),
@@ -167,7 +167,7 @@ export class CoachPanel {
         tracked ? h('a', { class: 'co-go', href: '#/p/' + encodeURIComponent(s.pid) + '/s/' + encodeURIComponent(s.id), onclick: (e: Event) => e.stopPropagation() }, 'Follow in the city →') : null),
       full.curve?.length ? chart(full) : null,
       full.findings.length ? h('div', { class: 'co-finds' }, ...full.findings.map(f => h('div', { class: 'co-find' },
-        h('div', { class: 'co-fh' }, h('i', { class: 'co-k', style: '--k:' + (MARK[f.kind] || '#8790a6') }, LABEL[f.kind]), h('span', { class: 'co-age' }, ago(f.ts)),
+        h('div', { class: 'co-fh' }, h('i', { class: 'co-k', style: '--k:' + (MARK[f.kind] || '#8c8c8c') }, LABEL[f.kind]), h('span', { class: 'co-age' }, ago(f.ts)),
           f.save > 0.01 ? h('span', { class: 'co-save' }, '≈' + money(f.save)) : null),
         h('p', {}, f.text), h('p', { class: 'co-fix' }, h('b', {}, 'Better: '), f.fix)))) : h('div', { class: 'co-empty' }, 'This session used context and cache well.'));
     return box;
@@ -200,8 +200,8 @@ function chart(s: CoachSession) {
   const line = pts.map((p, i) => `${x(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join(' ');
   inner += `<polyline points="${x(0)},${y(0)} ${line} ${x(pts.length - 1)},${y(0)}" class="co-area"/><polyline points="${line}" class="co-line"/>`;
   for (const m of marks) {
-    const i = idxOf(m.ts), c = MARK[m.kind] || '#8790a6';
-    inner += `<line x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}" stroke="${c}" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.8"/><circle cx="${x(i)}" cy="${y(pts[i][1])}" r="4.5" fill="${c}" stroke="#0b0f1a" stroke-width="2"/>`;
+    const i = idxOf(m.ts), c = MARK[m.kind] || '#8c8c8c';
+    inner += `<line x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}" stroke="${c}" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.8"/><circle cx="${x(i)}" cy="${y(pts[i][1])}" r="4.5" fill="${c}" stroke="#ffffff" stroke-width="2"/>`;
   }
   inner += `<text x="${L}" y="${H - 6}" class="co-ax">first call</text><text x="${W - R}" y="${H - 6}" class="co-ax" text-anchor="end">latest · ${s.calls} calls</text>`;
   inner += `<line class="co-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" visibility="hidden"/><rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" class="co-hit"/>`;
@@ -225,5 +225,5 @@ function chart(s: CoachSession) {
   const kinds = [...new Set(marks.map(m => m.kind))];
   return h('div', {}, wrap, h('div', { class: 'co-legend' },
     h('span', {}, h('i', { style: { background: 'var(--cyan)' } }), 'context per API call'),
-    ...kinds.map(kd => h('span', {}, h('i', { style: { background: MARK[kd] || '#8790a6' } }), LABEL[kd]))));
+    ...kinds.map(kd => h('span', {}, h('i', { style: { background: MARK[kd] || '#8c8c8c' } }), LABEL[kd]))));
 }

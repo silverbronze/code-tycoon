@@ -38,7 +38,7 @@ export class Overview {
     this.root.innerHTML = '';
     put(this.root,
       h('div', { class: 'ov-hero' },
-        h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-dark.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
+        h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-light.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
         h('div', { class: 'ov-stats' },
           this.pulse.el,
           notify.supported ? h('button', { class: 'big notif' + (notify.on ? ' on' : ''), title: 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
@@ -166,6 +166,6 @@ function spark(v: number[]) {
   const max = Math.max(1, ...v), W = 140, H = 28;
   const pts = v.map((n, i) => `${(i / (v.length - 1)) * W},${H - (n / max) * (H - 3) - 1}`).join(' ');
   const el = h('div', { class: 'spark', title: 'tasks per day, last 14 days' });
-  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="0,${H} ${pts} ${W},${H}" fill="rgba(124,240,255,0.12)" stroke="none"/><polyline points="${pts}" fill="none" stroke="#7cf0ff" stroke-width="1.5"/></svg>`;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="0,${H} ${pts} ${W},${H}" fill="rgba(0,0,0,0.06)" stroke="none"/><polyline points="${pts}" fill="none" stroke="#111111" stroke-width="1.5"/></svg>`;
   return el;
 }

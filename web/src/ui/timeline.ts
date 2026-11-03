@@ -1,12 +1,12 @@
 import type { Timeline as TL, City } from '../api';
 
 const KIND_COLORS: Record<string, string> = {
-  write: '#ffab4a', read: '#56d6ff', search: '#56d6ff', touch: '#3f8fb0', cmd: '#6f7a96', remote: '#a37bff', skill: '#a37bff',
-  spawn: '#ff6fd8', prompt: '#ffffff', ask: '#ff5470', other: '#47506a',
+  write: '#111111', read: '#9a9a9a', search: '#9a9a9a', touch: '#b5b5b5', cmd: '#cfcfcf', remote: '#5c5c5c', skill: '#5c5c5c',
+  spawn: '#5c5c5c', prompt: '#111111', ask: '#d2232a', other: '#e4e4e4',
 };
 const STACK = ['write', 'read', 'cmd', 'remote', 'other'];
 const groupOf = (k: string) => k === 'search' || k === 'touch' ? 'read' : k === 'skill' ? 'remote' : STACK.includes(k) ? k : 'other';
-const COST_COLOR = '#4dffa6';
+const COST_COLOR = '#111111';
 const DAY = 86400e3;
 
 type Commit = City['commits'][number];
@@ -190,7 +190,7 @@ export class TimelineView {
 
     // nights (20:00-07:00) behind everything, while single days are readable
     if (span < 12 * DAY) {
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.fillStyle = 'rgba(0,0,0,0.04)';
       const day = new Date(this.v0); day.setHours(0, 0, 0, 0);
       for (let t = day.getTime() - DAY; t < this.v1; t += DAY) {
         const nightA = new Date(t); nightA.setHours(20, 0, 0, 0);
@@ -198,7 +198,7 @@ export class TimelineView {
         const xa = Math.max(0, this.x(nightA.getTime())), xb = Math.min(W, this.x(nightB.getTime()));
         if (xb > xa) ctx.fillRect(xa, 0, xb - xa, H);
       }
-      ctx.fillStyle = 'rgba(160,180,230,0.16)';
+      ctx.fillStyle = 'rgba(0,0,0,0.1)';
       for (let t = day.getTime(); t < this.v1; t += DAY) { const mx = this.x(t); if (mx > 0) ctx.fillRect(mx, 0, 1, H); }
     }
 
@@ -235,16 +235,16 @@ export class TimelineView {
       ctx.fillStyle = COST_COLOR; ctx.globalAlpha = 0.8;
       for (let b = 0; b < bins; b++) if (cost[b]) { const h = Math.sqrt(cost[b] / max) * (this.histH - 4); ctx.fillRect(b * bw, this.histH - h, Math.max(1, bw - 0.6), h); }
       ctx.globalAlpha = 1;
-      ctx.font = '10px "JetBrains Mono", monospace'; ctx.fillStyle = '#9fe8c4';
+      ctx.font = '10px "JetBrains Mono", monospace'; ctx.fillStyle = '#5c5c5c';
       ctx.fillText(`$${total.toFixed(total >= 100 ? 0 : 2)} in view · peak bar $${max.toFixed(2)} (API-equiv.)`, 6, 11);
     }
     ctx.globalAlpha = 1;
 
     // time axis
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fillStyle = 'rgba(0,0,0,0.04)';
     ctx.fillRect(0, this.histH + 1, W, 16);
     ctx.font = '10px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#7d869c';
+    ctx.fillStyle = '#8c8c8c';
     const ticks = niceTicks(this.v0, this.v1, Math.floor(W / 110));
     for (const t of ticks.list) {
       const x = this.x(t);
@@ -252,7 +252,7 @@ export class TimelineView {
       ctx.fillText(fmtTick(t, ticks.step), x + 3, this.histH + 13);
     }
     // commits
-    ctx.fillStyle = '#e7f36b';
+    ctx.fillStyle = '#111111';
     for (const c of this.o.city.commits) {
       if (c.ts < this.v0 || c.ts > this.v1) continue;
       const x = this.x(c.ts);
@@ -281,14 +281,14 @@ export class TimelineView {
 
     // cursor + live edge
     const cx = this.x(this.cursor);
-    ctx.fillStyle = 'rgba(124,240,255,0.12)';
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
     ctx.fillRect(cx - 6, 0, 12, H);
-    ctx.fillStyle = '#7cf0ff';
+    ctx.fillStyle = '#111111';
     ctx.fillRect(cx - 0.75, 0, 1.5, H);
     const le = this.x(this.liveEdge);
     if (le > 0 && le < W) {
-      ctx.fillStyle = 'rgba(255,84,112,0.6)'; ctx.fillRect(le, 0, 1, H);
-      ctx.fillStyle = '#ff8095'; ctx.font = '600 9.5px "JetBrains Mono", monospace';
+      ctx.fillStyle = 'rgba(210,35,42,0.6)'; ctx.fillRect(le, 0, 1, H);
+      ctx.fillStyle = '#d2232a'; ctx.font = '600 9.5px "JetBrains Mono", monospace';
       ctx.fillText('NOW', Math.min(le + 3, W - 24), this.histH + 13);
     }
   }

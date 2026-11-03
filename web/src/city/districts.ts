@@ -21,17 +21,17 @@ function lot(x: number, z: number, w: number, h: number, r: number) {
 
 export class DistrictGrounds {
   group = new THREE.Group();
-  private items: { fill: THREE.Mesh; rim: THREE.LineLoop; born: number }[] = [];
+  private items: { fill: THREE.Mesh; rim: THREE.LineLoop; born: number; hue: number }[] = [];
 
   constructor(private city: City) {
     this.city.districts.forEach(d => {
       const fill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(d.hue / 360, 0.35, 0.075), roughness: 1, emissive: new THREE.Color().setHSL(d.hue / 360, 0.6, 0.5), emissiveIntensity: 0.025 }));
+        roughness: 1, emissive: new THREE.Color().setHSL(d.hue / 360, 0.6, 0.5) })); // colour: tone()
       fill.rotation.x = -Math.PI / 2; fill.position.y = -0.02; fill.receiveShadow = true;
       const rim = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({
         color: new THREE.Color().setHSL(d.hue / 360, 0.7, 0.5), transparent: true, opacity: 0.55 }));
       rim.position.y = -0.005;
-      this.items.push({ fill, rim, born: d.born });
+      this.items.push({ fill, rim, born: d.born, hue: d.hue });
       this.group.add(fill, rim);
     });
     this.refit();
@@ -45,6 +45,16 @@ export class DistrictGrounds {
       fill.geometry.dispose(); fill.geometry = new THREE.ShapeGeometry(s, 6);
       rim.geometry.dispose(); rim.geometry = new THREE.BufferGeometry().setFromPoints(s.getPoints(6).map(p => new THREE.Vector3(p.x, 0, -p.y)));
     });
+  }
+
+  // n: 1 night (dark lots, faint glow), 0 day (pale tinted lots)
+  tone(n: number) {
+    for (const it of this.items) {
+      const m = it.fill.material as THREE.MeshStandardMaterial;
+      m.color.setHSL(it.hue / 360, 0.3 + 0.05 * n, 0.8 - 0.725 * n);
+      m.emissiveIntensity = 0.025 * n;
+      (it.rim.material as THREE.LineBasicMaterial).color.setHSL(it.hue / 360, 0.7, 0.5 - 0.08 * (1 - n));
+    }
   }
 
   // a district's ground appears with its first place

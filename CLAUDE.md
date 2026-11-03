@@ -5,7 +5,7 @@ Server: `server/` (Node 22, built-in `node:sqlite`, `ws`). UI: `web/` (Vite + TS
 Data: `~/.visualizer/visualizer.db`. Hook script: `~/.visualizer/hook.mjs` (copied by `npm run hooks:install`).
 
 - `npm run dev` — API on :4400 + Vite on :5173 · `npm run build && npm start` — everything on :4400
-- `node scripts/probe.mjs probe-out` — screenshots + fps + console errors (uses installed Chrome)
+- `PID=<tracked project id, e.g. c:/users/archi/downloads/visualizer> node scripts/probe.mjs probe-out` — screenshots + fps + console errors (uses installed Chrome; exits without `PID`)
 - `node scripts/live-test.mjs <demo repo>` — two real sessions edit one file, expects a collision alert
 
 ## Known Pitfalls
@@ -45,3 +45,4 @@ Data: `~/.visualizer/visualizer.db`. Hook script: `~/.visualizer/hook.mjs` (copi
 - Another session's side Vite may already hold :5191; Vite then silently takes the next port — read its "Local:" line before pointing a probe at it.
 - Coaching (`server/coach.mjs`) caches each session's analysis keyed on its usage rows; anything that changes compactions or `res_len` without new API calls (a backfill) must call `resetCoach()`, or the overview keeps stale numbers.
 - An isolated demo server (`USERPROFILE`/`HOME` = a fake home, `VISUALIZER_PORT=4401`, `CLAUDE_CONFIG_DIR` = the real `~/.claude` so titling still authenticates) keeps private projects off screen. `discover()` skips junctions (Dirent isn't a directory), so copy transcripts in; start it from outside the repo or its PowerShell sampler drops a `Microsoft/` cache folder into the cwd.
+- The UI chrome is black and white (tokens in `styles.css` `:root`; `--cyan/--green/--amber` now resolve to black, red is the only signal color). The city defaults to a light day to match (`sky.ts` `enabled=false` = always day; ground, grid, lots, plates and asphalt follow `ENV.night` via `World.tone()`/road shader; `.cityview.day` restyles labels). The schematic canvas is still dark. Don't bring tinted rgba fills back into panels.

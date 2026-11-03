@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { City } from '../api';
 import { StreetGrid, type Pt } from './route';
+import { ENV } from './env';
 
 // Small things (people, cars, birds) must never show before the buildings around them
 // can be told apart: they grow in from nothing between `gone` and `full` (viewSize).
@@ -18,7 +19,7 @@ export const zoomGate = (zoom: number, gone: number, full: number) =>
 function roadMaterial(uT: { value: number }, uTime: { value: number }) {
   const m = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.92, metalness: 0.05 });
   m.onBeforeCompile = sh => {
-    sh.uniforms.uT = uT; sh.uniforms.uTime = uTime;
+    sh.uniforms.uT = uT; sh.uniforms.uTime = uTime; sh.uniforms.uNight = ENV.night;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aBorn; attribute vec4 aRoad; attribute float aKind; attribute float aGlow; attribute vec3 aCol; uniform float uT;
@@ -28,22 +29,27 @@ function roadMaterial(uT: { value: number }, uTime: { value: number }) {
         if (aBorn > uT) transformed = vec3(0.0);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform float uTime; varying vec4 vRoad; varying float vKind; varying float vGlow; varying vec3 vCol;
+        uniform float uTime; uniform float uNight; varying vec4 vRoad; varying float vKind; varying float vGlow; varying vec3 vCol;
         // a line of half width w around d == 0 that fades out instead of shimmering when thinner than a pixel
         float line(float d, float w) { float f = max(fwidth(d), 1e-4); return clamp((w - abs(d)) / f + 0.5, 0.0, 1.0) * clamp(w * 2.5 / f, 0.0, 1.0); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float ac = abs(vRoad.y), hw = vRoad.w;
         float curb = vKind < 1.5 ? smoothstep(hw - 0.1, hw - 0.07, ac) : 0.0;
-        diffuseColor.rgb = mix(vec3(0.085, 0.09, 0.105), vec3(0.2, 0.21, 0.24), curb);`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        float edgeL = 0.0, paint = 0.0;
         if (vKind < 1.5) {
           float ends = step(0.35, vRoad.x) * step(vRoad.x, vRoad.z - 0.35);
-          float edgeL = line(ac - (hw - 0.17), 0.02);
-          float centre = vKind > 0.5 ? max(line(vRoad.y - 0.055, 0.02), line(vRoad.y + 0.055, 0.02))
-                                     : line(vRoad.y, 0.022) * step(fract(vRoad.x * 1.1), 0.5);
-          totalEmissiveRadiance += vec3(0.5, 0.53, 0.6) * edgeL * 0.22;
-          totalEmissiveRadiance += (vKind > 0.5 ? vec3(1.0, 0.7, 0.25) : vec3(0.8, 0.8, 0.76)) * centre * ends * 0.5;
+          edgeL = line(ac - (hw - 0.17), 0.02);
+          paint = ends * (vKind > 0.5 ? max(line(vRoad.y - 0.055, 0.02), line(vRoad.y + 0.055, 0.02))
+                                      : line(vRoad.y, 0.022) * step(fract(vRoad.x * 1.1), 0.5));
         }
+        // dark asphalt with glowing lines at night; grey asphalt with painted lines by day
+        diffuseColor.rgb = mix(mix(vec3(0.2, 0.2, 0.21), vec3(0.42, 0.42, 0.43), curb), mix(vec3(0.085, 0.09, 0.105), vec3(0.2, 0.21, 0.24), curb), uNight);
+        float day = 1.0 - uNight;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.85), edgeL * 0.7 * day);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vKind > 0.5 ? vec3(0.95, 0.62, 0.12) : vec3(0.9), paint * day);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += vec3(0.5, 0.53, 0.6) * edgeL * 0.22 * uNight;
+        totalEmissiveRadiance += (vKind > 0.5 ? vec3(1.0, 0.7, 0.25) : vec3(0.8, 0.8, 0.76)) * paint * 0.5 * uNight;
         // traffic: the session's colour washes along the street
         float flow = 0.5 + 0.5 * sin(vRoad.x * 2.4 - uTime * 7.0);
         totalEmissiveRadiance += vCol * vGlow * (0.16 + 0.4 * flow) * (1.0 - curb * 0.6);`);

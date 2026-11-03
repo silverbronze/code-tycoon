@@ -3,6 +3,7 @@ import { api, live, type Prop, type City, type Timeline, type LiveSession, type 
 import { Mood } from './city/mood';
 import type { TaskFlags, FileHist } from './api';
 import { Sky } from './city/sky';
+import { ENV } from './city/env';
 import { Stage } from './city/scene';
 import { World, linkColor } from './city/world';
 import { Actors, colorCss } from './city/actors';
@@ -199,8 +200,8 @@ export class CityView {
     e.toasts = h('div', { class: 'toasts' });
     e.lod = h('span', {}, 'Files');
     // Google-Maps-style layer switch: the tile shows the other layer; hovering opens the details
-    const check = (label: string, title: string, f: (on: boolean) => void) => {
-      const b = h('button', { class: 'ly-check on', title, onclick: () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); f(on); } }, h('i', {}), label);
+    const check = (label: string, title: string, f: (on: boolean) => void, on0 = true) => {
+      const b = h('button', { class: 'ly-check' + (on0 ? ' on' : ''), title, onclick: () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); f(on); } }, h('i', {}), label);
       return b;
     };
     const thumb = (which: 'city' | 'schematic') => { const t = h('span', { class: 'ly-thumb' }); t.innerHTML = which === 'city' ? CITY_THUMB : SCHEM_THUMB; return t; };
@@ -212,7 +213,7 @@ export class CityView {
       check('Traffic', 'Cars drive the street a session just took', on => this.world.showTraffic(on)),
       check('City mood', 'The city looks like its health: smog for high spend, litter by stale uncommitted files, run-down buildings that keep being rewritten, cones where sessions collided', on => this.mood?.setEnabled(on)),
       check('People & vehicles', 'Residents, workers carrying each action\'s tool, delivery vans on import ties, police, buses for sub-agents, trains on commits, planes to outside services, birds', on => { this.world.life.enabled = on; }),
-      check('Day & night', 'The sky follows the clock of the moment on screen; off keeps it night', on => { if (this.sky) this.sky.enabled = on; }),
+      check('Day & night', 'The sky follows the clock of the moment on screen (lit windows and street lamps at night); off keeps it day', on => { if (this.sky) this.sky.enabled = on; }, false),
       check('Weather', 'Rain while tests fail, lightning when sessions keep colliding on one file', on => { if (this.sky) this.sky.weather = on; }),
       e.resetLayout = h('button', { class: 'ly-reset', title: 'Put every dragged area and building back where the city placed it', disabled: !hasLayout(this.pid),
         onclick: () => { resetLayout(this.pid); (e.resetLayout as HTMLButtonElement).disabled = true; this.reloadCity(); } }, 'Reset layout'));
@@ -775,6 +776,7 @@ export class CityView {
 
   private frame = (dt: number) => {
     this.fxBudget = 24;
+    this.root.classList.toggle('day', ENV.night.value < 0.5); // labels switch to dark-on-light
     let simDt: number;
     if (this.mode === 'live') {
       const now = Date.now(); simDt = now - this.t; this.t = now;
@@ -1203,10 +1205,10 @@ export class CityView {
       const pts = d.weeks.map((w, i) => `${x(i).toFixed(1)},${(H - 2 - (H - 6) * w.lines / maxL).toFixed(1)}`).join(' ');
       const bars = d.weeks.map((w, i) => {
         const hw = (H - 4) * w.writes / maxA, hc = (H - 4) * w.commits / maxA, bw = W / n * 0.62, x0 = x(i) - bw / 2;
-        return `<rect x="${x0}" y="${H - hw}" width="${bw}" height="${hw}" fill="#ffb547" opacity=".8"><title>${12 - i} weeks ago: ${w.writes} AI edits</title></rect>`
-          + `<rect x="${x0}" y="${H - hw - hc}" width="${bw}" height="${hc}" fill="#e7f36b"><title>${w.commits} commits</title></rect>`;
+        return `<rect x="${x0}" y="${H - hw}" width="${bw}" height="${hw}" fill="#111111" opacity=".8"><title>${12 - i} weeks ago: ${w.writes} AI edits</title></rect>`
+          + `<rect x="${x0}" y="${H - hw - hc}" width="${bw}" height="${hc}" fill="#bdbdbd"><title>${w.commits} commits</title></rect>`;
       }).join('');
-      const lines = h('div', { class: 'spark' }); lines.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="#5ee6ff" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+      const lines = h('div', { class: 'spark' }); lines.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="#111111" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
       const act = h('div', { class: 'spark' }); act.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${bars}</svg>`;
       // a file with no lines at the start of the window was created inside it
       const first = d.weeks[0].lines, edits = d.weeks.reduce((s, w) => s + w.writes, 0), busy = d.weeks.filter(w => w.writes).length;
@@ -1214,7 +1216,7 @@ export class CityView {
       const verdict = [!first ? `New in these weeks: ${d.lines} lines` : grew ? `${grew > 0 ? 'Grew' : 'Shrank'} ${Math.abs(grew)} lines (${grew > 0 ? '+' : ''}${Math.round(grew / first * 100)}%)` : 'Same size',
         edits ? `edited by sessions ${edits}× in ${busy} of 12 weeks` : 'no session edits'].join(' · ');
       box.append(h('div', { class: 'ft-row' }, h('span', { class: 'k' }, `Lines · ${d.lines}`), lines),
-        h('div', { class: 'ft-row' }, h('span', { class: 'k' }, h('i', { style: { background: '#ffb547' } }), 'AI edits ', h('i', { style: { background: '#e7f36b' } }), 'commits'), act),
+        h('div', { class: 'ft-row' }, h('span', { class: 'k' }, h('i', { style: { background: '#111111' } }), 'AI edits ', h('i', { style: { background: '#bdbdbd' } }), 'commits'), act),
         h('div', { class: 'sub' }, verdict));
     }).catch(() => { box.lastChild?.remove(); box.append(h('div', { class: 'empty' }, 'Could not read its history.')); });
     return box;
@@ -1660,5 +1662,5 @@ function stat(k: string, v: any) { return h('div', { class: 'stat' }, h('div', {
 function esc(s: string) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!)); }
 
 // Layer tile thumbnails: a little night city, and a little plan.
-const CITY_THUMB = `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#070a12"/><path d="M0 40h64M22 0v64M48 0v64" stroke="#2a2f3b" stroke-width="5"/><path d="M0 40h64M22 0v64M48 0v64" stroke="#c9a14a" stroke-width=".7" stroke-dasharray="3 3"/><rect x="4" y="8" width="13" height="26" fill="#1d2a3a"/><rect x="27" y="14" width="16" height="20" fill="#2a2440"/><rect x="52" y="6" width="9" height="28" fill="#1c2c34"/><rect x="5" y="46" width="12" height="14" fill="#2a2a20"/><rect x="27" y="46" width="16" height="13" fill="#1d2a3a"/><g fill="#ffd49a"><rect x="7" y="12" width="2" height="2"/><rect x="12" y="18" width="2" height="2"/><rect x="31" y="18" width="2" height="2"/><rect x="37" y="24" width="2" height="2"/><rect x="55" y="12" width="2" height="2"/><rect x="31" y="50" width="2" height="2"/></g><circle cx="35" cy="40" r="1.6" fill="#4fd8ff"/></svg>`;
+const CITY_THUMB = `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#e6e4df"/><path d="M0 40h64M22 0v64M48 0v64" stroke="#8f8f92" stroke-width="5"/><path d="M0 40h64M22 0v64M48 0v64" stroke="#c9a14a" stroke-width=".7" stroke-dasharray="3 3"/><rect x="4" y="8" width="13" height="26" fill="#1d2a3a"/><rect x="27" y="14" width="16" height="20" fill="#2a2440"/><rect x="52" y="6" width="9" height="28" fill="#1c2c34"/><rect x="5" y="46" width="12" height="14" fill="#2a2a20"/><rect x="27" y="46" width="16" height="13" fill="#1d2a3a"/><g fill="#ffd49a"><rect x="7" y="12" width="2" height="2"/><rect x="12" y="18" width="2" height="2"/><rect x="31" y="18" width="2" height="2"/><rect x="37" y="24" width="2" height="2"/><rect x="55" y="12" width="2" height="2"/><rect x="31" y="50" width="2" height="2"/></g><circle cx="35" cy="40" r="1.6" fill="#4fd8ff"/></svg>`;
 const SCHEM_THUMB = `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#060910"/><path d="M0 16h64M0 32h64M0 48h64M16 0v64M32 0v64M48 0v64" stroke="#7896d2" stroke-opacity=".08"/><rect x="5" y="6" width="54" height="26" rx="4" fill="none" stroke="#5aa0ff" stroke-opacity=".5" stroke-dasharray="3 2"/><rect x="9" y="11" width="18" height="11" rx="2" fill="#0d131f" stroke="#6fb0ff"/><rect x="37" y="11" width="18" height="11" rx="2" fill="#0d131f" stroke="#6fb0ff"/><path d="M27 16.5h10" stroke="#ffb547" stroke-width="1.4"/><path d="M18 22v20h12" stroke="#b48cff" stroke-width="1.2" fill="none"/><path d="M46 22v20h-6" stroke="#5ee6ff" stroke-dasharray="2 2" fill="none"/><path d="M30 42h10" stroke="#b48cff" stroke-width="1.2"/><path d="M28 38h8l3 5-3 5h-8l-3-5z" fill="#130f22" stroke="#9a6cff"/></svg>`;

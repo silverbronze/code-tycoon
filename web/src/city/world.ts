@@ -113,6 +113,8 @@ interface Inst {
 const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpP = new THREE.Vector3();
 const tmpC = new THREE.Color();
 const BUILD = new THREE.Color('#ffd49a');
+const GROUND_DAY = new THREE.Color('#e6e4df'), GROUND_NIGHT = new THREE.Color('#070910');
+const GRID_DAY = new THREE.Color('#cdcac4'), GRID_NIGHT = new THREE.Color('#1a2236');
 
 // "someone is working here": the building breathes, a glow pools at its base and
 // rings of light ripple outward, until the session moves on or stops working
@@ -207,6 +209,7 @@ export class World {
   dressing!: Dressing; life!: Life;
   private ticker: Label | null = null;
   private grounds: DistrictGrounds;
+  private ground: THREE.Mesh; private grid: THREE.GridHelper; private plateHue: number[] = []; private toned = -1;
 
   constructor(public stage: Stage, public city: City, overlay: HTMLElement) {
     const c = city;
@@ -216,9 +219,10 @@ export class World {
 
     // ground: faint grid that fades into the fog
     const span = Math.max(c.project.w, c.project.h) + 120;
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(span * 3, span * 3), new THREE.MeshStandardMaterial({ color: '#070910', roughness: 1 }));
+    // (colours come from tone(): pale by day, near black at night)
+    const ground = this.ground = new THREE.Mesh(new THREE.PlaneGeometry(span * 3, span * 3), new THREE.MeshStandardMaterial({ roughness: 1 }));
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.05; ground.receiveShadow = true;
-    const grid = new THREE.GridHelper(span * 2, Math.round(span * 2 / 4), '#1a2236', '#0e1320');
+    const grid = this.grid = new THREE.GridHelper(span * 2, Math.round(span * 2 / 4), '#ffffff', '#ffffff');
     (grid.material as THREE.Material).transparent = true; (grid.material as THREE.Material).opacity = 0.55;
     grid.position.y = -0.03;
     this.group.add(ground, grid);
@@ -237,7 +241,7 @@ export class World {
       this.plateOf.push(p.ref); this.plateIdx.set(refKey(p.ref), k);
       this.plateDim.set([p.x, p.z, p.w, p.h], k * 4);
       const d = c.districts[p.d];
-      this.plates.setColorAt(k, tmpC.setHSL((d?.hue ?? 210) / 360, 0.45, 0.1));
+      this.plateHue.push(d?.hue ?? 210);
       this.setPlate(k);
     });
     this.group.add(this.plates);
@@ -364,6 +368,7 @@ export class World {
 
     this.labelEls.sort((a, b) => b.pri - a.pri);
     this.births = [...this.born, ...this.extBorn, ...c.modules.filter(m => m.warehouse).map(m => m.born)].filter(b => b > this.t0).sort((a, b) => a - b);
+    this.tone(ENV.night.value);
     stage.onFrame(this.frame);
   }
 
@@ -382,7 +387,7 @@ export class World {
     const el = document.createElement('div');
     el.className = 'lb ' + cls;
     el.textContent = text;
-    if (color) el.style.color = color;
+    if (color) { el.style.color = color; el.style.setProperty('--k', color); }
     el.style.display = 'none';
     this.labels.appendChild(el);
     const L: Label = { el, v, min, max, pri, born: born ?? this.t0 };
@@ -867,7 +872,19 @@ export class World {
   }
 
   private labelTick = 0;
+  // Day and night recolour the open ground, the grid, district lots and place plates;
+  // buildings, roads and lamps read ENV.night themselves.
+  private tone(n: number) {
+    this.toned = n;
+    (this.ground.material as THREE.MeshStandardMaterial).color.copy(GROUND_DAY).lerp(GROUND_NIGHT, n);
+    (this.grid.material as THREE.LineBasicMaterial).color.copy(GRID_DAY).lerp(GRID_NIGHT, n);
+    this.grounds.tone(n);
+    this.plateHue.forEach((hue, k) => this.plates.setColorAt(k, tmpC.setHSL(hue / 360, 0.3 + 0.15 * n, 0.7 - 0.6 * n)));
+    if (this.plates.instanceColor) this.plates.instanceColor.needsUpdate = true;
+  }
+
   private frame = (dt: number, t: number) => {
+    if (Math.abs(ENV.night.value - this.toned) > 0.005) this.tone(ENV.night.value);
     this.uTime.value = t; TIME.value = t;
     this.auraFrame(dt, t);
     this.sites.update(dt, t, this.stage.viewSize);
