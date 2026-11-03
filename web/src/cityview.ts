@@ -338,7 +338,7 @@ export class CityView {
     const old = this.schem;
     old?.dispose();
     this.schem = new Schematic(this.root, this.city, {
-      onPick: r => { this.select(r ? { tt: r[0], ti: r[1] } : null); if (!r) this.tab('log'); },
+      onPick: r => { this.select(r ? { tt: r[0], ti: r[1] } : null, false, true); if (!r && this.curTab === 'inspect') this.tab('log'); },
       onHover: (r, x, y) => this.showTip(r ? { tt: r[0], ti: r[1] } : null, x, y),
     });
     if (old) this.schem.takeView(old);
@@ -1338,12 +1338,13 @@ export class CityView {
   }
 
   // ---------------------------------------------------------------- inspect
-  private async select(s: { tt: number; ti: number } | null, fly = false) {
+  // keepTab: a click on the map leaves Review / Insights / Digest open; Inspect fills behind it.
+  private async select(s: { tt: number; ti: number } | null, fly = false, keepTab = false) {
     this.selected = s;
     this.world.showSelection(s);
     this.schem?.setSelected(s ? this.placeRef(s) : null);
     if (!s) return;
-    this.tab('inspect');
+    if (!keepTab || this.curTab === 'log') this.tab('inspect');
     const e = this.els.inspect;
     e.innerHTML = '';
     const c = this.city;
@@ -1535,8 +1536,8 @@ export class CityView {
 
   private onClick(x: number, y: number) {
     const hit = this.world.pick(x, y);
-    this.select(hit);
-    if (!hit) this.tab('log');
+    this.select(hit, false, true);
+    if (!hit && this.curTab === 'inspect') this.tab('log');
   }
 
   private hoverT = 0;

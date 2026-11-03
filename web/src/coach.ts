@@ -132,7 +132,9 @@ export class CoachPanel {
     const list = d.sessions.filter(s => !this.kind || s.findings.some(f => f.kind === this.kind));
     return h('div', { class: 'co-box' },
       h('div', { class: 'co-bh' }, this.kind ? `Sessions with “${LABEL[this.kind]}”` : 'Sessions to learn from', h('span', { class: 'co-n' }, 'most to gain first')),
-      list.length ? list.map(s => this.sessionRow(s)) : h('div', { class: 'co-empty' }, 'No sessions.'));
+      list.length ? [h('div', { class: 'co-srow hd' }, h('span', { class: 'co-sp' }, 'Project'), h('span', {}, 'Session'), h('span', { class: 'co-kinds' }, 'Habits found'),
+        h('span', { class: 'co-num' }, 'Spent'), h('span', { class: 'co-num' }, 'Peak ctx'), h('span', { class: 'co-num' }, 'Could save'), h('span', { class: 'co-age' }, 'Last')),
+        ...list.map(s => this.sessionRow(s))] : h('div', { class: 'co-empty' }, 'No sessions.'));
   }
 
   private sessionRow(s: CoachSession) {

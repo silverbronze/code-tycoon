@@ -54,7 +54,9 @@
 .co-pr:not(.hd):hover { background: rgba(0, 0, 0, 0.04); }
 .co-pr .co-save { margin-left: 0; }
 .co-srow { display: grid; grid-template-columns: 100px minmax(140px, 1.2fr) minmax(0, 1.5fr) 62px 52px 66px 64px; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 9px; font-size: 13px; cursor: pointer; }
-.co-srow:hover, .co-srow.open { background: rgba(0, 0, 0, 0.04); }
+.co-srow:not(.hd):hover, .co-srow.open { background: rgba(0, 0, 0, 0.04); }
+.co-srow.hd { cursor: default; padding-top: 0; }
+.co-srow.hd span { font: 10.5px var(--ui); color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .co-sp { color: var(--muted); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .co-st { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .co-kinds { display: flex; gap: 4px; overflow: hidden; }

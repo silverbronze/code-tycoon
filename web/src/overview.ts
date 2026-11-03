@@ -35,6 +35,11 @@ export class Overview {
     const ps = res.projects as (Project & { spark: number[] | null })[];
     const tracked = ps.filter(p => p.tracked), other = ps.filter(p => !p.tracked);
     const scroll = this.root.scrollTop;
+    const others = [
+      h('div', { class: 'ov-h2row' }, h('h2', { class: 'ov-h' }, 'Other projects with Claude Code history'),
+        h('label', { class: 'showall' }, h('input', { type: 'checkbox', checked: this.showAll, onchange: (e: Event) => { this.showAll = (e.target as HTMLInputElement).checked; this.render(); } }), 'include temp & headless folders')),
+      h('div', { class: 'grid small' }, ...other.map(p => this.card(p))),
+    ];
     this.root.innerHTML = '';
     put(this.root,
       h('div', { class: 'ov-hero' },
@@ -46,13 +51,12 @@ export class Overview {
           this.setupToggle('hooks', 'live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
           this.setupToggle('autostart', 'start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
       this.setupBanner(),
+      // Projects first, tracked and untracked together, so the ones still to open are
+      // on screen without scrolling past sessions and coaching.
+      tracked.length ? [h('h2', { class: 'ov-h' }, 'Tracked'), h('div', { class: 'grid' }, ...tracked.map(p => this.card(p)))] : null,
+      others,
       res.sessions.length ? this.openSessions(res.sessions) : null,
       tracked.length ? this.coach.el : null,
-      tracked.length ? h('h2', { class: 'ov-h' }, 'Tracked') : null,
-      h('div', { class: 'grid' }, ...tracked.map(p => this.card(p))),
-      h('div', { class: 'ov-h2row' }, h('h2', { class: 'ov-h' }, 'Other projects with Claude Code history'),
-        h('label', { class: 'showall' }, h('input', { type: 'checkbox', checked: this.showAll, onchange: (e: Event) => { this.showAll = (e.target as HTMLInputElement).checked; this.render(); } }), 'include temp & headless folders')),
-      h('div', { class: 'grid small' }, ...other.map(p => this.card(p))),
     );
     this.root.scrollTop = scroll;
   }
