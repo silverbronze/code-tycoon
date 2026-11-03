@@ -253,6 +253,8 @@ select.chip.sel { background: var(--panel-solid); cursor: pointer; padding-right
 .chip.mini { height: 22px; padding: 0 8px; font-size: 11px; margin-left: 8px; text-transform: none; letter-spacing: 0; }
 .chip.mini.on { color: var(--text); border-color: rgba(0, 0, 0, 0.5); }
 .bell { position: relative; font-size: 14px; }
+.bell:hover, .bell.on { color: var(--text); }
+.bell-ico { display: inline-flex; }
 .bell.on { border-color: var(--line-2); background: rgba(0, 0, 0, 0.07); }
 .bell .badge { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--text); color: #fff; font: 700 10.5px/17px var(--ui); display: none; }
 .bell.hot .badge { background: var(--red); color: #fff; }

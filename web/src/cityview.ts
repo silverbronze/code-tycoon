@@ -223,7 +223,8 @@ export class CityView {
     e.changesBtn = h('button', { class: 'chip toggle', title: 'Mark files with uncommitted changes, in the colour of the session that wrote them (red: several sessions)', onclick: () => this.toggleChanges() }, 'Uncommitted ', h('b', {}, '–'));
     e.colorSel = h('select', { class: 'chip sel', title: 'What the building colours show', onchange: (ev: Event) => { this.colorMode = (ev.target as HTMLSelectElement).value as ColorMode; this.applyColorMode(); } },
       ...COLOR_MODES.map(([v, l]) => h('option', { value: v }, l)));
-    e.bell = h('button', { class: 'chip icon bell', title: 'Alerts', onclick: () => this.toggleDrawer() }, '🔔', h('span', { class: 'badge' }));
+    e.bell = h('button', { class: 'chip icon bell', title: 'Alerts', onclick: () => this.toggleDrawer() }, h('span', { class: 'bell-ico' }), h('span', { class: 'badge' }));
+    (e.bell.firstChild as HTMLElement).innerHTML = BELL;
     e.modeBadge = h('span', { class: 'mode live' }, 'LIVE');
     const totalCost = this.data.sessions.reduce((s, x) => s + (x.cost || 0), 0);
     const header = h('header', { class: 'topbar glass' },
