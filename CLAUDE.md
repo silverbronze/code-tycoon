@@ -35,6 +35,8 @@ Data: `~/.visualizer/visualizer.db`. Hook script: `~/.visualizer/hook.mjs` (copi
 - `python` is only the Windows `py` launcher stub here (prints usage, does nothing) — script file edits with `node` or the Edit tool.
 - The `sessions` table only holds sessions of tracked projects (Visualizer itself is untracked); anything machine-wide (e.g. `server/idle.mjs` naming CLI processes) must also read `~/.claude/projects/*/*.jsonl` directly.
 - A node process with no parent is often a daemon the user started on purpose (`~/.claude/mcp-gateway`, `sync-skills.js watch`, this server itself), not a leftover — idle detection only flags parentless helpers from `node_modules`/npx.
+- `git add <file>` on a deletion already staged by `git rm` fails ("pathspec did not match") — chain every add/commit step with `&&` so a later `git add -A && commit` can't sweep everything into the wrong commit.
+- `npm publish` here goes through npm's staged publishing: the registry shows a `0.0.0-stage` placeholder as `latest` until the real version is approved on npmjs.com (needs 2FA) — check `npm view <pkg> version` before telling anyone it's live.
 - `import('C:/...')` in a Windows node script fails (ERR_UNSUPPORTED_ESM_URL_SCHEME) — use `file:///C:/...`.
 - The city opens at viewSize ≈ span×0.9 (≈250 for a mid-size repo), not the Stage default 60, and file buildings show up to viewSize 120. Pick zoom-gated effects' thresholds against those numbers and check them in a probe screenshot, or the effect never appears for the user.
 - Prompts sent by `claude -p` are `turnOrigin: "sdk"` and the parser counts only human prompts, so scripted demo sessions give 0 tasks — for demo data, retag copies of the transcripts to `"human"` before indexing.
