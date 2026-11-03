@@ -51,7 +51,7 @@ export class DistrictGrounds {
   tone(n: number) {
     for (const it of this.items) {
       const m = it.fill.material as THREE.MeshStandardMaterial;
-      m.color.setHSL(it.hue / 360, 0.3 + 0.05 * n, 0.8 - 0.725 * n);
+      m.color.setHSL(it.hue / 360, 0.14 + 0.21 * n, 0.84 - 0.765 * n);
       m.emissiveIntensity = 0.025 * n;
       (it.rim.material as THREE.LineBasicMaterial).color.setHSL(it.hue / 360, 0.7, 0.5 - 0.08 * (1 - n));
     }

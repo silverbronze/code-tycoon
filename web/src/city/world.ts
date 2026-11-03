@@ -19,6 +19,33 @@ const TINT = { value: 0 }; // 1 while a colour mode replaces the district colour
 const TIME = { value: 0 };
 // aFacade: the district style's window pattern (themes.ts FACADE). aAge: -1 fresh
 // (written this week, glossy) .. 0 .. 1 untouched for months (weathered, ivy up the walls).
+// The open ground: grass by day, mottled in patches with a fine grain, lusher where the
+// woods grow and paler, drier in the meadows (same noise as wild() in dressing.ts);
+// near black at night.
+function groundMaterial() {
+  const m = new THREE.MeshStandardMaterial({ roughness: 1 });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uNight = ENV.night;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vG;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvG = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+        varying vec2 vG; uniform float uNight;
+        float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float vnoise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
+        float fbm(vec2 p) { return 0.5 * vnoise(p) + 0.3 * vnoise(p * 2.03 + 7.1) + 0.2 * vnoise(p * 4.1 - 3.7); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec2 g = vG;
+        float wild = 0.5 + 0.28 * sin(g.x * 0.11 + 1.7) * sin(g.y * 0.13 - 0.4) + 0.22 * sin((g.x + g.y) * 0.071 + 3.1) * sin((g.x - g.y) * 0.093);
+        float patches = fbm(g * 0.09), tufts = fbm(g * 0.7), grain = h2(floor(g * 9.0));
+        vec3 grass = mix(vec3(0.30, 0.43, 0.18), vec3(0.43, 0.54, 0.26), patches);    // lush .. fresh
+        grass = mix(grass, vec3(0.58, 0.6, 0.36), smoothstep(0.42, 0.3, wild) * smoothstep(0.45, 0.7, patches) * 0.8); // dry meadow
+        grass = mix(grass, vec3(0.22, 0.34, 0.14), smoothstep(0.55, 0.7, wild) * 0.6);  // under the woods
+        grass *= 0.9 + 0.14 * tufts + 0.06 * grain;
+        diffuseColor.rgb = mix(grass, vec3(0.0021, 0.0027, 0.0052), uNight);`);
+  };
+  return m;
+}
 function buildingMaterial(rise: { value: number }) {
   const m = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.35 });
   m.onBeforeCompile = sh => {
@@ -113,8 +140,7 @@ interface Inst {
 const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion(), tmpS = new THREE.Vector3(), tmpP = new THREE.Vector3();
 const tmpC = new THREE.Color();
 const BUILD = new THREE.Color('#ffd49a');
-const GROUND_DAY = new THREE.Color('#e6e4df'), GROUND_NIGHT = new THREE.Color('#070910');
-const GRID_DAY = new THREE.Color('#cdcac4'), GRID_NIGHT = new THREE.Color('#1a2236');
+const GRID_DAY = new THREE.Color('#7f9468'), GRID_NIGHT = new THREE.Color('#1a2236');
 
 // "someone is working here": the building breathes, a glow pools at its base and
 // rings of light ripple outward, until the session moves on or stops working
@@ -220,7 +246,7 @@ export class World {
     // ground: faint grid that fades into the fog
     const span = Math.max(c.project.w, c.project.h) + 120;
     // (colours come from tone(): pale by day, near black at night)
-    const ground = this.ground = new THREE.Mesh(new THREE.PlaneGeometry(span * 3, span * 3), new THREE.MeshStandardMaterial({ roughness: 1 }));
+    const ground = this.ground = new THREE.Mesh(new THREE.PlaneGeometry(span * 3, span * 3), groundMaterial());
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.05; ground.receiveShadow = true;
     const grid = this.grid = new THREE.GridHelper(span * 2, Math.round(span * 2 / 4), '#ffffff', '#ffffff');
     (grid.material as THREE.Material).transparent = true; (grid.material as THREE.Material).opacity = 0.55;
@@ -876,8 +902,8 @@ export class World {
   // buildings, roads and lamps read ENV.night themselves.
   private tone(n: number) {
     this.toned = n;
-    (this.ground.material as THREE.MeshStandardMaterial).color.copy(GROUND_DAY).lerp(GROUND_NIGHT, n);
     (this.grid.material as THREE.LineBasicMaterial).color.copy(GRID_DAY).lerp(GRID_NIGHT, n);
+    (this.grid.material as THREE.LineBasicMaterial).opacity = 0.07 + 0.48 * n; // by day the grass carries the ground
     this.grounds.tone(n);
     this.plateHue.forEach((hue, k) => this.plates.setColorAt(k, tmpC.setHSL(hue / 360, 0.3 + 0.15 * n, 0.7 - 0.6 * n)));
     if (this.plates.instanceColor) this.plates.instanceColor.needsUpdate = true;

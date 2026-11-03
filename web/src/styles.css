@@ -47,6 +47,7 @@ button, select, input { font: inherit; color: inherit; }
 .cityview.day .lb-module { color: #2a2a2a; opacity: 1; }
 .cityview.day .lb-warehouse, .cityview.day .lb-ext, .cityview.day .lb-local { color: var(--muted); }
 .cityview.day .tag { color: var(--text); background: rgba(255, 255, 255, 0.94); border-color: var(--line-2); box-shadow: inset 3px 0 0 var(--c), 0 2px 8px rgba(0, 0, 0, 0.12); }
+.cityview.day .lb-ticker { background: rgba(255, 255, 255, 0.94); border-color: var(--line-2); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); color: var(--text); text-shadow: none; }
 .cityview.day .tag.needs { color: #fff; background: var(--red); border-color: var(--red); }
 
 .glass { background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18); }

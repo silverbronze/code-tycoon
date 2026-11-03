@@ -63,6 +63,13 @@ function kit(): Kit {
     runwayLine: { geo: box(0.12, 0.01, 0.6, 0, 0.02), mat: new THREE.MeshBasicMaterial({ color: '#d9dde6' }) },
     hangar: { geo: new THREE.CylinderGeometry(1, 1, 3, 16, 1, false, 0, Math.PI).rotateZ(Math.PI / 2).rotateY(Math.PI / 2).translate(0, 0, 0), mat: std('#7d8696', 0.06, { side: THREE.DoubleSide }), shadow: true },
     helipad: { geo: merge(cyl(0.6, 0.6, 0.04, 0, 0, 0, 20)), mat: std('#2c3340', 0.1) },
+    // the country around the city (white materials: each one is tinted per instance)
+    pine: { geo: merge(cyl(0.035, 0.045, 0.2), new THREE.ConeGeometry(0.22, 0.42, 7).translate(0, 0.38, 0), new THREE.ConeGeometry(0.16, 0.34, 7).translate(0, 0.6, 0)), mat: std('#ffffff', 0.03, { roughness: 0.9, metalness: 0 }), shadow: true },
+    oak: { geo: merge(cyl(0.04, 0.05, 0.22), new THREE.IcosahedronGeometry(0.24, 0).scale(1, 0.85, 1).translate(0, 0.42, 0)), mat: std('#ffffff', 0.03, { roughness: 0.9, metalness: 0, flatShading: true }), shadow: true },
+    bush: { geo: new THREE.IcosahedronGeometry(0.14, 0).scale(1.3, 0.75, 1).translate(0, 0.08, 0), mat: std('#ffffff', 0.03, { roughness: 0.95, metalness: 0, flatShading: true }), shadow: true },
+    flower: { geo: box(0.05, 0.05, 0.05), mat: std('#ffffff', 0.2, { roughness: 0.8, metalness: 0 }) },
+    sheep: { geo: merge(box(0.2, 0.11, 0.12, 0, 0.05), box(0.02, 0.05, 0.02, -0.06), box(0.02, 0.05, 0.02, 0.06)), mat: std('#f2f0ea', 0.05, { roughness: 1, metalness: 0 }), shadow: true },
+    sheepHead: { geo: box(0.06, 0.06, 0.06, 0.12, 0.1), mat: std('#2b2a28', 0.02, { roughness: 1, metalness: 0 }) },
   };
 }
 
@@ -276,6 +283,50 @@ export class Dressing {
     B.add('hangar', A.x + 3.4, 0, A.z - 2, [1.2, 1, 1]);
     this.helipad = { x: A.x + 3.4, z: A.z - A.len + 2 };
     B.add('helipad', this.helipad.x, 0, this.helipad.z);
+
+    // ---- the country around: woods, lone trees and hedges, meadows with flowers and flocks.
+    // A slow noise decides what grows where, so it comes in groves and clearings; nothing
+    // grows on a district's ground, a street, the plaza, the river, the railway or the airfield.
+    const ex = 2.2, plaza = { x0: Bd.cx - 30, x1: Bd.cx + 22, z0: z1 + 1.5, z1: z1 + 10.5 };
+    const taken = (x: number, z: number) =>
+      c.districts.some(d => d.members.length && x > d.x - ex && x < d.x + d.w + ex && z > d.z - ex && z < d.z + d.h + ex) ||
+      c.externals.some(e => Math.abs(x - e.x) < e.w / 2 + 1.5 && Math.abs(z - e.z) < e.h / 2 + 1.5) ||
+      (z > z0 - 14.6 && z < z0 - 7.1) || Math.abs(z - this.rail.z) < 2 ||
+      (x > A.x - 2.6 && x < A.x + 5.6 && z > A.z - A.len - 3.2 && z < A.z + 2.6) ||
+      (x > plaza.x0 && x < plaza.x1 && z > plaza.z0 && z < plaza.z1) || !free(x, z, 0.5);
+    const wild = (x: number, z: number) => 0.5 + 0.28 * Math.sin(x * 0.11 + 1.7) * Math.sin(z * 0.13 - 0.4) + 0.22 * Math.sin((x + z) * 0.071 + 3.1) * Math.sin((x - z) * 0.093);
+    const green = (s: number, dark = 0) => new THREE.Color().setHSL(0.24 + s * 0.09, 0.42 + s * 0.15, 0.3 + s * 0.12 - dark);
+    const FLOWERS = ['#e8505b', '#f2c94c', '#ffffff', '#b07fd8', '#f29ab2'].map(h => new THREE.Color(h));
+    const R = 34, G = 1.15;
+    let flocks = 0, trees = 0;
+    for (let gx = x0 - R; gx < x1 + R; gx += G) for (let gz = z0 - R; gz < z1 + R; gz += G) {
+      const s = hash(gx * 12.9898 + gz * 78.233), s2 = hash(gx * 3.17 - gz * 9.71);
+      const x = gx + (s - 0.5) * G * 0.9, z = gz + (s2 - 0.5) * G * 0.9;
+      if (taken(x, z)) continue;
+      const w = wild(x, z);
+      if (w > 0.57 && trees < 3200) {                           // woods: dense, pines and oaks mixed
+        const pine = s2 < 0.35 + (w - 0.57) * 1.5;
+        B.add(pine ? 'pine' : 'oak', x, 0, z, 0.85 + s * 0.7, s * 6.28, green(s, pine ? 0.08 : 0));
+        if (w > 0.64 && s2 > 0.4) { B.add(s > 0.5 ? 'pine' : 'oak', x + 0.5, 0, z + 0.35, 0.8 + s2 * 0.6, s2 * 9, green(s2, 0.05)); trees++; } // thick inside
+        else if (s > 0.55) B.add('bush', x + 0.45, 0, z - 0.3, 0.8 + s2 * 0.6, s2 * 6.28, green(s2, 0.04));
+        trees++;
+        if ((trees & 31) === 0) this.parks.push({ x, z });  // birds settle in the woods too
+      } else if (w > 0.45) {                                  // edges: a lone tree, a hedge
+        if (s < 0.14) { B.add('oak', x, 0, z, 1 + s2 * 0.6, s * 40, green(s2)); trees++; }
+        else if (s < 0.3) B.add('bush', x, 0, z, 0.9 + s2 * 0.5, s * 40, green(s2, 0.03));
+      } else if (w < 0.36) {                                  // meadows: flowers, now and then a flock
+        if (s < 0.22) for (let k = 0; k < 3; k++)
+          B.add('flower', x + (hash(s * 91 + k) - 0.5) * 0.8, 0, z + (hash(s2 * 57 + k) - 0.5) * 0.8, 0.7 + hash(s + k) * 0.6, 0, FLOWERS[Math.floor(hash(s2 + k * 7) * FLOWERS.length)]);
+        else if (s > 0.995 && flocks < 6) {
+          flocks++;
+          for (let k = 0; k < 6 + Math.floor(s2 * 5); k++) {
+            const a = hash(s * 13 + k) * 6.28, r = 0.3 + hash(s2 * 17 + k) * 1.6, sx = x + Math.cos(a) * r, sz = z + Math.sin(a) * r, ry = hash(k * 3.3 + s) * 6.28;
+            if (taken(sx, sz)) continue;
+            B.add('sheep', sx, 0, sz, 1, ry); B.add('sheepHead', sx, 0, sz, 1, ry);
+          }
+        }
+      }
+    }
 
     this.built = B.build(this.K, this.group);
     this.group.add(this.statues, this.statueFig);
