@@ -23,9 +23,10 @@ import { h } from './util';
 //     right, every neighbour a full card under its district (a long list folds each
 //     district into one card that opens on click). Zooming never collapses an
 //     island. The map is still there above, drag up to reach it, and it draws
-//     the same ties for the active island's module. Clicking a neighbour opens it
-//     in the same island, in place, with no second float; × closes an island,
-//     "clear all" closes every one. The wheel zooms everywhere, always.
+//     the same ties for the active island's module. Clicking a neighbour floats it
+//     out of the island into its own, hung right under it and tied to that card;
+//     the island it came from keeps its module. × closes an island and the ones
+//     opened from it, "clear all" closes every one. The wheel zooms everywhere, always.
 //  7. Colour means the kind of tie: imports amber (arrow at what is imported),
 //     code naming a system violet (arrow at the system), changed together cyan
 //     dashed. District hue marks only the district header and its cards' edge.
@@ -44,7 +45,8 @@ interface FHead { x: number; y: number; t: string; c: string; sec: boolean }
 interface Focus { i: number; me: R; cards: FCard[]; heads: FHead[]; x0: number; y0: number; x1: number; y1: number } // laid out around the module at (0, 0)
 // A focus diagram floated out below the map. oy is where it belongs, oyD where it is drawn (it eases there);
 // t0 and from drive the drift in: when it started, and the map point the module floated out of.
-interface Island { id: number; f: Focus; opened: Set<string>; oy: number; oyD: number; t0: number; from: Pt | null }
+// parent: the island it was opened from (a neighbour clicked there), hung right under it and tied to that card.
+interface Island { id: number; f: Focus; opened: Set<string>; oy: number; oyD: number; t0: number; from: Pt | null; parent: number }
 
 const COL: Record<EdgeType, string> = { imp: '#ffb547', ref: '#b48cff', work: '#5ee6ff' };
 const NODE: Record<Kind, { stroke: string; fill: string; label: string; group: string }> = {
@@ -295,16 +297,15 @@ export class Schematic {
     const cur = this.islands.find(x => x.id === this.activeIs);
     if (!p && cur && cur.f.i === i) return;
     this.sel = i;
-    if (p && p.island >= 0) { // a click inside an island opens the neighbour right there, or just wakes the island
-      const isl = this.islands.find(x => x.id === p.island);
-      if (isl && isl.f.i !== i) return this.expand(isl, i);
-      if (isl) { this.activeIs = isl.id; return; }
-    }
+    // a click inside an island on its own module just wakes it; on a neighbour, floats that one out under it
+    const src = p && p.island >= 0 ? this.islands.find(x => x.id === p.island) : undefined;
+    if (src && src.f.i === i) { this.activeIs = src.id; return; }
     const have = this.islands.find(x => x.f.i === i);
     if (have) { this.activeIs = have.id; this.glideTo(have, this.visible); return; }
     const n = this.nodes[i];
-    const isl: Island = { id: this.nextId++, f: null!, opened: new Set(), oy: 0, oyD: 0, t0: 0, from: null };
-    this.islands.unshift(isl); // the newest floats nearest the map
+    const isl: Island = { id: this.nextId++, f: null!, opened: new Set(), oy: 0, oyD: 0, t0: 0, from: null, parent: src ? src.id : -1 };
+    if (src) this.islands.splice(this.islands.indexOf(src) + 1, 0, isl); // right under the island it came from
+    else this.islands.unshift(isl); // the newest floats nearest the map
     this.drift(isl, i, p?.from ?? [n.x + CW / 2, n.y + CH / 2], true);
   }
   private drift(isl: Island, i: number, from: Pt | null, fresh: boolean) {
@@ -314,13 +315,6 @@ export class Schematic {
     if (fresh) isl.oyD = isl.oy;
     this.glideTo(isl, this.visible);
   }
-  // Inside an island the diagram is rebuilt in place on the clicked neighbour: no float, a short camera ease.
-  private expand(isl: Island, i: number) {
-    isl.opened = new Set(); isl.f = this.buildFocus(i, isl.opened);
-    isl.from = null; isl.t0 = 0; this.activeIs = isl.id;
-    this.stack(); isl.oyD = isl.oy;
-    this.glideTo(isl, this.visible, 0.45);
-  }
   // Islands hang one under another below the map; the ones that move ease there (loop()).
   private stack() {
     let y = this.overBottom + ISLE_GAP;
@@ -328,8 +322,10 @@ export class Schematic {
     this.dirty = true;
   }
   private closeIsland(id: number) {
-    this.islands = this.islands.filter(x => x.id !== id);
-    if (this.activeIs === id) { this.activeIs = -1; this.host.onPick(null); }
+    const gone = new Set([id]); // with the islands opened from it, and theirs
+    for (const x of this.islands) if (gone.has(x.parent)) gone.add(x.id);
+    this.islands = this.islands.filter(x => !gone.has(x.id));
+    if (gone.has(this.activeIs)) { this.activeIs = -1; this.host.onPick(null); }
     this.stack();
   }
   private clearIslands() {
@@ -743,11 +739,13 @@ export class Schematic {
       this.hits.push({ x0: tx - 6, y0: gy - 24, x1: tx + tw + 6, y1: gy, fn: () => this.clearIslands() });
     }
 
-    // a tether from the active island back to where its module sits on the map
+    // a tether from the active island back to where its module sits on the map,
+    // or to its card in the island it was opened from
     const a = this.islands.find(x => x.id === this.activeIs);
+    const up = a && this.islands.find(x => x.id === a.parent), upc = up?.f.cards.find(c => c.i === a!.f.i);
     if (a && act >= 0) {
       const n = this.nodes[act], b = this.boxes[n.box];
-      const p0: Pt = tier ? [n.x + CW / 2, n.y + CH] : [b.x + b.w / 2, b.y + b.h];
+      const p0: Pt = up && upc ? [this.islandX + upc.x + CW / 2, up.oyD + upc.y + CH] : tier ? [n.x + CW / 2, n.y + CH] : [b.x + b.w / 2, b.y + b.h];
       const p3: Pt = [this.islandX + (a.f.x0 + a.f.x1) / 2, a.oyD + a.f.y0 - ISLE_HEAD];
       const k = Math.max(60, (p3[1] - p0[1]) * 0.45), age = Math.min(3, (now - a.t0) / 1000), ph = age * 1.6;
       const amp = Math.min(14, Math.abs(p3[1] - p0[1]) * 0.02);
@@ -763,6 +761,15 @@ export class Schematic {
 
     for (const isl of this.islands) this.drawIsland(isl, time, W, H);
     this.off = [0, 0];
+    // the card an island was opened from keeps a ring in that island's colour
+    for (const isl of this.islands) {
+      const up = this.islands.find(x => x.id === isl.parent), c = up?.f.cards.find(c => c.i === isl.f.i);
+      if (!up || !c) continue;
+      const n = this.nodes[isl.f.i], st = n.kind === 'module' ? `hsl(${this.boxes[n.box].hue}, 60%, 62%)` : NODE[n.kind].stroke;
+      ctx.strokeStyle = st; ctx.lineWidth = 1.6; ctx.globalAlpha = isl.id === this.activeIs ? 0.95 : 0.55;
+      rrect(ctx, this.sx(this.islandX + c.x) - 4, this.sy(up.oyD + c.y) - 4, CW * s + 8, CH * s + 8, 7); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
 
   private buildFocus(f: number, opened: Set<string>): Focus {

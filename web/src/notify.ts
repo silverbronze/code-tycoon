@@ -16,7 +16,8 @@ export const notify = {
 };
 
 const TITLE: Record<string, string> = { 'needs-you': 'A session needs you', collision: 'Two sessions edited the same file', overlap: 'Sessions working in the same area',
-  loop: 'A session is going in circles', failing: 'Checks keep failing', cost: 'A task is costing far more than usual', 'red-stop': 'A session stopped with checks failing' };
+  loop: 'A session is going in circles', failing: 'Checks keep failing', cost: 'A task is costing far more than usual', 'red-stop': 'A session stopped with checks failing',
+  'cold-resume': 'Resumed on an expired cache', 'context-big': 'A session is carrying a large context', 'topic-switch': 'New topic in an old session', compacted: 'A session hit the context limit' };
 const shown = new Map<number, Notification>();
 
 live.on(m => {

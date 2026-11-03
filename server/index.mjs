@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { db } from './db.mjs';
 import { PORT, PROJECTS_DIR, rel } from './paths.mjs';
+import { CODEX_DIR, isCodexFile, codexCwd, codexSlug } from './codex.mjs';
 import crypto from 'node:crypto';
-import { discover, indexFile, indexProject, listProjects, setTracked, trackedSet, refreshProjectAgg, backfillUsage, backfillResults } from './indexer.mjs';
+import { discover, indexFile, indexProject, listProjects, setTracked, trackedSet, refreshProjectAgg, backfillUsage, backfillResults, backfillCoach } from './indexer.mjs';
 import { buildCity, invalidateScan, KIND_INDEX, KINDS } from './citymap.mjs';
 import { onHook, onTranscriptItems, onLive, openSessions, trackPlace, syncFromDb, sessions, listAlerts, dismissAlerts, alertOnce, decorateSessions, touchSession } from './live.mjs';
 import { sessionHealth, checkSession, review, insights, look, cosmetics, setCosmetic, taskFlags, weekly, fileHistory } from './analytics.mjs';
@@ -16,6 +17,9 @@ import { changes, commitDetail, digest, saveDigestSummary } from './insights.mjs
 import { health } from './health.mjs';
 import { VIS_DIR } from './paths.mjs';
 import { systemLoad, processBreakdown } from './system.mjs';
+import { scanIdle, idleSummary, stopIdle } from './idle.mjs';
+import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
+import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize } from './optimize.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
 const TOKEN_FILE = path.join(VIS_DIR, 'token');
@@ -63,7 +67,10 @@ onLive(msg => {
   if (msg.type === 'session') {
     const s = msg.session, was = lastState.get(s.id);
     lastState.set(s.id, s.state);
-    if (was === 'working' && s.state === 'waiting' && s.pid) setImmediate(() => { try { checkSession(s.id, s.pid, alertOnce, true); } catch (e) { console.warn('[analytics]', e.message); } });
+    if (was === 'working' && s.state === 'waiting' && s.pid) setImmediate(() => {
+      try { checkSession(s.id, s.pid, alertOnce, true); } catch (e) { console.warn('[analytics]', e.message); }
+      try { checkCoach(s.id, s.pid, alertOnce); } catch (e) { console.warn('[coach]', e.message); }
+    });
   }
   if (msg.type === 'alert' || msg.type === 'alert-resolved' || msg.type === 'alerts-dismissed') broadcast({ ...msg, pid: msg.pid ?? msg.alert?.pid ?? null });
   else broadcast(msg, msg.session?.pid);
@@ -72,6 +79,7 @@ onSummaries(msg => {
   if (msg.type === 'subsys') { cities.delete(msg.pid); broadcast({ type: 'city-changed', pid: msg.pid }, msg.pid); }
   else broadcast(msg, msg.pid);
 });
+onOptimize(msg => broadcast(msg, msg.pid));
 
 // Live items -> city places -> clients
 function fanOut(pid, items) {
@@ -109,7 +117,9 @@ function onTranscriptChange(file) {
   clearTimeout(pending.get(file));
   pending.set(file, setTimeout(() => {
     pending.delete(file);
-    const slug = path.relative(PROJECTS_DIR, file).split(path.sep)[0];
+    const codex = isCodexFile(file);
+    const slug = codex ? codexCwd(file) && codexSlug(codexCwd(file)) : path.relative(PROJECTS_DIR, file).split(path.sep)[0];
+    if (!slug) return;
     let pid = db.prepare('SELECT project_id FROM transcripts WHERE slug=? LIMIT 1').get(slug)?.project_id;
     if (!pid) { discovered = discover(); pid = [...discovered].find(([, p]) => p.slugs.has(slug))?.[0]; }
     if (!pid || !trackedSet().has(pid) || indexing.has(pid)) return;
@@ -138,6 +148,10 @@ function onTranscriptChange(file) {
 try {
   fs.watch(PROJECTS_DIR, { recursive: true }, (_, f) => { if (f && f.endsWith('.jsonl')) onTranscriptChange(path.join(PROJECTS_DIR, f)); });
 } catch (e) { console.warn('fs.watch unavailable, polling only:', e.message); }
+// Codex sessions; if the folder appears later, the periodic rescan below finds its files
+try {
+  if (fs.existsSync(CODEX_DIR)) fs.watch(CODEX_DIR, { recursive: true }, (_, f) => { if (f && f.endsWith('.jsonl')) onTranscriptChange(path.join(CODEX_DIR, f)); });
+} catch (e) { console.warn('fs.watch on Codex sessions unavailable, polling only:', e.message); }
 // fs.watch on Windows can miss appends to files held open by another process
 let polls = 0;
 setInterval(() => {
@@ -242,6 +256,8 @@ const server = http.createServer(async (req, res) => {
       if (h.cwd && /[\\/]\.visualizer[\\/]summarizer/i.test(h.cwd)) return;
       const items = onHook(h);
       const pid = sessions.get(h.session_id)?.pid;
+      // a prompt on a big context whose cache has expired: say so while it is being written again
+      if (pid && h.hook_event_name === 'UserPromptSubmit') try { onPrompt(h.session_id, pid, alertOnce); } catch (e) { console.warn('[coach]', e.message); }
       if (pid && items.length && trackedSet().has(pid)) { city(pid); fanOut(pid, items); }
       return;
     }
@@ -276,13 +292,30 @@ const server = http.createServer(async (req, res) => {
           return send(res, 200, { kind: k, projects: listProjects(true).filter(p => t.has(p.id)).map(p => ({ id: p.id, name: p.name, root: p.root,
             sessions: p.sessions, prompts: p.prompts, last_ts: p.last_ts, open: open.filter(s => s.pid === p.id).length })) }, req);
         }
-        if (['node', 'claude', 'cpu', 'ram'].includes(k)) return send(res, 200, await processBreakdown(k), req);
+        if (k === 'node' || k === 'claude') {
+          const [d, idle] = await Promise.all([processBreakdown(k), scanIdle()]);
+          return send(res, 200, { ...d, idle }, req);
+        }
+        if (k === 'cpu' || k === 'ram') return send(res, 200, await processBreakdown(k), req);
         return send(res, 404, { error: 'unknown' }, req);
       }
       if (parts[1] === 'pulse') {
         const open = openSessions();
         return send(res, 200, { open: open.length, needs: open.filter(s => s.state === 'needs-you').length,
-          tracked: trackedSet().size, summarizer: summarizerStatus(), system: systemLoad() }, req);
+          tracked: trackedSet().size, summarizer: summarizerStatus(), system: systemLoad(), idle: idleSummary() }, req);
+      }
+      // stop idle Claude Code processes; JSON only, so a plain form from another page cannot reach it
+      if (parts[1] === 'procs' && parts[2] === 'stop' && req.method === 'POST') {
+        if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+        const b = JSON.parse(await readBody(req) || '{}');
+        if (!Array.isArray(b.pids) || !b.pids.length) return send(res, 400, { error: 'pids' }, req);
+        return send(res, 200, await stopIdle(b.pids), req);
+      }
+      // how sessions use context and cache, machine-wide or for one project (?pid=)
+      if (parts[1] === 'coach') {
+        if (parts[2] === 'session' && parts[3]) return send(res, 200, sessionCoach(parts[3]) || { error: 'not found' }, req);
+        const days = Math.min(90, Math.max(1, Number(u.searchParams.get('days')) || 7));
+        return send(res, 200, coach({ pid: u.searchParams.get('pid') || null, days }), req);
       }
       if (parts[1] === 'alerts') {
         if (req.method === 'POST' && parts[2] === 'dismiss') {
@@ -301,7 +334,7 @@ const server = http.createServer(async (req, res) => {
           if (!indexing.has(pid)) {
             indexing.set(pid, { done: 0, total: 1 });
             setImmediate(() => {
-              try { indexProject(pid, discover(), (d, n) => indexing.set(pid, { done: d, total: n })); backfillUsage(pid); backfillResults(pid).catch(e => console.warn('[results]', e.message)); }
+              try { indexProject(pid, discover(), (d, n) => indexing.set(pid, { done: d, total: n })); backfillUsage(pid); backfillResults(pid).then(() => backfillCoach(pid)).then(resetCoach).catch(e => console.warn('[results]', e.message)); }
               finally { indexing.delete(pid); cities.delete(pid); broadcast({ type: 'indexed', pid }); schedulePump(); }
             });
           }
@@ -355,6 +388,18 @@ const server = http.createServer(async (req, res) => {
           }
           return send(res, 200, d, req);
         }
+        // optimize a block (key m:<module key>) or district (d:<id>) with the project's model
+        if (parts[3] === 'optimize') {
+          if (req.method !== 'POST') { const key = String(u.searchParams.get('key') || ''); return send(res, 200, { model: projectModel(pid), job: getJob(pid, key) }, req); }
+          if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+          const b = JSON.parse(await readBody(req) || '{}'), key = String(b.key || '');
+          getJob(pid, key); // loads a saved plan, so it can be applied after a restart
+          const r = parts[4] === 'survey' ? survey(pid, city(pid), key)
+            : parts[4] === 'apply' ? apply(pid, city(pid), key, Array.isArray(b.items) ? b.items.map(String) : [], !!b.force)
+            : parts[4] === 'stop' ? stopOptimize(pid, key)
+            : parts[4] === 'undo' ? undoOptimize(pid, city(pid), key) : { error: 'unknown step' };
+          return send(res, r.busy ? 409 : r.error ? 400 : 200, r, req);
+        }
         if (parts[3] === 'live') return send(res, 200, { sessions: openSessions(pid) }, req);
         if (parts[3] === 'task') return send(res, 200, taskDetail(parts[4]) || { error: 'not found' }, req);
         if (parts[3] === 'file') {
@@ -404,6 +449,10 @@ server.listen(PORT, '127.0.0.1', () => {
     }
     schedulePump();
     for (const pid of trackedSet()) setImmediate(() => { try { backfillUsage(pid, discovered); } catch (e) { console.warn('[usage]', e.message); } });
-    (async () => { for (const pid of trackedSet()) await backfillResults(pid, discovered).catch(e => console.warn('[results]', e.message)); })();
+    (async () => {
+      for (const pid of trackedSet()) await backfillResults(pid, discovered).catch(e => console.warn('[results]', e.message));
+      for (const pid of trackedSet()) await backfillCoach(pid, discovered).catch(e => console.warn('[coach]', e.message));
+      resetCoach();
+    })();
   });
 });

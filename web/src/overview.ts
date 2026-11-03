@@ -2,6 +2,7 @@ import { api, live, type Project, type OpenSession, type Weekly } from './api';
 import { h, put, ago, bytes, dur, tail, money } from './util';
 import { notify } from './notify';
 import { Pulse } from './pulse';
+import { CoachPanel } from './coach';
 
 const VERB: Record<string, string> = { write: 'Editing', read: 'Reading', search: 'Searching', touch: 'Touching', cmd: 'Running', remote: 'Calling', skill: 'Using skill', spawn: 'Spawning agent', ask: 'Asking you', other: 'Using' };
 const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Working'], ['waiting', 'Your turn'], ['idle', 'Idle']];
@@ -13,6 +14,7 @@ export class Overview {
   private showAll = false;
   private confirmUntrack: string | null = null;
   private pulse = new Pulse('big');
+  private coach = new CoachPanel();
 
   constructor(parent: HTMLElement) {
     this.root = h('div', { class: 'overview' });
@@ -38,6 +40,7 @@ export class Overview {
           notify.supported ? h('button', { class: 'big notif' + (notify.on ? ' on' : ''), title: 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
             onclick: async () => { await notify.toggle(); this.render(); } }, h('b', {}, notify.on ? 'On' : 'Off'), h('span', {}, 'desktop alerts')) : null)),
       res.sessions.length ? this.openSessions(res.sessions) : null,
+      tracked.length ? this.coach.el : null,
       tracked.length ? h('h2', { class: 'ov-h' }, 'Tracked') : null,
       h('div', { class: 'grid' }, ...tracked.map(p => this.card(p))),
       h('div', { class: 'ov-h2row' }, h('h2', { class: 'ov-h' }, 'Other projects with Claude Code history'),
@@ -116,7 +119,7 @@ export class Overview {
       cell('wait', w.waitMedian ? dur(w.waitMedian) : '–', w.waitMedian, p.waitMedian, 'down', 'Median time a finished turn waited for your next prompt'));
   }
 
-  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.root.remove(); }
+  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.root.remove(); }
 }
 
 function spark(v: number[]) {

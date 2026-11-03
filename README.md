@@ -1,28 +1,96 @@
-# Code Tycoon
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo-dark.svg">
+    <img src="brand/logo.svg" alt="Code Tycoon" width="360">
+  </picture>
+</p>
 
-A live isometric city of a project and the Claude Code sessions working in it.
+<p align="center"><b>See your codebase as a living city, and watch your Claude Code sessions build it.</b></p>
 
-- **The city** is the architecture, not the folder tree: modules (folders, with look-alike siblings such as `logos/<site>` merged into one), data stores, outside systems (servers, sites, MCP services) and local areas are all places in one graph. Ties come from imports, files changed in the same task or commit, code that names a system, and tasks that used a system while working on a module. Connected places stand next to each other, groups of them form named districts, and roads join them; a road lights up when a session moves along it. Building height = size and commit churn.
-- **Replay from the start** begins on empty ground: every file, module, store, system, road and label appears at its birth (first commit, first AI write, first use, or creation on disk).
-- **Sessions are drones**, one colour each. A read is a scan beam, a write throws sparks and lights the building, a command puffs smoke, a remote call sends a packet to that system. Subagents are small drones tethered to their parent. A session waiting on a permission prompt gets a red light column.
-- **Zoom** out for one building per module, in for one per file. Click a building for its imports, the tasks that touched it, and AI-written module descriptions.
-- **Timeline**: activity histogram, one lane per session in view, git commits as landmarks (click one for the tasks behind it), nights shaded. Opens on the last 24 hours. Scrub, or play the whole history back at up to 7200×; quiet stretches are skipped.
-- **Task log**: one entry per prompt you gave, with a short title written by Haiku through your own `claude` CLI, and everything that task changed, read, ran and called.
-- **Alerts**: two open sessions editing the same file, two sessions working in the same module, a session that needs you. They are kept (bell in the top bar) until dismissed; "needs you" clears itself once the session moves on. Desktop notifications, switched on from the overview, fire while the tab is in the background.
-- **Sessions panel**: grouped into needs you / working / your turn / idle, longest wait first, with the uncommitted files each session wrote. Hover a card to light up its footprint.
-- **Uncommitted**: markers over files with uncommitted changes, in the colour of the session that wrote them (red: several sessions).
-- **Colour modes**: buildings by district, recent edits, churn, or the last session that wrote them.
-- **Digest tab**: one day at a time: tasks, sessions, commits, busiest modules, files edited by several sessions, new connections between parts (shown as arcs on the map), and an optional recap written by Haiku.
-- **Cost**: API-equivalent cost per task, session and project, from the token usage in the transcripts at list prices (a subscription is not billed per token, so read it as relative spend). The timeline histogram switches between actions and cost.
-- **Overview**: every open session in every project, waiting ones first; click one to open its project and follow it.
+<p align="center">
+  <code>npx code-tycoon</code> · runs on your machine · nothing leaves it
+</p>
+
+<p align="center"><img src="docs/media/demo.gif" alt="Code Tycoon: a project's city, replayed from its first commit, with Claude Code sessions flying over it" width="900"></p>
+
+Code Tycoon is the easiest way to view and explore a project. Point it at a repo you work on with Claude Code and, a minute later, you get a 3D isometric city of it. Every district is a part of the system (database, payments, auth, UI, API), every building is a module or a file, and roads are the real dependencies between them. You see the architecture at a glance, without reading the folder tree or drawing a diagram by hand.
+
+The city is live. Every Claude Code session is a drone flying over it: you watch it read, write, run commands and call outside systems as it happens, and you get an alert when two sessions edit the same file. Rewind the timeline and the city grows from empty ground, commit by commit, to what it is today.
+
+```
+npx code-tycoon                  # opens http://127.0.0.1:4400
+npx code-tycoon hooks install    # optional: instant live updates
+```
+
+Needs Node 22.13+ and a project you have used Claude Code in. Everything runs and stays on your machine.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![The city of a Next.js app: districts for auth, payments, database, UI and API](docs/media/city.png) | ![Every Claude Code session is a drone: scan beams for reads, sparks for writes](docs/media/sessions.png) |
+| **The city.** Districts are what each part does, not where it sits in the folder tree. | **Sessions at work.** One drone per session, live or replayed. |
+| ![Zoomed in to files, with the inspect panel open on one file](docs/media/inspect.png) | ![The same project as an architecture diagram](docs/media/schematic.png) |
+| **Zoom in and click.** Files, imports, history and the tasks that touched them. | **Architecture diagram.** The same map as boxes and connectors. |
+| ![Task log: one entry per prompt, with everything it changed](docs/media/tasklog.png) | ![Collision alert: two sessions edited the same file](docs/media/alerts.png) |
+| **Task log.** Every prompt you gave, titled, with what it changed, read and ran. | **Alerts.** Two sessions on one file, or a session waiting for you. |
+| ![Replay from the first commit](docs/media/replay.png) | ![Insights: cost per landed task, rework, habits](docs/media/insights.png) |
+| **Replay.** The city grows from empty ground, commit by commit. | **Insights.** What landed, rework, habits, and rules worth adding to CLAUDE.md. |
+| ![Daily digest](docs/media/digest.png) | ![Overview of every open session in every project](docs/media/overview.png) |
+| **Daily digest.** Tasks, commits, busiest modules, files several sessions touched. | **Overview.** Every open session in every project, waiting ones first. |
+
+The screenshots show [shadcn-ui/taxonomy](https://github.com/shadcn-ui/taxonomy), an open-source Next.js app, after a dozen real Claude Code sessions. ▶ [Watch the full one-minute video](docs/media/demo.mp4).
+
+## Why
+
+- **Understand a codebase fast.** New to a repo, or back after a month? The city shows its parts, their size, how they connect and where the work happens, in one picture.
+- **See the architecture as it really is.** Districts and roads come from imports, files changed together, and the systems the code talks to, so the map matches the code, not an old diagram.
+- **Know what your AI sessions are doing.** Several Claude Code sessions at once stop being a pile of terminal tabs: you see where each one is working, which one is waiting for you, and when two collide.
+- **Look back.** Replay a day, a week or the whole history and see what was built, by which task, and what it cost.
+
+## Features
+
+**Explore the project**
+- **City of the architecture**: modules, data stores, outside systems (APIs, sites, MCP services) and local folders are places on one map. Connected places stand together, groups form named districts, roads join them. Building height is size and commit churn.
+- **Districts by role**: database, payments, auth, UI, API and so on, each with its own look and its own properties (tables and migrations for a database, providers and currencies for payments).
+- **Zoom levels**: zoom out for one building per module, in for one per file.
+- **Inspect**: click a building for its imports, commits, the tasks that touched it and an AI-written description.
+- **Architecture diagram**: switch the city to a schematic of boxes and connectors.
+- **Colour modes**: by district, recent edits, churn, or the last session that wrote each file.
+- **Arrange it**: drag areas and buildings where you want them; the layout is remembered.
+
+**Watch Claude Code work**
+- **Sessions are drones**, one colour each. A read is a scan beam, a write throws sparks, a command puffs smoke, a remote call sends a packet to that system. Subagents are small drones tethered to their parent.
+- **Sessions panel**: needs you / working / your turn / idle, longest wait first, with the uncommitted files each session wrote.
+- **Alerts**: two sessions editing the same file, two sessions in the same module, a session that needs your answer. Desktop notifications while the tab is in the background.
+- **Overview**: every open session in every project on one page, waiting ones first.
+- **Uncommitted markers** over files with uncommitted changes, in the colour of the session that wrote them.
+
+**Look back**
+- **Replay from the start**: the city begins on empty ground and every file, module, road and label appears when it was born. Play at up to 7200×; quiet stretches are skipped.
+- **Timeline**: activity histogram, one lane per session, git commits as landmarks, nights shaded.
+- **Task log**: one entry per prompt, with a short AI-written title and everything that task changed, read, ran and called.
+- **Daily digest**: tasks, sessions, commits, busiest modules, files edited by several sessions, new connections between parts, and an optional written recap.
+- **Insights and health**: what landed, rework, tasks waiting on you, hotspots, and a 0–100 project health score.
+- **Cost**: API-equivalent cost per task, session and project from the token usage in the transcripts.
+
+## Use cases
+
+- **Onboarding onto a new codebase**: open the city and see the system's parts and how they connect before reading any code.
+- **Running several Claude Code sessions in parallel**: keep track of who works where, answer the one that is waiting, and catch two sessions editing the same file before their changes clash.
+- **Reviewing what AI did today**: the digest and task log show every task, the files it changed and the commit it produced, so nothing slips in unreviewed.
+- **Explaining a project to someone else**: share your screen on the city or the architecture diagram instead of drawing boxes on a whiteboard.
+- **Finding hotspots and tech debt**: churn colours, rework and collisions show which parts keep changing and keep causing trouble.
+- **Watching cost**: see which tasks, sessions and parts of the code cost the most.
+- **Telling the story of a project**: replay it from the first commit for a demo, a retro or a post.
 
 ## Requirements
 
 - Node 22.13 or newer (uses the built-in `node:sqlite`)
-- Claude Code, with some sessions already run (transcripts in `~/.claude/projects`)
+- Claude Code, with some sessions already run (transcripts in `~/.claude/projects`). OpenAI Codex CLI sessions (`~/.codex/sessions`, or `$CODEX_HOME/sessions`) are picked up too and tagged "Codex"; they update from the session file a second or two behind, and their cost shows as $0 since only Claude prices are known.
 - `git` on PATH for commits, churn and uncommitted-file markers
 - Optional: the `claude` CLI for AI task titles and recaps. It is found on PATH or inside the VS Code extension; set `VISUALIZER_CLAUDE` to point at it otherwise.
-- Windows, macOS or Linux. Autostart at login is Windows only.
+- Windows, macOS or Linux (autostart on Linux needs a systemd user session).
 
 ## Run
 
@@ -47,13 +115,13 @@ npm run hooks:install
 ```
 
 `npm run dev` runs the API and Vite with hot reload (http://127.0.0.1:5173).
-`npm run autostart:install` starts the server hidden at every Windows login (logs to `~/.visualizer/server.log`); `npm run autostart:uninstall` removes it.
+`npm run autostart:install` starts the server hidden at every login (logs to `~/.visualizer/server.log`): a Startup-folder launcher on Windows, a LaunchAgent on macOS, a systemd user service on Linux. `npm run autostart:uninstall` removes it.
 
-## How it works
+## Privacy and how it works
 
 The server only answers requests from this machine's own pages (Host and Origin are checked), and `/hook` needs the token in `~/.visualizer/token`, so another website open in the browser cannot read your prompts or post fake activity.
 
-Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`), parsed incrementally into `~/.visualizer/visualizer.db`. Nothing leaves the machine except the batched task-title requests, which go through your own `claude -p` (Haiku, no tools, no session saved, no hooks). Key-shaped strings in prompts are masked before they are stored or sent. Set `VISUALIZER_NO_LLM=1` to turn titling off.
+Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`) and `~/.codex/sessions/**/rollout-*.jsonl`, parsed incrementally into `~/.visualizer/visualizer.db`. Nothing leaves the machine except the batched task-title requests, which go through your own `claude -p` (Haiku, no tools, no session saved, no hooks). Key-shaped strings in prompts are masked before they are stored or sent. Set `VISUALIZER_NO_LLM=1` to turn titling off.
 
 The installer also sets `cleanupPeriodDays` to 3650 so Claude Code stops deleting transcripts after 30 days; the database keeps everything it has already indexed either way.
 

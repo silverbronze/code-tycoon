@@ -52,18 +52,42 @@ export interface SessionHealth {
   loop: { path: string; n: number; mins: number } | null; cost: number; median: number; ratio: number;
 }
 export interface LiveEvent { ts: number; s: string; a: string | null; k: number; tt: number; ti: number; task: string | null; tuid: string | null; d: string | null; tool: string | null; via: string }
-export interface Alert { id: number; kind: 'collision' | 'overlap' | 'needs-you' | 'loop' | 'failing' | 'cost' | 'red-stop'; pid: string; sessions: string[]; text: string; ts: number; path?: string | null; module?: string | null; resolved?: boolean }
+export interface Alert { id: number; kind: 'collision' | 'overlap' | 'needs-you' | 'loop' | 'failing' | 'cost' | 'red-stop' | 'cold-resume' | 'context-big' | 'topic-switch' | 'compacted'; pid: string; sessions: string[]; text: string; ts: number; path?: string | null; module?: string | null; resolved?: boolean }
+// Coaching on context and cache use (server/coach.mjs). Money is API-equivalent.
+export type CoachKind = 'cold-resume' | 'big-context' | 'topic-switch' | 'compacted' | 'model-switch' | 'cache-reset' | 'model-fit' | 'big-results' | 'heavy-start';
+export interface CoachFinding { kind: CoachKind; ts: number; text: string; fix: string; lost: number; save: number; task?: string }
+export interface CoachSession {
+  id: string; pid: string; project: string | null; title: string; first: number; last: number; model: string; cost: number; agentCost: number; agents: number;
+  calls: number; tasks: number; per10k: number; hit: number; base: number; peak: number; ttl: number; compactions: number;
+  findings: CoachFinding[]; lost: number; save: number;
+  curve?: [number, number][]; marks?: { ts: number; kind: string; pre?: number; post?: number }[];
+}
+export interface CoachHabit { kind: CoachKind; label: string; habit: string; n: number; sessions: number; lost: number; save: number }
+export interface CoachRoll {
+  sessions: number; cost: number; calls: number; hit: number; save: number; lost: number; compactions: number; coldResumes: number; coldLost: number;
+  fitSave: number; bigShare: number; base: number; per10k: number; peak: number; habits: CoachHabit[];
+}
+export interface Coach { days: number; pid: string | null; since: number; totals: CoachRoll; projects: (CoachRoll & { id: string; name: string })[]; sessions: CoachSession[]; at: number }
 export interface OpenSession extends LiveSession { project: string | null; tracked: boolean }
 export interface ProcGroup { n: number; mem: number; cpu: number }
 export interface PulseT {
   open: number; needs: number; tracked: number; summarizer: { enabled: boolean; running: boolean; total: number; done: number };
   system: { cpu: number | null; cores: number; memUsed: number; memTotal: number; procs: { node: ProcGroup; claude: ProcGroup } | null; at: number };
+  idle: { n: number; mem: number; at: number } | null;
 }
+// a Claude Code process (and everything it started) nobody has used for hours
+export interface IdleProc {
+  pid: number; kind: 'session' | 'orphan'; reason: 'idle' | 'ended' | 'unseen' | 'orphan';
+  session: { id: string; title: string | null; project: string | null } | null; label?: string; ver?: string | null;
+  born: number; seen: number; mem: number; priv: number; helpers: number; helperNames: string[];
+}
+export interface IdleScan { at: number; n: number; mem: number; items: IdleProc[] }
+export interface StopResult { stopped: number[]; failed: number[]; skipped: number[]; freed: number; idle: IdleScan }
 export interface ProcGroupD {
   label: string; n: number; mem: number; priv: number; cpu: number; owners: number;
   items: { pid: number; mem: number; priv: number; cpu: number; born: number; owner: number | null; kids?: number }[];
 }
-export interface ProcBreakdown { kind: 'node' | 'claude' | 'cpu' | 'ram'; n: number; mem: number; priv: number; cpu: number; groups: ProcGroupD[]; memTotal?: number; memUsed?: number }
+export interface ProcBreakdown { kind: 'node' | 'claude' | 'cpu' | 'ram'; n: number; mem: number; priv: number; cpu: number; groups: ProcGroupD[]; memTotal?: number; memUsed?: number; idle?: IdleScan }
 export type PulseDetail = ProcBreakdown
   | { kind: 'sessions' | 'needs'; sessions: OpenSession[] }
   | { kind: 'tracked'; projects: { id: string; name: string; root: string; sessions: number; prompts: number; last_ts: number | null; open: number }[] };
@@ -113,6 +137,15 @@ export interface Digest {
   modules: { i: number; name: string; n: number }[]; shared: { i: number; p: string; sessions: string[] }[];
   commits: { h: string; ts: number; s: string; n: number }[]; ties: Tie[]; tiesWeek: Tie[];
 }
+// An optimization run on a block (key m:<module key>) or district (d:<id>), server/optimize.mjs
+export interface OptItem { id: string; title: string; gain: string; impact: 'high' | 'medium' | 'low'; risk: 'high' | 'medium' | 'low'; files: string[]; why: string; change: string }
+export interface OptJob {
+  id: string; key: string; label: string; kind: string; model: string | null; state: 'surveying' | 'planned' | 'applying' | 'applied' | 'undone' | 'error';
+  started: number; ended?: number; files: number; read: number; cost: number; error?: string;
+  plan: { summary: string; items: OptItem[] } | null; picked?: string[];
+  result?: { done: { id: string; note: string }[]; skipped: { id: string; why: string }[]; note: string | null } | null;
+  changed?: string[]; created?: string[]; kept?: string[]; undo: boolean;
+}
 
 const enc = encodeURIComponent;
 const post = (url: string, body?: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -125,8 +158,11 @@ export const api = {
   projects: (all = false) => get<{ projects: Project[]; sessions: OpenSession[]; summarizer: { enabled: boolean; running: boolean; total: number; done: number } }>(`/api/projects${all ? '?all=1' : ''}`),
   pulse: () => get<PulseT>('/api/pulse'),
   pulseDetail: (k: string) => get<PulseDetail>(`/api/pulse/${enc(k)}`),
+  stopProcs: async (pids: number[]) => { const r = await post('/api/procs/stop', { pids }); if (!r.ok) throw new Error(String(r.status)); return r.json() as Promise<StopResult>; },
   track: (id: string) => post(`/api/projects/${enc(id)}/track`),
   untrack: (id: string) => post(`/api/projects/${enc(id)}/untrack`),
+  coach: (days: number, pid?: string | null) => get<Coach>(`/api/coach?days=${days}${pid ? '&pid=' + enc(pid) : ''}`),
+  coachSession: (sid: string) => get<CoachSession>(`/api/coach/session/${enc(sid)}`),
   alerts: (pid?: string) => get<{ alerts: Alert[] }>(`/api/alerts${pid ? '?pid=' + enc(pid) : ''}`),
   dismiss: (ids: number[] | null, pid?: string) => post('/api/alerts/dismiss', { ids, pid: pid ?? null }),
   changes: (id: string) => get<Changes>(`/api/projects/${enc(id)}/changes`),
@@ -144,6 +180,11 @@ export const api = {
   timeline: (id: string, since = 0) => get<Timeline>(`/api/projects/${enc(id)}/timeline${since ? '?since=' + since : ''}`),
   live: (id: string) => get<{ sessions: LiveSession[] }>(`/api/projects/${enc(id)}/live`),
   task: (id: string, task: string) => get<TaskT & { tokens: { in: number; out: number }; events: { ts: number; kind: string; tool: string; path: string | null; target: string | null; detail: string | null; agent_id: string | null; inferred: number }[] }>(`/api/projects/${enc(id)}/task/${enc(task)}`),
+  optimize: (id: string, key: string) => get<{ model: string | null; job: OptJob | null }>(`/api/projects/${enc(id)}/optimize?key=${enc(key)}`),
+  optimizeStep: async (id: string, step: 'survey' | 'apply' | 'stop' | 'undo', key: string, extra: { items?: string[]; force?: boolean } = {}) => {
+    const r = await post(`/api/projects/${enc(id)}/optimize/${step}`, { key, ...extra });
+    return { status: r.status, ...(await r.json()) } as { status: number; job?: OptJob; error?: string; busy?: { id: string; title: string | null }[]; restored?: string[]; kept?: string[] };
+  },
   file: (id: string, p: string) => get<{ path: string; tasks: { id: string; s: string; ts: number; kinds: string; title: string | null; prompt: string }[] }>(`/api/projects/${enc(id)}/file?p=${enc(p)}`),
 };
 

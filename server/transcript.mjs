@@ -118,8 +118,11 @@ export function resultText(block, tail = false, n = 300) {
   const m = /"(?:content|text)":"((?:[^"\\]|\\.)*)"/.exec(block);
   if (!m) return null;
   let s; try { s = JSON.parse('"' + m[1] + '"'); } catch { return null; }
-  s = s.replace(/\x1b\[[0-9;]*m/g, '').trim();
-  return redact(tail ? s.slice(-n) : s.slice(0, n));
+  return clipResult(s, tail, n);
+}
+export function clipResult(s, tail = false, n = 300) {
+  s = String(s).replace(/\x1b\[[0-9;]*m/g, '').replace(/\r\n/g, '\n').trim();
+  return s ? redact(tail ? s.slice(-n) : s.slice(0, n)) : null;
 }
 
 // Short, human description of a tool call for logs and tooltips.
@@ -181,6 +184,12 @@ export function parseRecord(o) {
   switch (o.type) {
     case 'ai-title': meta.title = o.aiTitle; break;
     case 'last-prompt': break;
+    case 'system':
+      if (o.subtype === 'compact_boundary') {
+        const c = o.compactMetadata || {};
+        meta.compact = { trigger: c.trigger || null, pre: c.preTokens || 0, post: c.postTokens || 0 };
+      }
+      break;
     case 'user': {
       const c = o.message?.content;
       if (o.isSidechain || o.isMeta) break;

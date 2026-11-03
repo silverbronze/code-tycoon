@@ -62,9 +62,18 @@ CREATE INDEX IF NOT EXISTS usage_project ON usage(project_id, ts);
 // columns added after the first release
 // chk: what a command checks (test/build/types/lint); ok: 1 the tool succeeded, 0 it failed; res: what it said
 for (const sql of ['ALTER TABLE sessions ADD COLUMN hook_ts INTEGER', 'ALTER TABLE events ADD COLUMN chk TEXT',
-  'ALTER TABLE events ADD COLUMN ok INTEGER', 'ALTER TABLE events ADD COLUMN res TEXT']) { try { db.exec(sql); } catch {} }
+  'ALTER TABLE events ADD COLUMN ok INTEGER', 'ALTER TABLE events ADD COLUMN res TEXT',
+  // coaching: 1-hour cache writes (the rest are 5-minute), the subagent a call belongs to, tool result size in chars
+  'ALTER TABLE usage ADD COLUMN tcw1h INTEGER DEFAULT 0', 'ALTER TABLE usage ADD COLUMN agent TEXT',
+  'ALTER TABLE events ADD COLUMN res_len INTEGER']) { try { db.exec(sql); } catch {} }
 db.exec(`CREATE INDEX IF NOT EXISTS events_tuid ON events(tuid);
-CREATE INDEX IF NOT EXISTS events_chk ON events(project_id, chk, ts);`);
+CREATE INDEX IF NOT EXISTS events_chk ON events(project_id, chk, ts);
+CREATE INDEX IF NOT EXISTS usage_session ON usage(session_id, ts);
+CREATE INDEX IF NOT EXISTS events_session ON events(session_id, ts);
+-- one row per context compaction (manual /compact or automatic)
+CREATE TABLE IF NOT EXISTS compactions (
+  session_id TEXT, project_id TEXT, ts INTEGER, trigger TEXT, pre INTEGER, post INTEGER, PRIMARY KEY(session_id, ts)
+);`);
 
 export function kvGet(k) {
   const r = db.prepare('SELECT v FROM kv WHERE k=?').get(k);

@@ -83,7 +83,8 @@ process.on('exit', stop);
 // --- what the numbers are made of (asked for on click, not polled) ----------
 // rows: { pid, ppid, name, cmd, mem (working set), priv (committed), cpu (% of machine), born }
 let snap = null, snapAt = 0, snapping = null;
-function snapshot() {
+export function forgetSnapshot() { snap = null; }
+export function snapshot() {
   if (snap && Date.now() - snapAt < 3000) return Promise.resolve(snap);
   return snapping ||= new Promise(resolve => {
     const done = rows => { snapping = null; snap = rows; snapAt = Date.now(); resolve(rows); };
@@ -101,20 +102,27 @@ function snapshot() {
           mem: Number(r.mem) || 0, priv: Number(r.priv) || 0, cpu: Math.round(Number(r.d) / 1e7 / cores * 1000) / 10, born: r.born || 0 })));
       });
     } else {
-      execFile('ps', ['-A', '-o', 'pid=,ppid=,rss=,pcpu=,etimes=,args='], { maxBuffer: 64 << 20 }, (err, out) => {
+      // etime ([[dd-]hh:]mm:ss), not etimes: macOS ps has no etimes and fails on it
+      execFile('ps', ['-A', '-o', 'pid=,ppid=,rss=,pcpu=,etime=,args='], { maxBuffer: 64 << 20 }, (err, out) => {
         const now = Date.now(), cores = os.cpus().length;
         done(err ? [] : out.split('\n').map(l => l.trim().split(/\s+/)).filter(f => f.length >= 6).map(([pid, ppid, rss, pcpu, et, ...a]) => ({
           pid: Number(pid), ppid: Number(ppid), name: a[0].split('/').pop().toLowerCase(), cmd: a.join(' '),
-          mem: Number(rss) * 1024, priv: Number(rss) * 1024, cpu: Math.round(Number(pcpu) / cores * 10) / 10, born: now - Number(et) * 1000 })));
+          mem: Number(rss) * 1024, priv: Number(rss) * 1024, cpu: Math.round(Number(pcpu) / cores * 10) / 10, born: now - elapsed(et) * 1000 })));
       });
     }
   });
 }
 
+function elapsed(et) {
+  const [d, rest] = et.includes('-') ? et.split('-') : [0, et];
+  const s = rest.split(':').map(Number).reverse();
+  return Number(d) * 86400 + (s[0] || 0) + (s[1] || 0) * 60 + (s[2] || 0) * 3600;
+}
+
 // "node.exe" says nothing; name a process by what it runs
 const parts = p => p.replace(/["']/g, '').split(/[\\/]+/).filter(Boolean);
 function scriptOf(cmd) { return cmd.match(/(?:"([^"]+\.[cm]?[jt]s)"|(\S+\.[cm]?[jt]s))(?=\s|"|$)/)?.slice(1).find(Boolean) || null; }
-function nodeLabel(r, by) {
+export function nodeLabel(r, by) {
   if (r.pid === process.pid) return 'Code Tycoon (this app)';
   const c = r.cmd;
   let m = c.match(/npx-cli\.js"?\s+(?:"?--package=([^"\s]+)|(?:"?-y"?\s+)?"?([^"\s-][^"\s]*))/);

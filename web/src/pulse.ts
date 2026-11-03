@@ -1,4 +1,4 @@
-import { api, live, type PulseT, type PulseDetail, type ProcBreakdown } from './api';
+import { api, live, type PulseT, type PulseDetail, type ProcBreakdown, type IdleScan, type IdleProc, type StopResult } from './api';
 import { h, put, ago, dur } from './util';
 
 const GB = 1024 ** 3;
@@ -21,6 +21,7 @@ export class Pulse {
   private pop: HTMLDivElement | null = null;
   private openKey: string | null = null;
   private last: PulseT | null = null;
+  private flash = ''; // what the last stop did, shown until the popover closes
 
   constructor(private variant: 'big' | 'strip') {
     this.el = h('div', { class: 'pulse ' + variant + (variant === 'strip' ? ' glass' : '') });
@@ -51,15 +52,20 @@ export class Pulse {
       { key: 'needs', value: p.needs, label: 'sessions waiting on you', short: 'waiting on you', cls: p.needs ? 'alarm' : '', title: 'Sessions waiting for your answer or permission' },
       { key: 'tracked', value: p.tracked, label: 'tracked projects', short: 'tracked', cls: '', title: 'Projects drawn as cities' },
     ];
+    const ram = sys.memUsed / sys.memTotal;
     if (sys.procs) {
       const { node, claude } = sys.procs;
+      // worth a look once idle sessions hold real memory; red when the machine is short of it
+      const idle = p.idle && p.idle.mem >= IDLE_WORTH ? p.idle : null;
       const many = claude.n > p.open * 3 + 4;
       out.push({ key: 'node', value: node.n, label: 'node processes', short: 'node', cls: '', title: `Node.js processes on this machine: ${mb(node.mem)} RAM, ${node.cpu}% CPU` });
-      out.push({ key: 'claude', value: claude.n, label: `Claude processes, ${mb(claude.mem)} RAM`, short: `Claude procs · ${mb(claude.mem)}`, cls: many ? 'warn' : '',
-        title: `Claude Code processes (CLI, extension, subagents): ${mb(claude.mem)} RAM, ${claude.cpu}% CPU.` + (many ? ' Far more than the open sessions; some may be leftovers from closed windows.' : '') });
+      out.push({ key: 'claude', value: claude.n, label: `Claude processes, ${mb(claude.mem)} RAM` + (idle ? `, ${mb(idle.mem)} idle` : ''),
+        short: `Claude procs · ${mb(claude.mem)}` + (idle ? ` · ${mb(idle.mem)} idle` : ''), cls: idle ? (ram >= 0.85 ? 'alarm' : 'warn') : many ? 'warn' : '',
+        title: `Claude Code processes (CLI, extension, subagents): ${mb(claude.mem)} RAM, ${claude.cpu}% CPU.` +
+          (idle ? ` ${idle.n} of them belong to sessions nobody has used for ${IDLE_HOURS}+ hours and hold ${mb(idle.mem)}. Click to stop them.`
+            : many ? ' Far more than the open sessions; some may be leftovers from closed windows.' : '') });
     }
     if (sys.cpu != null) out.push({ key: 'cpu', value: `${sys.cpu}%`, label: 'CPU', cls: sys.cpu >= 85 ? 'alarm' : sys.cpu >= 60 ? 'warn' : '', title: `Whole machine (${sys.cores} cores), last few seconds` });
-    const ram = sys.memUsed / sys.memTotal;
     out.push({ key: 'ram', value: `${gb(sys.memUsed)}/${gb(sys.memTotal)} GB`, label: 'RAM in use', short: 'RAM', cls: ram >= 0.9 ? 'alarm' : ram >= 0.75 ? 'warn' : '', title: `Whole machine: ${Math.round(ram * 100)}% of RAM in use` });
     return out;
   }
@@ -76,7 +82,12 @@ export class Pulse {
     this.place(anchor);
     document.addEventListener('pointerdown', this.outside, true);
     document.addEventListener('keydown', this.esc);
+    this.load(key);
+  }
+
+  private load(key: string) {
     const pop = this.pop;
+    if (!pop) return;
     api.pulseDetail(key).then(d => { if (this.pop === pop) { pop.innerHTML = ''; put(pop, this.body(d)); this.place(this.el.querySelector(`[data-k="${key}"]`)); } })
       .catch(() => { if (this.pop === pop) pop.textContent = 'Could not load this.'; });
   }
@@ -85,7 +96,7 @@ export class Pulse {
   private esc = (e: KeyboardEvent) => { if (e.key === 'Escape') this.close(); };
 
   private close() {
-    this.pop?.remove(); this.pop = null; this.openKey = null;
+    this.pop?.remove(); this.pop = null; this.openKey = null; this.flash = '';
     this.el.querySelectorAll('.sel').forEach(x => x.classList.remove('sel'));
     document.removeEventListener('pointerdown', this.outside, true);
     document.removeEventListener('keydown', this.esc);
@@ -136,9 +147,12 @@ export class Pulse {
         : `Whole machine: ${mb(d.memUsed!)} of ${mb(d.memTotal!)} in use. Heaviest programs by RAM:`
       : `${d.n} ${d.kind} processes · ${mb(d.mem)} in RAM · ${mb(d.priv)} committed · ${d.cpu}% CPU`;
     const top = Math.max(1e-9, ...d.groups.map(g => d.kind === 'cpu' ? g.cpu : g.mem));
+    const idle = d.idle?.items.length ? d.idle : null;
     return h('div', {},
+      this.flash ? h('div', { class: 'pp-note ok' }, this.flash) : null,
+      idle ? this.idleList(idle, now) : null,
       h('div', { class: 'pp-h' }, head),
-      cli > open + 2 ? h('div', { class: 'pp-note' }, `${cli} Claude Code CLI processes but ${open} open sessions. The extra ones are usually sessions whose panel or window was closed while the process kept running; the oldest ones below are the likely leftovers.`) : null,
+      cli > open + 2 && !idle ? h('div', { class: 'pp-note' }, `${cli} Claude Code CLI processes but ${open} open sessions. The extra ones are usually sessions whose panel or window was closed while the process kept running; the oldest ones below are the likely leftovers.`) : null,
       d.kind === 'node' ? h('div', { class: 'pp-note dim' }, '“Under N sessions” = started by that many Claude Code sessions, so each session runs its own copy of every MCP server.') : null,
       d.groups.map(g => {
         const bar = h('i', { class: 'pp-bar', style: { width: `${Math.max(2, (d.kind === 'cpu' ? g.cpu : g.mem) / top * 100)}%` } });
@@ -158,7 +172,54 @@ export class Pulse {
       }));
   }
 
+  // Sessions whose process (with its MCP servers and shells) outlived its use. "Stop all"
+  // takes only sessions; a stray helper with no session is stopped one at a time.
+  private idleList(idle: IdleScan, now: number) {
+    const sess = idle.items.filter(i => i.kind === 'session');
+    const sum = (xs: IdleProc[]) => xs.reduce((a, i) => a + i.mem, 0);
+    const stop = async (items: IdleProc[], btn: HTMLButtonElement) => {
+      btn.disabled = true; btn.textContent = 'Stopping…';
+      let r: StopResult;
+      try { r = await api.stopProcs(items.map(i => i.pid)); } catch { btn.textContent = 'Could not stop'; return; }
+      this.flash = `Stopped ${r.stopped.length} process${r.stopped.length === 1 ? '' : 'es'}, freed ${mb(r.freed)}.`
+        + (r.failed.length ? ` ${r.failed.length} would not stop.` : '') + (r.skipped.length ? ` ${r.skipped.length} became active and were left running.` : '');
+      this.refresh();
+      if (this.openKey) this.load(this.openKey);
+    };
+    // the first click arms the button, the second one stops
+    const confirmBtn = (label: string, items: IdleProc[], cls = '') => {
+      const b = h('button', { class: 'pp-stop' + cls, title: 'Ends the process and everything it started. The session stays in history; resume it from the Claude panel.' }, label);
+      let armed = false;
+      b.onclick = (e: Event) => {
+        e.stopPropagation();
+        if (!armed) { armed = true; b.classList.add('armed'); b.textContent = items.length > 1 ? `Stop ${items.length}? Click again` : 'Sure?'; setTimeout(() => { if (armed && !b.disabled) { armed = false; b.classList.remove('armed'); b.textContent = label; } }, 4000); return; }
+        stop(items, b);
+      };
+      return b;
+    };
+    const why = (i: IdleProc) => i.reason === 'ended' ? `session ended ${ago(i.seen, now)}, process kept running`
+      : i.reason === 'unseen' ? `no session since it started ${ago(i.born, now)}`
+      : i.reason === 'orphan' ? `its session is gone; running since ${ago(i.born, now)}`
+      : `last active ${ago(i.seen, now)}`;
+    return h('div', { class: 'pp-idle' },
+      h('div', { class: 'pp-idle-head' },
+        h('div', {}, h('b', {}, `${idle.n} idle, holding ${mb(idle.mem)}`),
+          h('div', { class: 'pp-sub' }, `Claude Code processes nobody has used for ${IDLE_HOURS}+ hours, with the MCP servers and shells they started.`)),
+        sess.length > 1 ? confirmBtn(`Stop all · free ${mb(sum(sess))}`, sess, ' all') : null),
+      idle.items.map(i => h('div', { class: 'pp-row' },
+        h('div', { class: 'pp-main' },
+          h('div', { class: 'pp-t' }, i.session?.project ? h('span', { class: 'pp-proj' }, i.session.project) : null, ' ',
+            i.session?.title || i.label || (i.session ? 'Untitled session' : 'Claude Code panel')),
+          h('div', { class: 'pp-sub' }, why(i), i.helpers ? ` · +${i.helpers} helper${i.helpers === 1 ? '' : 's'}` : '',
+            i.helperNames.length ? h('span', { class: 'dim' }, ` (${i.helperNames.join(', ')})`) : null, i.ver ? h('span', { class: 'dim' }, ` · v${i.ver}`) : null)),
+        h('span', { class: 'pp-n' }, mb(i.mem)),
+        confirmBtn('Stop', [i]))));
+  }
+
   dispose() { this.close(); clearInterval(this.timer); clearTimeout(this.pending); this.off(); this.el.remove(); }
 }
 
+// matches IDLE_AFTER in server/idle.mjs
+const IDLE_HOURS = 2;
+const IDLE_WORTH = 300 * 1024 ** 2;
 const order = (s: string) => ['needs-you', 'working', 'waiting', 'idle'].indexOf(s);

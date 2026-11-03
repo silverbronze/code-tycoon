@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { api, live, type Prop, type City, type Timeline, type LiveSession, type LiveEvent, type Alert, type TaskT, type Changes, type Digest, type Tie, type Health, type Review, type Insights, type WeekStats } from './api';
+import { api, live, type Prop, type City, type Timeline, type LiveSession, type LiveEvent, type Alert, type TaskT, type Changes, type Digest, type Tie, type Health, type Review, type Insights, type WeekStats, type OptJob } from './api';
 import { Mood } from './city/mood';
 import type { TaskFlags, FileHist } from './api';
 import { Sky } from './city/sky';
@@ -194,7 +194,7 @@ export class CityView {
     const e = this.els;
     e.stage = h('div', { class: 'stage' });
     e.overlay = h('div', { class: 'overlay' });
-    e.tags = h('div', { class: 'tags' });
+    e.tags = h('div', { class: 'opt-tags' });
     e.tip = h('div', { class: 'tip' });
     e.toasts = h('div', { class: 'toasts' });
     e.lod = h('span', {}, 'Files');
@@ -903,6 +903,7 @@ export class CityView {
       case 'alerts-dismissed': this.alerts = m.ids ? this.alerts.filter(a => !m.ids.includes(a.id)) : []; this.renderAlerts(); break;
       case 'digest': if (this.digestData && m.from === this.digestData.from) this.loadDigest(false, m.error); break;
       case 'city-changed': this.reloadCity(); break;
+      case 'optimize': { const o = this.opt; if (o && o.key === m.key && o.box.isConnected) { o.job = m.job; this.renderOpt(); } break; }
     }
   }
 
@@ -1067,6 +1068,7 @@ export class CityView {
       h('div', { class: 'stitle' }, meta?.title || L?.title || s.id.slice(0, 8)),
       h('div', { class: 'row' },
         L ? h('span', { class: 'state ' + state }, stateLabel(state)) : null,
+        meta?.entry === 'codex' ? h('span', { class: 'via', title: 'An OpenAI Codex CLI session' }, 'Codex') : null,
         h('span', { class: 'since' }, L ? dur(Date.now() - L.since) : 'last action ' + dur(this.t - s.lastTs) + ' before'),
         L && L.agents.length ? h('span', { class: 'agents' }, `+${L.agents.length} subagent${L.agents.length > 1 ? 's' : ''}`) : null,
         meta?.cost ? h('span', { class: 'cost', title: 'API-equivalent cost of this session so far' }, money(meta.cost)) : null,
@@ -1378,6 +1380,7 @@ export class CityView {
           h('h2', {}, m.title || m.label), h('div', { class: 'sub mono' }, m.id.replace('#wh:', ''))),
         m.desc ? h('div', { class: 'sect' }, h('div', { class: 'ptext' }, m.desc)) : null,
         h('div', { class: 'stats' }, stat('Files', m.warehouse ? (m.onDisk || m.files) : files.length), stat('AI edits', files.reduce((s, f) => s + f.w, 0)), stat('AI reads', files.reduce((s, f) => s + f.r, 0))),
+        m.warehouse ? null : this.optimizeSection('m:' + m.key),
         this.propsSection(m.props, m.kind),
         this.tiesSection(1, s.ti),
         top.length ? h('div', { class: 'sect' }, h('h3', {}, 'Busiest files'), ...top.map(f => h('div', { class: 'frow link', onclick: () => this.select({ tt: 0, ti: c.files.indexOf(f) }, true) }, h('span', { class: 'fp' }, m.id.endsWith('/*') ? f.p : f.p.slice((m.id ? m.id.length + 1 : 0))), h('span', { class: 'n' }, `✎${f.w} ◉${f.r}`)))) : null);
@@ -1389,6 +1392,7 @@ export class CityView {
       put(e, h('div', { class: 'ihead', style: `--c: hsl(${d.hue} 85% 68%)` }, h('div', { class: 'kicker' }, h('span', { class: 'dot' }), 'District'), h('h2', {}, d.name)),
         d.desc ? h('div', { class: 'sect' }, h('div', { class: 'ptext' }, d.desc)) : null,
         h('div', { class: 'stats' }, stat('Blocks', blocks.length), stat('Files', fl.length), stat('AI edits', fl.reduce((n, f) => n + f.w, 0)), stat('AI reads', fl.reduce((n, f) => n + f.r, 0))),
+        this.optimizeSection('d:' + d.id),
         this.propsSection(d.props.filter(p => p.k !== 'Data stores' && p.k !== 'Outside systems'), d.kind),
         blocks.length ? h('div', { class: 'sect' }, h('h3', {}, `Blocks (${blocks.length})`), ...blocks.map(i => { const m = c.modules[i]; return h('div', { class: 'frow link', onclick: () => this.select({ tt: 1, ti: i }, true) }, h('span', { class: 'fp ltr' }, m.title || m.label), h('span', { class: 'n' }, `${m.files} files`)); })) : null,
         places.length ? h('div', { class: 'sect' }, h('h3', {}, `Places it uses (${places.length})`), ...places.map(([t, i]) => h('div', { class: 'frow link', onclick: () => this.select({ tt: t, ti: i }, true) },
@@ -1404,6 +1408,71 @@ export class CityView {
         x.top?.length ? h('div', { class: 'sect' }, h('h3', {}, 'Most visited sites'), ...x.top.map(([site, n]) => h('div', { class: 'frow' }, h('span', { class: 'fp' }, site), h('span', { class: 'n' }, '×' + n)))) : null,
         x.refs.length ? h('div', { class: 'sect' }, h('h3', {}, `Code that names it (${x.refCount})`), ...x.refs.slice(0, 25).map(fileRow)) : null);
     }
+  }
+
+  // Optimize a block or district with the project's own model: survey (read-only,
+  // a ranked list of changes), pick, apply (a visible session edits), undo.
+  private opt: { key: string; box: HTMLElement; job: OptJob | null; model: string | null; pick: Set<string>; planOf: string; busy: { id: string; title: string | null }[] | null; err: string | null } | null = null;
+  private optimizeSection(key: string) {
+    const box = h('div', { class: 'sect opt' }, h('h3', {}, 'Optimize'), h('div', { class: 'loading-sm' }, '…'));
+    const o: NonNullable<CityView['opt']> = { key, box, job: null, model: null, pick: new Set(), planOf: '', busy: null, err: null };
+    this.opt = o;
+    api.optimize(this.pid, key).then(r => { if (this.opt !== o) return; o.job = r.job; o.model = r.model; this.renderOpt(); })
+      .catch(e => { o.err = e.message; this.renderOpt(); });
+    return box;
+  }
+
+  private renderOpt() {
+    const o = this.opt; if (!o) return;
+    const j = o.job, model = (j?.model || o.model || '').replace(/^claude-/, '') || 'default model';
+    if (j?.plan && o.planOf !== j.id + j.started) { o.planOf = j.id + j.started; o.pick = new Set(j.plan.items.filter(x => x.risk !== 'high').map(x => x.id)); }
+    const step = async (s: 'survey' | 'apply' | 'stop' | 'undo', force = false) => {
+      o.err = null; o.busy = null;
+      const r = await api.optimizeStep(this.pid, s, o.key, s === 'apply' ? { items: [...o.pick], force } : {});
+      if (r.busy) o.busy = r.busy; else if (r.error) o.err = r.error;
+      if (r.job) o.job = r.job;
+      if (s === 'undo' && r.kept?.length) o.err = `Left ${r.kept.length} file(s) alone: edited again after the run.`;
+      this.renderOpt();
+    };
+    const fileLink = (p: string) => { const fi = this.fileIndex.get(p.toLowerCase()); return h('span', { class: 'pv' + (fi != null ? ' link' : ''), onclick: fi != null ? () => this.select({ tt: 0, ti: fi }, true) : null }, tail(p)); };
+    const title = (id: string) => j?.plan?.items.find(x => x.id === id)?.title || id;
+    const survey = (label: string) => h('button', { class: 'chip', onclick: () => step('survey') }, label);
+    const plan = () => {
+      const items = j!.plan!.items;
+      if (!items.length) return h('div', { class: 'empty' }, 'Nothing worth changing here.');
+      const go = h('button', { class: 'chip go', disabled: !o.pick.size, onclick: () => step('apply') }, `Apply ${o.pick.size} selected`);
+      return [
+        ...items.map(x => h('div', { class: 'opt-item' },
+          h('label', {}, h('input', { type: 'checkbox', checked: o.pick.has(x.id), onchange: (ev: Event) => {
+            (ev.target as HTMLInputElement).checked ? o.pick.add(x.id) : o.pick.delete(x.id);
+            go.textContent = `Apply ${o.pick.size} selected`; go.disabled = !o.pick.size;
+          } }), h('b', {}, x.title)),
+          h('div', { class: 'opt-tags' }, h('span', { class: 'opt-tag ' + x.impact }, `${x.impact} impact`), h('span', { class: 'opt-tag risk-' + x.risk }, `${x.risk} risk`), x.gain ? h('span', { class: 'opt-tag' }, x.gain) : null, ...x.files.map(fileLink)),
+          h('details', {}, h('summary', {}, 'Why and how'), h('div', { class: 'why' }, x.why), h('div', { class: 'how' }, x.change)))),
+        o.busy ? h('div', { class: 'dirty' }, h('b', {}, 'Busy'), ` · ${o.busy.map(s => s.title || s.id.slice(0, 8)).join(', ')} is editing files here right now. `,
+          h('button', { class: 'chip mini', onclick: () => step('apply', true) }, 'Apply anyway')) : null,
+        h('div', { class: 'opt-act' }, go, survey('Survey again'))];
+    };
+    const body = !j || j.state === 'undone' ? [
+        j?.state === 'undone' ? h('div', { class: 'sub' }, 'The last run was undone.') : null,
+        h('div', { class: 'sub' }, `${model} reads the busiest files here and lists what is worth optimizing. Nothing changes until you pick items and apply them.`),
+        h('div', { class: 'opt-act' }, survey('⚡ Survey for optimizations'))]
+      : j.state === 'surveying' ? [h('div', { class: 'loading-sm' }, `${model} is reading ${j.read} of ${j.files} files…`), h('div', { class: 'opt-act' }, h('button', { class: 'chip', onclick: () => step('stop') }, 'Stop'))]
+      : j.state === 'applying' ? [h('div', { class: 'loading-sm' }, `A ${model} session is applying ${j.picked?.length || 0} change(s): watch it work in the city.`),
+        h('div', { class: 'opt-act' }, h('button', { class: 'chip', onclick: () => step('stop') }, 'Stop'))]
+      : j.state === 'applied' ? [
+        j.error ? h('div', { class: 'dirty' }, h('b', {}, 'Stopped'), ' · ' + j.error) : null,
+        ...(j.result?.done || []).map(x => h('div', { class: 'opt-done' }, h('b', {}, '✓ ' + title(x.id)), h('div', { class: 'sub' }, x.note))),
+        ...(j.result?.skipped || []).map(x => h('div', { class: 'opt-done skip' }, h('b', {}, '– ' + title(x.id)), h('div', { class: 'sub' }, x.why))),
+        j.result?.note ? h('div', { class: 'ptext' }, j.result.note) : null,
+        j.changed?.length || j.created?.length ? h('div', { class: 'opt-tags' }, 'Changed: ', ...[...(j.changed || []), ...(j.created || [])].map(fileLink)) : h('div', { class: 'sub' }, 'No file was changed.'),
+        h('div', { class: 'opt-act' }, j.undo ? h('button', { class: 'chip', onclick: () => step('undo') }, '↶ Undo') : null, survey('Survey again'))]
+      : [h('div', { class: 'dirty' }, h('b', {}, 'Failed'), ' · ' + (j.error || 'unknown error')), j.plan ? plan() : h('div', { class: 'opt-act' }, survey('Try again'))];
+    o.box.innerHTML = '';
+    put(o.box, h('h3', {}, 'Optimize', h('span', { class: 'n' }, ` · ${model}${j?.cost ? ' · ' + money(j.cost) : ''}`)),
+      j?.plan?.summary && j.state !== 'undone' ? h('div', { class: 'sub' }, j.plan.summary) : null,
+      j?.state === 'planned' ? plan() : body,
+      o.err ? h('div', { class: 'dirty' }, o.err) : null);
   }
 
   // Core properties for the role a block or district plays; a value opens a file that shows it.
@@ -1578,7 +1647,8 @@ type CommitD_Task = { id: string; s: string; ts: number; title: string | null; p
 function startOfDay(t: number) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function muted(id: string) { let x = 0; for (let i = 0; i < id.length; i++) x = (x * 31 + id.charCodeAt(i)) >>> 0; return new THREE.Color().setHSL((x % 360) / 360, 0.16, 0.5); }
 function fmtTokens(n: number) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(n); }
-const ALERT_KIND: Record<Alert['kind'], string> = { collision: 'Same file', overlap: 'Same area', 'needs-you': 'Needs you', loop: 'Going in circles', failing: 'Keeps failing', cost: 'Costly task', 'red-stop': 'Stopped while failing' };
+const ALERT_KIND: Record<Alert['kind'], string> = { collision: 'Same file', overlap: 'Same area', 'needs-you': 'Needs you', loop: 'Going in circles', failing: 'Keeps failing', cost: 'Costly task', 'red-stop': 'Stopped while failing',
+  'cold-resume': 'Cold resume', 'context-big': 'Large context', 'topic-switch': 'New topic', compacted: 'Auto-compacted' };
 function alertKind(a: Alert) { return ALERT_KIND[a.kind] || a.kind; }
 function isStuck(s: LiveSession) {
   const H = s.health; if (!H) return false;

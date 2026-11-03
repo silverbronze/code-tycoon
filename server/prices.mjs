@@ -9,7 +9,7 @@ const P = {
 };
 const FAMILY = [[/fable|mythos/, P['claude-fable-5-1']], [/opus/, P['claude-opus-5-5']], [/sonnet/, P['claude-sonnet-5-5']], [/haiku/, P['claude-haiku-5-5']]];
 
-function rates(model) {
+export function rates(model) {
   const m = String(model || '').replace(/-\d{8}$/, '').replace(/\[.*\]$/, '');
   return P[m] || FAMILY.find(([re]) => re.test(m))?.[1] || null;
 }
