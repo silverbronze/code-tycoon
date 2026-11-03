@@ -394,7 +394,7 @@ div.pp-grp > .pp-row { padding-left: 24px; }
 .ly-reset:disabled { color: var(--dim); border-color: var(--line); cursor: default; }
 
 /* ---------------- schematic layer ---------------- */
-.schematic { position: absolute; inset: 0; background: #060910; }
+.schematic { position: absolute; inset: 0; background: #f7f7f5; }
 .schematic canvas { display: block; touch-action: none; }
 .sch-legend { position: absolute; padding: 10px 12px; min-width: 214px; font-size: 12px; }
 .sch-legend .lg-h { font: 600 10.5px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 4px 0 6px; }
@@ -408,13 +408,13 @@ div.pp-grp > .pp-row { padding-left: 24px; }
 .lg-line:not(.dash)::after { content: ''; position: absolute; right: -2px; top: -5px; border: 4px solid transparent; border-left: 6px solid currentColor; }
 .sch-legend .lg-note { max-width: 214px; margin: 6px 0 2px; font-size: 11px; line-height: 1.4; color: var(--muted); }
 /* every schematic card is the same rectangle; the left edge says what it is */
-.lg-node { width: 22px; height: 14px; flex: none; border: 1px solid rgba(150, 165, 200, 0.3); border-radius: 3px; background: #0d131f; box-shadow: inset 3px 0 0 var(--k); } /* mini copies of the (dark) schematic cards */
-.lg-node.module { --k: #6fb0ff; }
-.lg-node.store { --k: #e0a050; background: #17120b; }
-.lg-node.host { --k: #3d8fd6; background: #0a1624; }
-.lg-node.service { --k: #9a6cff; background: #130f22; }
-.lg-node.web { --k: #3fc1b0; background: #0a1a1a; }
-.lg-node.local { --k: #7a8499; background: #11141b; }
+.lg-node { width: 22px; height: 14px; flex: none; border: 1px solid rgba(0, 0, 0, 0.18); border-radius: 3px; background: #ffffff; box-shadow: inset 3px 0 0 var(--k); }
+.lg-node.module { --k: #4a7fc0; }
+.lg-node.store { --k: #c98a2e; background: #fdf7ee; }
+.lg-node.host { --k: #2f7cc4; background: #eff5fc; }
+.lg-node.service { --k: #7f55e0; background: #f5f1fd; }
+.lg-node.web { --k: #2a9e8f; background: #eef8f6; }
+.lg-node.local { --k: #8a8f99; background: #f4f4f5; }
 .sch-zoom { position: absolute; display: flex; flex-direction: column; padding: 4px; gap: 2px; }
 .sch-zoom button { width: 32px; height: 32px; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 17px; cursor: pointer; }
 .sch-zoom button:hover { background: rgba(0, 0, 0, 0.07); color: var(--text); }

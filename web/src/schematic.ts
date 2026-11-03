@@ -30,6 +30,23 @@ import { h } from './util';
 //  7. Colour means the kind of tie: imports amber (arrow at what is imported),
 //     code naming a system violet (arrow at the system), changed together cyan
 //     dashed. District hue marks only the district header and its cards' edge.
+//
+// Lines are drawn by the rules of metro diagrams (Beck's Underground map and its heirs,
+// as collected in Ovenden's "Transit Maps of the World"):
+//  8. Distance means nothing, only who is tied to whom. Lines are taut: straight runs,
+//     few turns, a short jog becomes one 45° diagonal, every bend has the same radius.
+//     No wiggles that show a corner nobody needs to know about.
+//  9. Every line has the same weight; the count is written on it, not drawn as width.
+//     Each line has a dark casing, so two lines crossing or running side by side never
+//     merge into one thick one. A line starts at a station (●) and ends in an arrow.
+// 10. The busiest district is the centre of the map, its row ordered outwards by weight;
+//     every other row is ordered under the districts it is tied to, so lines run short and
+//     rarely cross. Districts with no ties go to the edges.
+// 11. Room goes where the lines are: gutters widen with the lines they carry and stay
+//     narrow at the quiet edges.
+// 12. Hovered and island ties are lines too, not loose curves: straight out of the card,
+//     one diagonal, straight in. In an island each tie keeps its own lane, ordered so no
+//     two cross.
 
 type Ref = [number, number];
 type Kind = 'module' | 'store' | 'host' | 'service' | 'web' | 'local';
@@ -48,18 +65,22 @@ interface Focus { i: number; me: R; cards: FCard[]; heads: FHead[]; x0: number; 
 // parent: the island it was opened from (a neighbour clicked there), hung right under it and tied to that card.
 interface Island { id: number; f: Focus; opened: Set<string>; oy: number; oyD: number; t0: number; from: Pt | null; parent: number }
 
-const COL: Record<EdgeType, string> = { imp: '#ffb547', ref: '#b48cff', work: '#5ee6ff' };
+const COL: Record<EdgeType, string> = { imp: '#d98a1c', ref: '#8a5cf0', work: '#1798bd' };
 const NODE: Record<Kind, { stroke: string; fill: string; label: string; group: string }> = {
-  module: { stroke: '', fill: '#0d131f', label: 'Module', group: '' },
-  store: { stroke: '#e0a050', fill: '#17120b', label: 'Data store', group: '' },
-  host: { stroke: '#3d8fd6', fill: '#0a1624', label: 'Server / site', group: 'Servers & sites' },
-  service: { stroke: '#9a6cff', fill: '#130f22', label: 'Service (MCP / tool)', group: 'Services' },
-  web: { stroke: '#3fc1b0', fill: '#0a1a1a', label: 'Web research', group: 'Web research' },
-  local: { stroke: '#7a8499', fill: '#11141b', label: 'Local folder', group: 'Local folders' },
+  module: { stroke: '', fill: '#ffffff', label: 'Module', group: '' },
+  store: { stroke: '#c98a2e', fill: '#fdf7ee', label: 'Data store', group: '' },
+  host: { stroke: '#2f7cc4', fill: '#eff5fc', label: 'Server / site', group: 'Servers & sites' },
+  service: { stroke: '#7f55e0', fill: '#f5f1fd', label: 'Service (MCP / tool)', group: 'Services' },
+  web: { stroke: '#2a9e8f', fill: '#eef8f6', label: 'Web research', group: 'Web research' },
+  local: { stroke: '#8a8f99', fill: '#f4f4f5', label: 'Local folder', group: 'Local folders' },
 };
 const UI = "'Space Grotesk', system-ui, sans-serif", MONO = "'JetBrains Mono', Consolas, monospace";
 // layout, in world units (one unit is a pixel at zoom 1)
-const CW = 176, CH = 46, GAP = 14, PAD = 14, HEAD = 36, DGAP = 72, G = 8; // G: routing cell
+const CW = 176, CH = 46, GAP = 14, PAD = 14, HEAD = 36, DGAP = 72, G = 12; // G: routing cell, one lane
+const DGAP_MIN = 56, LANES_X = 6, LANES_Y = 8; // gutters: the narrowest, and how many extra lanes they may grow by (rule 11)
+const JOG = 6 * G; // a jog this short between two straight runs becomes a 45° diagonal (rule 8)
+const BG = '#f7f7f5';
+const REACH = 130; // islands: from the module's side to its neighbours
 const TOP: Record<EdgeType, number> = { imp: 10, ref: 6, work: 8 }; // overview connectors per kind
 const FOCUS_WORK = 12; // changed-together ties drawn for a focused card
 const FOCUS_CARDS = 14; // more ties than this and a hovered card is wired to districts instead of cards
@@ -201,6 +222,7 @@ export class Schematic {
   }
 
   // Rule 1: containers in rows, importers first; outside systems in a band below.
+  // Rules 10-11: the order inside each row, and gutters as wide as their traffic.
   private layout() {
     const imp = new Map<number, number>(); // per district: imports out minus imports in
     const tied = new Set<number>();
@@ -220,26 +242,75 @@ export class Schematic {
     const outside = this.boxes.map((_, i) => i).filter(i => this.boxes[i].outside);
     const area = [...code, ...outside].reduce((s, i) => s + (this.boxes[i].w + DGAP) * (this.boxes[i].h + DGAP), 0);
     const maxW = Math.max(...this.boxes.map(b => b.w), Math.sqrt(area * 1.7));
-    let y = 0;
-    const rows = (list: number[]) => {
-      let row: number[] = [], w = 0;
-      const flush = () => {
-        if (!row.length) return;
-        let x = -w / 2, rh = 0;
-        for (const i of row) { const b = this.boxes[i]; b.x = x; b.y = y; x += b.w + DGAP; rh = Math.max(rh, b.h); }
-        y += rh + DGAP; row = []; w = 0;
-      };
+    const rowsOf = (list: number[]) => {
+      const out: number[][] = []; let row: number[] = [], w = 0;
       for (const i of list) {
         const bw = this.boxes[i].w;
-        if (row.length && w + DGAP + bw > maxW) flush();
+        if (row.length && w + DGAP + bw > maxW) { out.push(row); row = []; w = 0; }
         w += (row.length ? DGAP : 0) + bw; row.push(i);
       }
-      flush();
+      if (row.length) out.push(row);
+      return out;
     };
-    rows(code);
-    this.bandY = y - DGAP / 2 + 6;
-    y += DGAP * 0.4;
-    rows(outside);
+    const codeRows = rowsOf(code), rows = [...codeRows, ...rowsOf(outside)];
+    const rowOf = new Map<number, number>();
+    rows.forEach((r, k) => r.forEach(i => rowOf.set(i, k)));
+
+    // how strongly containers are tied, and how many drawn lines leave each one
+    const WT: Record<EdgeType, number> = { imp: 1, ref: 0.6, work: 0.3 };
+    const tie = new Map<number, Map<number, number>>(), lanes = new Map<number, number>();
+    for (const u of this.bundles) {
+      const w = WT[u.type] * Math.log2(1 + u.n);
+      for (const [p, q] of [[u.a, u.b], [u.b, u.a]]) { let m = tie.get(p); if (!m) tie.set(p, m = new Map()); m.set(q, (m.get(q) || 0) + w); }
+      if (u.top) for (const p of [u.a, u.b]) lanes.set(p, (lanes.get(p) || 0) + 1);
+    }
+    const deg = (i: number) => { let s = 0; for (const w of tie.get(i)?.values() ?? []) s += w; return s; };
+    const gapX = (i: number, j: number) => DGAP_MIN + G * Math.min(LANES_X, Math.ceil(((lanes.get(i) || 0) + (lanes.get(j) || 0)) / 2));
+    const pack = (row: number[]) => {
+      let x = -row.reduce((s, i, k) => s + this.boxes[i].w + (k ? gapX(row[k - 1], i) : 0), 0) / 2;
+      row.forEach((i, k) => { if (k) x += gapX(row[k - 1], i); this.boxes[i].x = x; x += this.boxes[i].w; });
+    };
+    const mid = (i: number) => this.boxes[i].x + this.boxes[i].w / 2;
+    const outwards = (list: number[]) => { // heaviest in the middle, lighter ones alternating out to both sides
+      const out: number[] = [];
+      [...list].sort((x, y) => deg(y) - deg(x)).forEach((i, k) => k % 2 ? out.unshift(i) : out.push(i));
+      return out;
+    };
+    // a row sorted by where the districts it is tied to stand; untied ones out to the edges
+    const placed = new Set<number>();
+    const order = (k: number, all: boolean) => {
+      const at = new Map<number, number>(), loose: number[] = [];
+      for (const i of rows[k]) {
+        let s = 0, w = 0;
+        for (const [j, t] of tie.get(i) ?? []) if (rowOf.get(j) !== k && (all || placed.has(j))) { s += t * mid(j); w += t; }
+        if (w) at.set(i, s / w); else loose.push(i);
+      }
+      const sorted = rows[k].filter(i => at.has(i)).sort((x, y) => at.get(x)! - at.get(y)!);
+      rows[k] = [...loose.filter((_, n) => n % 2), ...sorted, ...loose.filter((_, n) => !(n % 2))];
+      pack(rows[k]); rows[k].forEach(i => placed.add(i));
+    };
+    if (rows.length) {
+      const hub = code.reduce((b, i) => b < 0 || deg(i) > deg(b) ? i : b, -1), hr = hub >= 0 ? rowOf.get(hub)! : 0;
+      rows[hr] = outwards(rows[hr]); pack(rows[hr]); rows[hr].forEach(i => placed.add(i));
+      const near = rows.map((_, k) => k).filter(k => k !== hr && k < codeRows.length).sort((a, b) => Math.abs(a - hr) - Math.abs(b - hr) || a - b);
+      for (const k of near) order(k, false);
+      for (let k = codeRows.length; k < rows.length; k++) order(k, false);
+      for (let pass = 0; pass < 2; pass++) rows.forEach((_, k) => { if (k !== hr) order(k, true); });
+    }
+
+    // rows top to bottom, each gutter as wide as the lines crossing it
+    const gapY = (k: number) => DGAP_MIN + G * Math.min(LANES_Y, this.bundles.filter(u => {
+      if (!u.top) return false;
+      const ra = rowOf.get(u.a) ?? 0, rb = rowOf.get(u.b) ?? 0;
+      return Math.min(ra, rb) <= k && k < Math.max(ra, rb) || ra === k && rb === k;
+    }).length);
+    let y = 0;
+    rows.forEach((row, k) => {
+      if (k === codeRows.length) { this.bandY = y - (k ? gapY(k - 1) : DGAP) / 2 + 6; y += DGAP * 0.4; }
+      row.forEach(i => this.boxes[i].y = y);
+      y += Math.max(...row.map(i => this.boxes[i].h)) + gapY(k);
+    });
+    if (rows.length === codeRows.length) this.bandY = y - (rows.length ? gapY(rows.length - 1) : DGAP) / 2 + 6;
     for (const b of this.boxes) b.members.forEach((m, k) => {
       const n = this.nodes[m];
       n.x = b.x + PAD + (k % b.cols) * (CW + GAP); n.y = b.y + HEAD + Math.floor(k / b.cols) * (CH + GAP);
@@ -251,12 +322,58 @@ export class Schematic {
 
   // District connectors are routed through the gutters the first time they are drawn.
   private routeBundle(u: Bundle) {
-    if (!this.grid) this.grid = new StreetGrid(this.boxes.map(b => ({ x0: b.x / G, z0: b.y / G, x1: (b.x + b.w) / G, z1: (b.y + b.h) / G })), 1.6, 4);
-    const p = this.grid.route(u.a, u.b, { share: 1.4, turn: 3, near: 0.2 }); // overlaps cost more than detours: every line keeps its own lane
+    if (!this.grid) this.grid = new StreetGrid(this.boxes.map(b => ({ x0: b.x / G, z0: b.y / G, x1: (b.x + b.w) / G, z1: (b.y + b.h) / G })), 1.2, 4);
+    // overlaps cost more than detours, so every line keeps its own lane; turns cost more still, so lines stay taut (rule 8)
+    const p = this.grid.route(u.a, u.b, { share: 1.4, turn: 6, near: 0.2 });
     if (!p) { u.pts = []; return; }
-    this.grid.lay(p);
     const pts = this.grid.corners(p).map(q => [q[0] * G, q[1] * G] as Pt);
-    u.pts = [...port(this.boxes[u.a], pts[0]), ...pts, ...port(this.boxes[u.b], pts[pts.length - 1]).reverse()];
+    const grid = collinear([...port(this.boxes[u.a], pts[0]), ...pts, ...port(this.boxes[u.b], pts[pts.length - 1]).reverse()]);
+    // the simplest line that is clear wins over the street the grid found (rule 8)
+    const best = taut(this.boxes[u.a], this.boxes[u.b], grid).find(c => this.clear(c, u.a, u.b));
+    if (best) { u.pts = best; this.layWorld(best); }
+    else { this.grid.lay(p); u.pts = diagonals(this.unjog(this.unjog(grid, u.b).reverse(), u.a).reverse(), this.solid([u.a, u.b])); }
+    for (let k = 1; k < u.pts.length; k++) this.laid.push([u.pts[k - 1], u.pts[k]]);
+  }
+  private laid: [Pt, Pt][] = []; // every segment of the connectors drawn so far
+  // A small jog just before a line reaches container `to`: slide its station along the side instead, so the
+  // line runs in straight (rule 8: no corner nobody needs to know about).
+  private unjog(pts: Pt[], to: number): Pt[] {
+    const n = pts.length; if (n < 4) return pts;
+    const [a, b, c, d] = pts.slice(n - 4), B = this.boxes[to];
+    const ax: number = a[1] === b[1] && c[1] === d[1] && b[0] === c[0] ? 0 : a[0] === b[0] && c[0] === d[0] && b[1] === c[1] ? 1 : -1;
+    if (ax < 0) return pts;
+    const ay = 1 - ax, jog = Math.abs(c[ay] - b[ay]), lo = ay ? B.y : B.x, hi = ay ? B.y + B.h : B.x + B.w;
+    if (jog > 1.5 * G || b[ay] < lo + 14 || b[ay] > hi - 14) return pts;
+    const e: Pt = [d[0], d[1]]; e[ay] = b[ay];
+    return [...pts.slice(0, n - 3), e];
+  }
+  // Containers a line must keep out of: a margin round each, the two it joins only their inside.
+  private solid(own: number[] = []): R[] {
+    return this.boxes.flatMap((b, i) => !b.members.length ? [] : own.includes(i) ? [{ x: b.x + 1, y: b.y + 1, w: b.w - 2, h: b.h - 2 }] : [{ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 }]);
+  }
+  // A line through no container and along no lane another line already runs in.
+  private clear(pts: Pt[], a: number, b: number) {
+    const rects = this.solid([a, b]);
+    for (let k = 1; k < pts.length; k++) {
+      const p = pts[k - 1], q = pts[k];
+      if (rects.some(r => segHits(p, q, r)) || this.laid.some(([s, t]) => sameLane(p, q, s, t))) return false;
+    }
+    return true;
+  }
+  // Mark a line drawn off the grid as street, so later routes keep to their own lanes.
+  private layWorld(pts: Pt[]) {
+    const g = this.grid!;
+    const cell = (x: number, y: number) => { const i = Math.floor(x / G - g.ox), j = Math.floor(y / G - g.oz); return i >= 0 && j >= 0 && i < g.nx && j < g.nz ? j * g.nx + i : -1; };
+    for (let k = 1; k < pts.length; k++) {
+      const p = pts[k - 1], q = pts[k], n = Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1]) / G * 2);
+      let prev = -1;
+      for (let t = 0; t <= n; t++) {
+        const c = cell(p[0] + (q[0] - p[0]) * t / n, p[1] + (q[1] - p[1]) * t / n);
+        if (c < 0 || c === prev) continue;
+        if (prev >= 0 && g.nbrs(prev).includes(c)) g.use[g.edgeBetween(prev, c)]++;
+        prev = c;
+      }
+    }
   }
 
   // ------------------------------------------------------------------ public
@@ -527,7 +644,7 @@ export class Schematic {
     const ctx = this.ctx, d = devicePixelRatio || 1, W = this.canvas.width / d, H = this.canvas.height / d, s = this.view.s;
     this.o = this.origin();
     ctx.setTransform(d, 0, 0, d, 0, 0);
-    ctx.fillStyle = '#060910'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#f7f7f5'; ctx.fillRect(0, 0, W, H);
     this.off = [0, 0]; this.hits = [];
     this.drawGrid(W, H);
     const inIsles = this.islands.length > 0 && this.view.cy > this.overBottom + ISLE_GAP / 2;
@@ -556,9 +673,9 @@ export class Schematic {
     // band between code and the outside world
     const by = this.sy(this.bandY);
     if (by > -20 && by < H + 20) {
-      ctx.strokeStyle = 'rgba(140, 160, 200, 0.16)'; ctx.lineWidth = 1; ctx.setLineDash([2, 6]);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)'; ctx.lineWidth = 1; ctx.setLineDash([2, 6]);
       ctx.beginPath(); ctx.moveTo(0, by); ctx.lineTo(W, by); ctx.stroke(); ctx.setLineDash([]);
-      ctx.font = `600 10.5px ${UI}`; ctx.fillStyle = 'rgba(160, 175, 205, 0.55)'; ctx.textBaseline = 'bottom';
+      ctx.font = `600 10.5px ${UI}`; ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'; ctx.textBaseline = 'bottom';
       const ox = this.sx(Math.min(...this.boxes.filter(b => b.members.length).map(b => b.x)));
       ctx.fillText(spaced('OUTSIDE SYSTEMS  ↓'), Math.max(12, ox), by - 5);
     }
@@ -570,13 +687,13 @@ export class Schematic {
       if (x > W || y > H || x + w < 0 || y + hh < 0) return;
       const dim = focused && !nearBox.has(i), hue = b.outside ? 220 : b.hue;
       ctx.globalAlpha = dim ? (soft ? 0.55 : 0.35) : 1;
-      ctx.fillStyle = b.outside ? 'rgba(120, 135, 165, 0.05)' : `hsla(${hue}, 45%, 40%, 0.07)`;
+      ctx.fillStyle = b.outside ? 'rgba(0, 0, 0, 0.03)' : `hsla(${hue}, 60%, 50%, 0.07)`;
       const lit = i === fb || (!tier && f >= 0 && i === this.nodes[f].box);
-      ctx.strokeStyle = lit ? `hsla(${hue}, 80%, 68%, 0.9)` : b.outside ? 'rgba(140, 155, 190, 0.3)' : `hsla(${hue}, 60%, 60%, 0.42)`;
+      ctx.strokeStyle = lit ? `hsla(${hue}, 70%, 40%, 0.9)` : b.outside ? 'rgba(0, 0, 0, 0.2)' : `hsla(${hue}, 55%, 45%, 0.45)`;
       ctx.lineWidth = lit ? 1.6 : 1;
       const tint = ctx.fillStyle;
       rrect(ctx, x, y, w, hh, 8);
-      if (!tier) { ctx.fillStyle = '#0b0f17'; ctx.fill(); ctx.fillStyle = tint; } // a solid block, so connectors pass behind it
+      if (!tier) { ctx.fillStyle = '#f7f7f5'; ctx.fill(); ctx.fillStyle = tint; } // a solid block, so connectors pass behind it
       ctx.fill(); ctx.stroke();
       // header: name left, count right
       const ty = tier ? y + Math.min(HEAD * s, 34) / 2 + 1 : y + 13;
@@ -584,9 +701,9 @@ export class Schematic {
         ctx.textBaseline = 'middle';
         const cnt = `${b.members.length}`;
         ctx.font = `500 10.5px ${MONO}`; const cw = ctx.measureText(cnt).width;
-        ctx.font = `600 12px ${UI}`; ctx.fillStyle = b.outside ? '#aab4cc' : `hsl(${hue}, 80%, 72%)`;
+        ctx.font = `600 12px ${UI}`; ctx.fillStyle = b.outside ? '#6b6f78' : `hsl(${hue}, 65%, 33%)`;
         ctx.fillText(clip(ctx, b.name, w - 26 - cw), x + 9, ty);
-        ctx.font = `500 10.5px ${MONO}`; ctx.fillStyle = 'rgba(170, 182, 210, 0.6)'; ctx.textAlign = 'right';
+        ctx.font = `500 10.5px ${MONO}`; ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'; ctx.textAlign = 'right';
         ctx.fillText(cnt, x + w - 9, ty); ctx.textAlign = 'left';
       }
       // zoomed out: the block lists its main modules instead of drawing cards
@@ -596,7 +713,7 @@ export class Schematic {
         b.members.filter(m => this.alive(this.nodes[m].born)).forEach((m, k, all) => {
           if (k >= room) return;
           const n = this.nodes[m], more = k === room - 1 && all.length > room, ly = y + 30 + k * 15;
-          ctx.fillStyle = more ? 'rgba(150, 160, 185, 0.6)' : this.active.has(m) ? '#ffffff' : '#aeb6c9';
+          ctx.fillStyle = more ? 'rgba(0, 0, 0, 0.4)' : this.active.has(m) ? '#111111' : '#444444';
           ctx.fillText(more ? `+ ${all.length - k} more` : clip(ctx, (n.kind === 'store' ? '◫ ' : '') + n.title, w - 18), x + 9, ly);
         });
         const act = [...new Set(b.members.flatMap(m => this.active.get(m) || []))];
@@ -606,22 +723,20 @@ export class Schematic {
     });
     ctx.globalAlpha = 1;
 
-    // district connectors (rule 4)
-    const pills: { x: number; y: number; t: string; c: string }[] = [];
+    // district connectors (rules 4, 8, 9): one weight for all, thin enough zoomed out that neighbouring lanes stay apart
+    const pills: { at: Pt[]; t: string; c: string }[] = [];
+    const lw = Math.min(3, Math.max(1.4, G * s * 0.4));
     for (const type of ['work', 'ref', 'imp'] as EdgeType[]) for (const u of shownBundles) {
       if (u.type !== type) continue;
       if (!u.pts) this.routeBundle(u);
       if (!u.pts || u.pts.length < 2) continue;
-      const pts = u.pts.map(p => this.sp(p));
-      ctx.strokeStyle = COL[type]; ctx.globalAlpha = type === 'work' ? 0.6 : 0.85;
-      ctx.lineWidth = Math.min(5, 1.2 + Math.log2(u.n) * 0.8);
-      ctx.setLineDash(type === 'work' ? [6, 5] : []);
-      ctx.beginPath(); roundedPath(ctx, pts, 10); ctx.stroke(); ctx.setLineDash([]);
-      const head = 5 + ctx.lineWidth * 0.8;
-      if (u.ab) arrow(ctx, pts[pts.length - 2], pts[pts.length - 1], head);
-      if (u.ba) arrow(ctx, pts[1], pts[0], head);
-      const m = midLongest(pts);
-      pills.push({ x: m[0], y: m[1], t: String(u.n), c: COL[type] });
+      const pts = u.pts.map(p => this.sp(p)), e = pts.length - 1;
+      ctx.globalAlpha = type === 'work' ? 0.7 : 0.95;
+      this.metroLine(pts, COL[type], lw, type === 'work' ? [6, 5] : null);
+      const head = 4 + lw;
+      if (u.ab) arrow(ctx, pts[e - 1], pts[e], head); else station(ctx, pts[e], COL[type], lw + 1.5);
+      if (u.ba) arrow(ctx, pts[1], pts[0], head); else station(ctx, pts[0], COL[type], lw + 1.5);
+      pills.push({ at: mids(pts), t: String(u.n), c: COL[type] });
     }
     ctx.globalAlpha = 1;
 
@@ -659,13 +774,12 @@ export class Schematic {
     }
     for (const type of ['work', 'ref', 'imp'] as EdgeType[]) ties.forEach((t, k) => {
       if (t.type !== type) return;
-      const [p0, c1, c2, p3] = curves[k].map(p => this.sp(p));
-      ctx.strokeStyle = COL[type]; ctx.globalAlpha = type === 'work' ? 0.75 : 0.95;
-      ctx.lineWidth = Math.min(4, (type === 'imp' ? 2 : 1.6) + Math.log2(t.n) * 0.5); ctx.setLineDash(type === 'work' ? [5, 4] : []);
-      ctx.beginPath(); ctx.moveTo(p0[0], p0[1]); ctx.bezierCurveTo(c1[0], c1[1], c2[0], c2[1], p3[0], p3[1]); ctx.stroke(); ctx.setLineDash([]);
-      if (t.out) arrow(ctx, c2, p3, 5);
-      if (t.inn) arrow(ctx, c1, p0, 5);
-      if (t.n > 1) { const m = bez([p0, c1, c2, p3], 0.5); pills.push({ x: m[0], y: m[1], t: String(t.n), c: COL[type] }); }
+      const pts = octo(curves[k]).map(p => this.sp(p)), e = pts.length - 1;
+      ctx.globalAlpha = type === 'work' ? 0.75 : 0.95;
+      this.metroLine(pts, COL[type], type === 'imp' ? 2.2 : 1.8, type === 'work' ? [5, 4] : null, 8);
+      if (t.out) arrow(ctx, pts[e - 1], pts[e], 5);
+      if (t.inn) arrow(ctx, pts[1], pts[0], 5);
+      if (t.n > 1) pills.push({ at: mids(pts), t: String(t.n), c: COL[type] });
     });
     ctx.globalAlpha = 1;
 
@@ -705,12 +819,13 @@ export class Schematic {
     const taken: { x0: number; y0: number; x1: number; y1: number }[] = [];
     const free = (r: { x0: number; y0: number; x1: number; y1: number }) => !taken.some(o => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0) && (taken.push(r), true);
     ctx.font = `600 10.5px ${MONO}`; ctx.textBaseline = 'middle';
-    for (const p of pills) {
-      const w = ctx.measureText(p.t).width + 10, r = { x0: p.x - w / 2, y0: p.y - 8, x1: p.x + w / 2, y1: p.y + 8 };
-      if (!free(r)) continue;
-      ctx.fillStyle = '#0a0e17'; rrect(ctx, r.x0, r.y0, w, 16, 8); ctx.fill();
+    for (const p of pills) { // on the longest straight run that has room, else the next one
+      const w = ctx.measureText(p.t).width + 10;
+      const m = p.at.find(m => free({ x0: m[0] - w / 2, y0: m[1] - 8, x1: m[0] + w / 2, y1: m[1] + 8 }));
+      if (!m) continue;
+      ctx.fillStyle = '#ffffff'; rrect(ctx, m[0] - w / 2, m[1] - 8, w, 16, 8); ctx.fill();
       ctx.strokeStyle = p.c; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = p.c; ctx.textAlign = 'center'; ctx.fillText(p.t, p.x, p.y + 0.5); ctx.textAlign = 'left';
+      ctx.fillStyle = p.c; ctx.textAlign = 'center'; ctx.fillText(p.t, m[0], m[1] + 0.5); ctx.textAlign = 'left';
     }
 
     this.drawIslands(time, W, H, tier, act);
@@ -728,14 +843,14 @@ export class Schematic {
     // the water line: what is floating below, and a way to clear it all
     const gy = this.sy(this.overBottom + ISLE_GAP / 2);
     if (gy > -30 && gy < H + 30 && ISLE_GAP * s >= 60) { // too far out and it would sit on the outside-systems band
-      ctx.strokeStyle = 'rgba(94, 230, 255, 0.18)'; ctx.lineWidth = 1; ctx.setLineDash([3, 7]);
+      ctx.strokeStyle = 'rgba(23, 152, 189, 0.3)'; ctx.lineWidth = 1; ctx.setLineDash([3, 7]);
       ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); ctx.setLineDash([]);
-      ctx.font = `600 10.5px ${UI}`; ctx.textBaseline = 'bottom'; ctx.fillStyle = 'rgba(160, 200, 220, 0.7)';
+      ctx.font = `600 10.5px ${UI}`; ctx.textBaseline = 'bottom'; ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
       const label = spaced(`EXPLORING  ${this.islands.length}`) + '   ↓', lx = Math.max(fl, Math.min(fr - 260, this.sx(left)));
       ctx.fillText(label, lx, gy - 6);
       // right after the label: the right side is where the legend sits
       const t = 'clear all  ✕', tx = lx + ctx.measureText(label).width + 28, tw = (ctx.font = `600 11.5px ${UI}`, ctx.measureText(t).width);
-      ctx.fillStyle = '#c9d1e4'; ctx.fillText(t, tx, gy - 6);
+      ctx.fillStyle = '#333333'; ctx.fillText(t, tx, gy - 6);
       this.hits.push({ x0: tx - 6, y0: gy - 24, x1: tx + tw + 6, y1: gy, fn: () => this.clearIslands() });
     }
 
@@ -749,7 +864,7 @@ export class Schematic {
       const p3: Pt = [this.islandX + (a.f.x0 + a.f.x1) / 2, a.oyD + a.f.y0 - ISLE_HEAD];
       const k = Math.max(60, (p3[1] - p0[1]) * 0.45), age = Math.min(3, (now - a.t0) / 1000), ph = age * 1.6;
       const amp = Math.min(14, Math.abs(p3[1] - p0[1]) * 0.02);
-      ctx.strokeStyle = n.kind === 'module' ? `hsl(${b.hue}, 70%, 65%)` : NODE[n.kind].stroke; ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = n.kind === 'module' ? `hsl(${b.hue}, 60%, 42%)` : NODE[n.kind].stroke; ctx.globalAlpha = 0.85;
       ctx.lineWidth = 1.8; ctx.setLineDash([3, 5]); ctx.beginPath();
       for (let j = 0; j <= 48; j++) { // a slow wave along the line, still once the drift has settled
         const t = j / 48, q = bez([p0, [p0[0], p0[1] + k], [p3[0], p3[1] - k], p3], t), w = Math.sin(t * Math.PI * 5 + ph) * amp * Math.sin(t * Math.PI);
@@ -765,7 +880,7 @@ export class Schematic {
     for (const isl of this.islands) {
       const up = this.islands.find(x => x.id === isl.parent), c = up?.f.cards.find(c => c.i === isl.f.i);
       if (!up || !c) continue;
-      const n = this.nodes[isl.f.i], st = n.kind === 'module' ? `hsl(${this.boxes[n.box].hue}, 60%, 62%)` : NODE[n.kind].stroke;
+      const n = this.nodes[isl.f.i], st = n.kind === 'module' ? `hsl(${this.boxes[n.box].hue}, 55%, 42%)` : NODE[n.kind].stroke;
       ctx.strokeStyle = st; ctx.lineWidth = 1.6; ctx.globalAlpha = isl.id === this.activeIs ? 0.95 : 0.55;
       rrect(ctx, this.sx(this.islandX + c.x) - 4, this.sy(up.oyD + c.y) - 4, CW * s + 8, CH * s + 8, 7); ctx.stroke();
     }
@@ -813,7 +928,7 @@ export class Schematic {
               g: { key, box, n: group.length, names: group.slice(0, 3).map(o => this.nodes[o.i].title).join(', ') } } });
             continue;
           }
-          rows.push({ h: 22, head: { t: bx.name, c: bx.outside ? '#aab4cc' : `hsl(${bx.hue}, 80%, 72%)`, sec: false } });
+          rows.push({ h: 22, head: { t: bx.name, c: bx.outside ? '#6b6f78' : `hsl(${bx.hue}, 65%, 33%)`, sec: false } });
           for (const o of group) rows.push({ h: CH + 8, card: { i: o.i, type, out: o.out, inn: o.inn, left } });
         }
       }
@@ -825,7 +940,7 @@ export class Schematic {
       }
       cols.forEach((col, c) => {
         if (!col.length) return;
-        const x = left ? me.x - 130 - CW - c * (CW + 44) : me.x + w + 130 + c * (CW + 44);
+        const x = left ? me.x - REACH - CW - c * (CW + 44) : me.x + w + REACH + c * (CW + 44);
         const colH = col.reduce((s, r) => s + r.h, 0);
         let y = -colH / 2;
         for (const r of col) {
@@ -844,7 +959,7 @@ export class Schematic {
     const ctx = this.ctx, s = this.view.s, F = isl.f, n = this.nodes[F.i];
     const tier = s >= FULL ? 2 : s >= 0.3 ? 1 : 0, mine = this.hoverIs === isl.id;
     const hov = mine && this.hover !== F.i ? this.hover : -1;
-    const st = n.kind === 'module' ? `hsl(${this.boxes[n.box].hue}, 60%, 62%)` : NODE[n.kind].stroke;
+    const st = n.kind === 'module' ? `hsl(${this.boxes[n.box].hue}, 55%, 42%)` : NODE[n.kind].stroke;
     const age = (performance.now() - isl.t0) / 1000, p = Math.min(1, age / DRIFT), e = -(Math.cos(Math.PI * p) - 1) / 2;
     const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
@@ -867,14 +982,14 @@ export class Schematic {
     if (X0 > W || Y0 > H || X1 < 0 || Y1 < 0) { if (age < DRIFT) this.drawMover(isl, st, tier, e, p); return; }
     const on = this.activeIs === isl.id, panelA = isl.from ? clamp01((age - 0.35) / 0.6) : 1;
     ctx.globalAlpha = panelA;
-    ctx.fillStyle = 'rgba(12, 17, 28, 0.72)'; ctx.strokeStyle = on ? st : 'rgba(140, 160, 200, 0.25)'; ctx.lineWidth = on ? 1.4 : 1;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; ctx.strokeStyle = on ? st : 'rgba(0, 0, 0, 0.2)'; ctx.lineWidth = on ? 1.4 : 1;
     rrect(ctx, X0, Y0, X1 - X0, Y1 - Y0, 14); ctx.fill(); ctx.stroke();
     // header: what this island is, and its close button
-    ctx.textBaseline = 'middle'; ctx.font = `600 12px ${UI}`; ctx.fillStyle = on ? '#e7eaf3' : '#9aa3b8';
+    ctx.textBaseline = 'middle'; ctx.font = `600 12px ${UI}`; ctx.fillStyle = on ? '#111111' : '#5c5c5c';
     const hy = Y0 + Math.min(ISLE_HEAD * s, 40) / 2 + 2;
     ctx.fillText(clip(ctx, `${n.title}  ·  ${this.boxes[n.box].name}`, X1 - X0 - 80), X0 + 16, hy);
     const cb = this.canvas.getBoundingClientRect(), cx = Math.max(X0 + 40, Math.min(X1 - 26, this.frameRect.right - cb.left - 28)), cr = 11; // never under the side panel
-    ctx.strokeStyle = '#9aa3b8'; ctx.lineWidth = 1.6; ctx.beginPath();
+    ctx.strokeStyle = '#5c5c5c'; ctx.lineWidth = 1.6; ctx.beginPath();
     ctx.moveTo(cx - 5, hy - 5); ctx.lineTo(cx + 5, hy + 5); ctx.moveTo(cx + 5, hy - 5); ctx.lineTo(cx - 5, hy + 5); ctx.stroke();
     this.hits.push({ x0: cx - cr, y0: hy - cr, x1: cx + cr, y1: hy + cr, fn: () => this.closeIsland(isl.id) });
     ctx.globalAlpha = 1;
@@ -890,22 +1005,26 @@ export class Schematic {
     });
 
     const me = F.me, pills: { x: number; y: number; t: string; c: string }[] = [];
-    // ties: out of the module's side, spread so they never cross at it, into each card's near side
+    // ties (rule 12): out of the module's side, spread so they never cross at it, each down its own lane into
+    // its card's near side. Of two ties going down the higher takes the lane farther out, going up the lower
+    // does: then no two ever cross. The ones going up and the ones going down never overlap, so they share lanes.
     for (const left of [true, false]) {
-      const side = F.cards.filter(c => c.left === left).sort((a, b) => a.y - b.y);
-      side.forEach((c, k) => {
-        const r = rise.get(c)!; if (!r.a) return;
-        const p0: Pt = [left ? me.x : me.x + me.w, me.y + 14 + (me.h - 28) * (k + 0.5) / side.length];
-        const p3: Pt = [left ? c.x + CW : c.x, c.y + r.dy + CH / 2], mx = (p0[0] + p3[0]) / 2;
-        const [a, b1, b2, d] = [p0, [mx, p0[1]] as Pt, [mx, p3[1]] as Pt, p3].map(q => this.sp(q));
+      const side = F.cards.filter(c => c.left === left).sort((a, b) => a.y - b.y), sg = left ? -1 : 1, x0 = left ? me.x : me.x + me.w;
+      const ends = side.map((c, k) => ({ c, r: rise.get(c)!, p0: [x0, me.y + 14 + (me.h - 28) * (k + 0.5) / side.length] as Pt, p3: [left ? c.x + CW : c.x, c.y + rise.get(c)!.dy + CH / 2] as Pt }));
+      const down = ends.filter(e => e.p3[1] > e.p0[1] + 0.5), up = ends.filter(e => e.p3[1] < e.p0[1] - 0.5).reverse();
+      const n = Math.max(down.length, up.length), step = Math.min(12, (REACH - 32) / Math.max(1, n)), lane = new Map<typeof ends[0], number>();
+      const first = 16 + (REACH - 32 - (n - 1) * step) / 2;
+      for (const list of [down, up]) list.forEach((e, k) => lane.set(e, x0 + sg * (first + (n - 1 - k) * step)));
+      for (const e of ends) {
+        const { c, r, p0, p3 } = e; if (!r.a) continue;
+        const lx = lane.get(e), pts = (lx == null ? [p0, p3] : [p0, [lx, p0[1]], [lx, p3[1]], p3] as Pt[]).map(q => this.sp(q)), z = pts.length - 1;
         const hot = c.g ? this.hoverFold === c : hov === c.i;
-        ctx.strokeStyle = COL[c.type]; ctx.globalAlpha = r.a * (hov >= 0 && !hot ? 0.25 : c.type === 'work' ? 0.7 : 0.9);
-        ctx.lineWidth = hot ? 2.6 : 1.5; ctx.setLineDash(c.type === 'work' ? [5, 4] : []);
-        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.bezierCurveTo(b1[0], b1[1], b2[0], b2[1], d[0], d[1]); ctx.stroke(); ctx.setLineDash([]);
-        if (c.out) arrow(ctx, b2, d, hot ? 5.5 : 4.5);
-        if (c.inn) arrow(ctx, b1, a, hot ? 5.5 : 4.5);
-        if (c.g && r.a === 1) { const m = bez([a, b1, b2, d], 0.75); pills.push({ x: m[0], y: m[1], t: String(c.g.n), c: COL[c.type] }); }
-      });
+        ctx.globalAlpha = r.a * (hov >= 0 && !hot ? 0.25 : c.type === 'work' ? 0.7 : 0.9);
+        this.metroLine(pts, COL[c.type], hot ? 2.6 : 1.6, c.type === 'work' ? [5, 4] : null, 8);
+        if (c.out) arrow(ctx, pts[z - 1], pts[z], hot ? 5.5 : 4.5);
+        if (c.inn) arrow(ctx, pts[1], pts[0], hot ? 5.5 : 4.5);
+        if (c.g && r.a === 1) pills.push({ x: (pts[z - 1][0] + pts[z][0]) / 2, y: pts[z][1], t: String(c.g.n), c: COL[c.type] });
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -922,7 +1041,7 @@ export class Schematic {
     ctx.globalAlpha = 1;
     // counts on folded districts
     ctx.font = `600 10.5px ${MONO}`; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-    for (const q of pills) { const w = ctx.measureText(q.t).width + 10; ctx.fillStyle = '#0a0e17'; rrect(ctx, q.x - w / 2, q.y - 8, w, 16, 8); ctx.fill(); ctx.strokeStyle = q.c; ctx.lineWidth = 1; ctx.stroke(); ctx.fillStyle = q.c; ctx.fillText(q.t, q.x, q.y + 0.5); }
+    for (const q of pills) { const w = ctx.measureText(q.t).width + 10; ctx.fillStyle = '#ffffff'; rrect(ctx, q.x - w / 2, q.y - 8, w, 16, 8); ctx.fill(); ctx.strokeStyle = q.c; ctx.lineWidth = 1; ctx.stroke(); ctx.fillStyle = q.c; ctx.fillText(q.t, q.x, q.y + 0.5); }
     ctx.textAlign = 'left';
     // section titles and district names above their cards, sized with the rows they sit in
     ctx.textBaseline = 'alphabetic';
@@ -933,7 +1052,7 @@ export class Schematic {
       ctx.fillText(clip(ctx, hd.sec ? spaced(hd.t) : hd.t, CW * s + (hd.sec ? 80 : 0)), this.sx(hd.x) + (hd.sec ? 0 : 2), this.sy(hd.y));
     }
     if (!F.cards.length) {
-      ctx.font = `500 12px ${UI}`; ctx.fillStyle = '#7d869c'; ctx.textAlign = 'center';
+      ctx.font = `500 12px ${UI}`; ctx.fillStyle = '#8c8c8c'; ctx.textAlign = 'center';
       ctx.fillText('No imports, systems or shared changes recorded for this one yet.', this.sx(0), this.sy(me.y + me.h + 28)); ctx.textAlign = 'left';
     }
     ctx.globalAlpha = 1;
@@ -969,18 +1088,18 @@ export class Schematic {
     if (!tier || hh < 20) return;
     const tx = x + 16, maxW = w - 28, lh = Math.min(1, s * 1.1);
     ctx.textBaseline = 'middle';
-    if (p < 1) { ctx.font = `600 ${Math.max(11, 14 * lh)}px ${UI}`; ctx.fillStyle = '#ffffff'; ctx.fillText(clip(ctx, n.title, maxW), tx, y + hh / 2); return; }
+    if (p < 1) { ctx.font = `600 ${Math.max(11, 14 * lh)}px ${UI}`; ctx.fillStyle = '#111111'; ctx.fillText(clip(ctx, n.title, maxW), tx, y + hh / 2); return; }
     ctx.font = `600 ${9.5 * Math.max(1, lh)}px ${MONO}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${NODE[n.kind].label.toUpperCase()} · ${this.boxes[n.box].name}`, maxW), tx, y + hh * 0.2);
-    ctx.font = `600 ${Math.max(12, 16 * lh)}px ${UI}`; ctx.fillStyle = '#ffffff'; ctx.fillText(clip(ctx, n.title, maxW), tx, y + hh * 0.42);
-    ctx.font = `400 ${Math.max(10, 11 * lh)}px ${MONO}`; ctx.fillStyle = '#8d96ab';
+    ctx.font = `600 ${Math.max(12, 16 * lh)}px ${UI}`; ctx.fillStyle = '#111111'; ctx.fillText(clip(ctx, n.title, maxW), tx, y + hh * 0.42);
+    ctx.font = `400 ${Math.max(10, 11 * lh)}px ${MONO}`; ctx.fillStyle = '#7a7a7a';
     if (!this.boxes[n.box].outside) ctx.fillText(clip(ctx, n.sub, maxW), tx, y + hh * 0.62);
-    ctx.fillStyle = '#b4bccf'; ctx.fillText(clip(ctx, n.meta, maxW), tx, y + hh * 0.8);
+    ctx.fillStyle = '#555555'; ctx.fillText(clip(ctx, n.meta, maxW), tx, y + hh * 0.8);
   }
 
   private drawFold(c: FCard, x: number, y: number, w: number, hh: number, tier: number) {
     const ctx = this.ctx, g = c.g!, b = this.boxes[g.box], hot = this.hoverFold === c;
-    const st = b.outside ? '#aab4cc' : `hsl(${b.hue}, 60%, 62%)`;
-    ctx.fillStyle = '#0d1220'; ctx.strokeStyle = hot ? st : 'rgba(150, 165, 200, 0.4)'; ctx.lineWidth = hot ? 1.8 : 1; ctx.setLineDash([4, 3]);
+    const st = b.outside ? '#6b6f78' : `hsl(${b.hue}, 55%, 42%)`;
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = hot ? st : 'rgba(0, 0, 0, 0.3)'; ctx.lineWidth = hot ? 1.8 : 1; ctx.setLineDash([4, 3]);
     rrect(ctx, x, y, w, hh, 5); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
     ctx.fillStyle = st; ctx.fillRect(x + 0.5, y + 3, 3, hh - 6);
     if (!tier) return;
@@ -988,14 +1107,14 @@ export class Schematic {
     ctx.textBaseline = 'middle';
     if (tier === 1) { ctx.font = `600 11px ${UI}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${b.name} · ${g.n}  ▸`, maxW), ix, y + hh / 2 + 0.5); return; }
     ctx.font = `600 12.5px ${UI}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${b.name} · ${g.n} ${b.outside ? 'systems' : 'modules'}  ▸`, maxW), ix, y + hh * 0.34);
-    ctx.font = `400 10px ${UI}`; ctx.fillStyle = '#8d96ab'; ctx.fillText(clip(ctx, g.names, maxW), ix, y + hh * 0.7);
+    ctx.font = `400 10px ${UI}`; ctx.fillStyle = '#7a7a7a'; ctx.fillText(clip(ctx, g.names, maxW), ix, y + hh * 0.7);
   }
 
   private drawCard(n: SNode, x: number, y: number, w: number, hh: number, tier: number, hot: boolean) {
     const ctx = this.ctx, b = this.boxes[n.box];
-    const st = n.kind === 'module' ? `hsl(${b.hue}, 55%, 60%)` : NODE[n.kind].stroke;
+    const st = n.kind === 'module' ? `hsl(${b.hue}, 55%, 42%)` : NODE[n.kind].stroke;
     const r = Math.min(5, hh / 4);
-    ctx.fillStyle = NODE[n.kind].fill; ctx.strokeStyle = hot ? st : 'rgba(150, 165, 200, 0.22)'; ctx.lineWidth = hot ? 2 : 1;
+    ctx.fillStyle = NODE[n.kind].fill; ctx.strokeStyle = hot ? st : 'rgba(0, 0, 0, 0.18)'; ctx.lineWidth = hot ? 2 : 1;
     rrect(ctx, x, y, w, hh, r); ctx.fill(); ctx.stroke();
     if (hot) { ctx.shadowColor = st; ctx.shadowBlur = 14; ctx.stroke(); ctx.shadowBlur = 0; }
     ctx.fillStyle = st; ctx.fillRect(x + 0.5, y + r * 0.6, Math.max(2, 3 * Math.min(1, this.view.s * 1.5)), hh - r * 1.2); // kind / district colour on the left edge
@@ -1004,14 +1123,14 @@ export class Schematic {
     if (icon) this.icon(n.kind, x + (tier === 2 ? 17 : 13), y + (tier === 2 ? hh / 2 : hh / 2), st, tier === 2 ? 1 : 0.8);
     ctx.textBaseline = 'middle';
     if (tier === 1) {
-      ctx.font = `600 11px ${UI}`; ctx.fillStyle = '#dfe4ef'; ctx.fillText(clip(ctx, n.title, maxW), ix, y + hh / 2 + 0.5);
+      ctx.font = `600 11px ${UI}`; ctx.fillStyle = '#222222'; ctx.fillText(clip(ctx, n.title, maxW), ix, y + hh / 2 + 0.5);
       return;
     }
-    ctx.font = `600 12.5px ${UI}`; ctx.fillStyle = '#e7eaf3'; ctx.fillText(clip(ctx, n.title, maxW), ix, y + hh * 0.34);
-    ctx.font = `400 10px ${MONO}`; ctx.fillStyle = '#7d869c';
+    ctx.font = `600 12.5px ${UI}`; ctx.fillStyle = '#111111'; ctx.fillText(clip(ctx, n.title, maxW), ix, y + hh * 0.34);
+    ctx.font = `400 10px ${MONO}`; ctx.fillStyle = '#8c8c8c';
     const meta = n.meta, mw = Math.min(ctx.measureText(meta).width, maxW * 0.55);
     if (n.box >= 0 && !this.boxes[n.box].outside) ctx.fillText(clip(ctx, n.sub, maxW - mw - 10), ix, y + hh * 0.7); // the path; an outside group already names the kind
-    ctx.fillStyle = '#9aa3b8'; ctx.textAlign = 'right'; ctx.fillText(clip(ctx, meta, mw), x + w - 8, y + hh * 0.7); ctx.textAlign = 'left';
+    ctx.fillStyle = '#5c5c5c'; ctx.textAlign = 'right'; ctx.fillText(clip(ctx, meta, mw), x + w - 8, y + hh * 0.7); ctx.textAlign = 'left';
   }
 
   private icon(k: Kind, x: number, y: number, c: string, sc: number) {
@@ -1025,6 +1144,14 @@ export class Schematic {
     ctx.restore();
   }
 
+  // A line on the diagram (rule 9): a dark casing first, so a line crossing or running beside another stays two lines.
+  private metroLine(pts: Pt[], color: string, lw: number, dash: number[] | null, r = 10) {
+    const ctx = this.ctx;
+    ctx.beginPath(); roundedPath(ctx, pts, r);
+    ctx.strokeStyle = BG; ctx.lineWidth = lw + 3; ctx.stroke();
+    ctx.setLineDash(dash ?? []); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke(); ctx.setLineDash([]);
+  }
+
   private drawGrid(W: number, H: number) {
     const ctx = this.ctx, s = this.view.s;
     const [wx0, wy0] = this.toWorld(0, 0), [wx1, wy1] = this.toWorld(W, H);
@@ -1035,8 +1162,8 @@ export class Schematic {
       for (let y = Math.ceil(wy0 / step) * step; y <= wy1; y += step) { const py = Math.round(this.sy(y)) + 0.5; ctx.moveTo(0, py); ctx.lineTo(W, py); }
       ctx.stroke();
     };
-    lines(40, 'rgba(120, 150, 210, 0.03)');
-    lines(200, 'rgba(120, 150, 210, 0.05)');
+    lines(40, 'rgba(0, 0, 0, 0.035)');
+    lines(200, 'rgba(0, 0, 0, 0.06)');
   }
 }
 
@@ -1096,11 +1223,128 @@ function arrow(ctx: CanvasRenderingContext2D, from: Pt, to: Pt, size: number) {
   ctx.lineTo(to[0] - ux * size * 2 - uy * size, to[1] - uy * size * 2 + ux * size);
   ctx.closePath(); ctx.fill();
 }
-// The middle of a polyline's longest segment: where its label reads best.
-function midLongest(pts: Pt[]): Pt {
-  let best = 1, bl = -1;
-  for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); if (l > bl) { bl = l; best = i; } }
-  return [(pts[best - 1][0] + pts[best][0]) / 2, (pts[best - 1][1] + pts[best][1]) / 2];
+// The station a line starts from (rule 9): a ring in the line's colour with a light centre.
+function station(ctx: CanvasRenderingContext2D, p: Pt, color: string, r: number) {
+  ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.lineWidth = Math.max(1.2, r * 0.5); ctx.strokeStyle = color; ctx.stroke();
+}
+// The middles of a polyline's straight runs, longest first: where its label reads best.
+function mids(pts: Pt[]): Pt[] {
+  const runs = pts.slice(1).map((p, i) => ({ m: [(pts[i][0] + p[0]) / 2, (pts[i][1] + p[1]) / 2] as Pt, l: Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]) }));
+  runs.sort((a, b) => b.l - a.l);
+  return runs.filter((r, k) => !k || r.l >= 28).map(r => r.m);
+}
+// Rule 8: a short jog between two straight runs going the same way becomes one 45° diagonal,
+// where the diagonal clears every container and leaves the runs at either end some length.
+function diagonals(pts: Pt[], solid: R[]): Pt[] {
+  const out = pts.map(p => [p[0], p[1]] as Pt);
+  for (let i = 1; i + 2 < out.length; i++) {
+    const a = out[i - 1], b = out[i], c = out[i + 1], d = out[i + 2];
+    const ax: number = a[1] === b[1] && c[1] === d[1] && b[0] === c[0] ? 0 : a[0] === b[0] && c[0] === d[0] && b[1] === c[1] ? 1 : -1; // the axis the runs go along
+    if (ax < 0) continue;
+    const ay = 1 - ax, jog = Math.abs(c[ay] - b[ay]), half = jog / 2, sg = Math.sign(b[ax] - a[ax]);
+    if (!jog || jog > JOG || !sg || sg !== Math.sign(d[ax] - c[ax])) continue; // a Z, not a U
+    const stub = (k: number) => k === 0 || k === out.length - 1 ? 8 : 0; // out of a container, a line starts straight
+    if (Math.abs(b[ax] - a[ax]) < half + stub(i - 1) || Math.abs(d[ax] - c[ax]) < half + stub(i + 2)) continue;
+    const nb: Pt = [b[0], b[1]], nc: Pt = [c[0], c[1]];
+    nb[ax] -= sg * half; nc[ax] += sg * half;
+    if (solid.some(r => segHits(nb, nc, r))) continue;
+    out[i] = nb; out[i + 1] = nc; i++;
+  }
+  return out;
+}
+// Drop repeated points and points in the middle of a straight run.
+function collinear(pts: Pt[]): Pt[] {
+  const out: Pt[] = [];
+  for (const p of pts) {
+    if (out.length && out[out.length - 1][0] === p[0] && out[out.length - 1][1] === p[1]) continue;
+    if (out.length >= 2) {
+      const a = out[out.length - 2], b = out[out.length - 1];
+      if ((b[0] - a[0]) * (p[1] - b[1]) === (b[1] - a[1]) * (p[0] - b[0])) out.pop();
+    }
+    out.push(p);
+  }
+  return out;
+}
+// The simplest lines between two containers, simplest first (rule 8): straight across facing sides, then
+// straight out, one 45° diagonal, straight in; then, keeping the ports of the grid's route, one right-angle turn.
+function taut(a: SBox, b: SBox, route: Pt[]): Pt[][] {
+  const out: Pt[][] = [], M = 14; // ports keep this far from a container's corners
+  for (const ax of [1, 0]) { // 1: one container above the other, 0: side by side
+    const ay = 1 - ax, lo = (r: SBox) => ax ? r.y : r.x, hi = (r: SBox) => ax ? r.y + r.h : r.x + r.w;
+    const xlo = (r: SBox) => (ax ? r.x : r.y) + M, xhi = (r: SBox) => (ax ? r.x + r.w : r.y + r.h) - M;
+    const [f, t] = hi(a) <= lo(b) ? [a, b] : hi(b) <= lo(a) ? [b, a] : [null, null];
+    if (!f || !t) continue;
+    const gap = lo(t) - hi(f), flip = f !== a;
+    const at = (along: number, across: number): Pt => { const p: Pt = [0, 0]; p[ax] = along; p[ay] = across; return p; };
+    const line = (pts: Pt[]) => out.push(flip ? pts.reverse() : pts);
+    // straight: anywhere both containers face each other, from the middle of that stretch outwards
+    const s0 = Math.max(xlo(f), xlo(t)), s1 = Math.min(xhi(f), xhi(t));
+    if (s0 <= s1) for (const d of [0, 1, -1, 2, -2, 3, -3]) {
+      const c = (s0 + s1) / 2 + d * G;
+      if (c >= s0 && c <= s1) line([at(hi(f), c), at(lo(t), c)]);
+    }
+    // straight, one diagonal, straight: from the nearest ends of the two sides
+    const cf = Math.min(xhi(f), Math.max(xlo(f), (xlo(t) + xhi(t)) / 2)), ct = Math.min(xhi(t), Math.max(xlo(t), (xlo(f) + xhi(f)) / 2));
+    for (const d of [0, 1, -1, 2, -2]) {
+      const pf = Math.min(xhi(f), Math.max(xlo(f), cf + d * G)), pt = Math.min(xhi(t), Math.max(xlo(t), ct + d * G)), across = Math.abs(pt - pf);
+      if (across < 1 || across > gap - 40) continue; // each end leaves straight for a while
+      const run = (gap - across) / 2;
+      line([at(hi(f), pf), at(hi(f) + run, pf), at(lo(t) - run, pt), at(lo(t), pt)]);
+    }
+  }
+  // one turn, out of the grid route's first port and into its last
+  const p0 = route[0], pn = route[route.length - 1], q0 = route[1], qn = route[route.length - 2];
+  if (q0 && qn) {
+    const ax0 = p0[1] === q0[1] ? 0 : 1, axn = pn[1] === qn[1] ? 0 : 1;
+    if (ax0 !== axn) {
+      const c: Pt = [0, 0]; c[ax0] = pn[ax0]; c[axn] = p0[axn];
+      if (Math.sign(c[ax0] - p0[ax0]) === Math.sign(q0[ax0] - p0[ax0]) && Math.sign(pn[axn] - c[axn]) === Math.sign(pn[axn] - qn[axn])) out.push([p0, c, pn]);
+    }
+  }
+  return out;
+}
+// Do two segments run in the same lane (parallel, less than half a lane apart, overlapping)?
+function sameLane(p: Pt, q: Pt, s: Pt, t: Pt) {
+  const dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy), ex = t[0] - s[0], ey = t[1] - s[1], E = Math.hypot(ex, ey);
+  if (!L || !E) return false;
+  const ux = dx / L, uy = dy / L;
+  if (Math.abs(ux * ey - uy * ex) > 0.01 * E) return false;
+  if (Math.abs((s[0] - p[0]) * uy - (s[1] - p[1]) * ux) > G / 2) return false;
+  const a0 = (s[0] - p[0]) * ux + (s[1] - p[1]) * uy, a1 = (t[0] - p[0]) * ux + (t[1] - p[1]) * uy;
+  return Math.min(Math.max(a0, a1), L) - Math.max(Math.min(a0, a1), 0) > 2;
+}
+// Does the segment p-q pass through the rectangle (Liang-Barsky)?
+function segHits(p: Pt, q: Pt, r: R) {
+  let t0 = 0, t1 = 1;
+  const dx = q[0] - p[0], dy = q[1] - p[1];
+  for (const [pp, qq] of [[-dx, p[0] - r.x], [dx, r.x + r.w - p[0]], [-dy, p[1] - r.y], [dy, r.y + r.h - p[1]]]) {
+    if (pp === 0) { if (qq < 0) return false; continue; }
+    const t = qq / pp;
+    if (pp < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+// A focused tie drawn as a metro line (rule 12): straight out of the card, one 45° diagonal, straight in.
+// When the cards are farther apart across than along, the diagonals frame a straight middle run.
+// Cards stacked in one column keep their bracket out of the right edges, squared off.
+function octo([p0, c1, c2, p3]: [Pt, Pt, Pt, Pt]): Pt[] {
+  const ax = c1[1] === p0[1] ? 0 : 1, ay = 1 - ax;
+  const mv = (p: Pt, da: number, db: number): Pt => { const q: Pt = [p[0], p[1]]; q[ax] += da; q[ay] += db; return q; };
+  const sg = Math.sign(c1[ax] - p0[ax]) || 1;
+  if (sg !== (Math.sign(p3[ax] - c2[ax]) || 1)) { // the bracket
+    const far = sg > 0 ? Math.max(c1[ax], c2[ax]) : Math.min(c1[ax], c2[ax]);
+    return [p0, mv(p0, far - p0[ax], 0), mv(p3, far - p3[ax], 0), p3];
+  }
+  const along = Math.abs(p3[ax] - p0[ax]), across = Math.abs(p3[ay] - p0[ay]), sa = Math.sign(p3[ay] - p0[ay]);
+  const stub = Math.min(14, along / 4);
+  if (across <= along - 2 * stub) {
+    const run = (along - across) / 2, q1 = mv(p0, sg * run, 0);
+    return [p0, q1, mv(q1, sg * across, sa * across), p3];
+  }
+  const d = Math.max(0, (along - 2 * stub) / 2), q1 = mv(p0, sg * stub, 0), q4 = mv(p3, -sg * stub, 0);
+  return [p0, q1, mv(q1, sg * d, sa * d), mv(q4, -sg * d, -sa * d), q4, p3];
 }
 function bez(p: Pt[], t: number): Pt {
   const u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
