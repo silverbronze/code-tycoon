@@ -11,7 +11,7 @@
   <code>npx code-tycoon</code> · runs on your machine · nothing leaves it
 </p>
 
-<p align="center"><https://github.com/user-attachments/assets/d40ab430-f911-4285-996f-9debb3273ddcwidth="900"></p>
+https://github.com/user-attachments/assets/d40ab430-f911-4285-996f-9debb3273ddc
 
 
 Code Tycoon is the easiest way to view and explore a project. Point it at a repo you work on with Claude Code and, a minute later, you get a 3D isometric city of it. Every district is a part of the system (database, payments, auth, UI, API), every building is a module or a file, and roads are the real dependencies between them. You see the architecture at a glance, without reading the folder tree or drawing a diagram by hand.
