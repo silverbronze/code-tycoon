@@ -11,8 +11,6 @@
   <code>npx code-tycoon</code> · runs on your machine · nothing leaves it
 </p>
 
-<p align="center"><img src="docs/media/demo-short.gif" alt="Code Tycoon: a project's city, replayed from its first commit, with Claude Code sessions flying over it" width="900"></p>
-
 https://github.com/user-attachments/assets/d40ab430-f911-4285-996f-9debb3273ddc
 
 
