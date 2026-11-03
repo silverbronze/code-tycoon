@@ -41,7 +41,7 @@ The page then offers to turn on live updates and start at login, one click each.
 
 **Dashboard.** Every open session in every project, waiting ones first, with the machine's Claude processes, CPU and RAM.
 
-The screenshots show [shadcn-ui/taxonomy](https://github.com/shadcn-ui/taxonomy), an open-source Next.js app, after a dozen real Claude Code sessions. ▶ [Watch the full one-minute video](docs/media/demo.mp4).
+The screenshots show [shadcn-ui/taxonomy](https://github.com/shadcn-ui/taxonomy), an open-source Next.js app, after a dozen real Claude Code sessions. ▶ [Watch the full one-minute video](docs/media/demo-github.mp4).
 
 ## Why
 
