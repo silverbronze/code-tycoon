@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Stage } from './scene';
 import type { World, Target } from './world';
+import { glowBlend, ink } from './env';
 
 export function sessionColor(i: number) {
   return new THREE.Color().setHSL(((i * 137.508 + 190) % 360) / 360, 0.85, 0.62);
@@ -9,6 +10,7 @@ export function colorCss(c: THREE.Color) { return '#' + c.getHexString(); }
 
 // ---- particles -----------------------------------------------------------------
 const MAXP = 5000;
+const tmpInk = new THREE.Color();
 class Particles {
   pos = new Float32Array(MAXP * 3); vel = new Float32Array(MAXP * 3); col = new Float32Array(MAXP * 3);
   life = new Float32Array(MAXP); max = new Float32Array(MAXP); size = new Float32Array(MAXP); grav = new Float32Array(MAXP);
@@ -33,11 +35,13 @@ class Particles {
   }
   emit(p: THREE.Vector3, v: THREE.Vector3, c: THREE.Color, life: number, size: number, grav = 0) {
     const i = this.next; this.next = (this.next + 1) % MAXP;
+    c = ink(c, tmpInk);
     this.pos.set([p.x, p.y, p.z], i * 3); this.vel.set([v.x, v.y, v.z], i * 3); this.col.set([c.r, c.g, c.b], i * 3);
     this.life[i] = life; this.max[i] = life; this.size[i] = size; this.grav[i] = grav;
   }
   update(dt: number, zoom: number) {
-    (this.points.material as THREE.ShaderMaterial).uniforms.uScale.value = 60 / zoom * (devicePixelRatio || 1);
+    const mat = this.points.material as THREE.ShaderMaterial;
+    mat.uniforms.uScale.value = 60 / zoom * (devicePixelRatio || 1); mat.blending = glowBlend();
     for (let i = 0; i < MAXP; i++) {
       if (this.life[i] <= 0) { if (this.alpha[i]) this.alpha[i] = 0; continue; }
       this.life[i] -= dt;
@@ -95,8 +99,8 @@ export class Actors {
 
   private make(id: string, color: THREE.Color, parent: Drone | null): Drone {
     const group = new THREE.Group();
-    const core = new THREE.Mesh(parent ? this.subGeo : this.coreGeo, new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(parent ? 1.6 : 2.2) }));
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85 }));
+    const core = new THREE.Mesh(parent ? this.subGeo : this.coreGeo, new THREE.MeshBasicMaterial({ color: color.clone().multiplyScalar(parent ? 1.6 : 2.2), toneMapped: false, fog: false }));
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85, toneMapped: false, fog: false }));
     halo.scale.setScalar(parent ? 1.4 : 2.6);
     group.add(core, halo);
     const trailPts = new Float32Array(TRAIL * 3);
@@ -232,7 +236,7 @@ export class Actors {
       new THREE.Vector3((Math.random() - 0.5) * 0.4, 0.9 + Math.random() * 0.6, (Math.random() - 0.5) * 0.4), g, 1.4 + Math.random(), 9 + Math.random() * 7, -0.2);
   }
   beam(from: THREE.Vector3, to: THREE.Vector3, c: THREE.Color) {
-    const m = new THREE.Mesh(this.beamGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(this.beamGeo, new THREE.MeshBasicMaterial({ color: ink(c), transparent: true, opacity: 0.7, blending: glowBlend(), depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false }));
     const len = Math.max(0.3, from.distanceTo(to));
     m.position.copy(from);
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to.clone().sub(from).normalize());
@@ -240,7 +244,7 @@ export class Actors {
     this.group.add(m); this.fx.push({ obj: m, life: 0.7, max: 0.7, kind: 'beam' });
   }
   ring(at: THREE.Vector3, c: THREE.Color, size: number) {
-    const m = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(this.ringGeo, new THREE.MeshBasicMaterial({ color: ink(c), transparent: true, opacity: 0.9, blending: glowBlend(), depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false }));
     m.position.copy(at); m.userData.size = size;
     this.group.add(m); this.fx.push({ obj: m, life: 1.1, max: 1.1, kind: 'ring' });
   }
@@ -319,7 +323,10 @@ export class Actors {
     d.core.rotation.y += dt * 1.8; d.core.rotation.x = Math.sin(t + d.phase) * 0.3;
     // keep drones readable when zoomed out, without the halos flooding the frame
     d.group.scale.setScalar(Math.max(0.001, d.fade) * Math.max(1, Math.sqrt(this.stage.viewSize / 40)));
-    (d.halo.material as THREE.SpriteMaterial).opacity = 0.55 * d.fade;
+    // by day: the core in the deep session colour, the halo a soft patch of it
+    const day = glowBlend() === THREE.NormalBlending, hm = d.halo.material as THREE.SpriteMaterial;
+    ink(d.color, (d.core.material as THREE.MeshBasicMaterial).color).multiplyScalar(day ? 1 : d.parent ? 1.6 : 2.2);
+    ink(d.color, hm.color); hm.blending = glowBlend(); hm.opacity = (day ? 0.35 : 0.55) * d.fade;
     // trail: shift in a new point every ~16ms
     d.trailTimer += dt;
     if (d.trailTimer > 0.016) {

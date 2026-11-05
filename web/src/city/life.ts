@@ -135,7 +135,7 @@ export class Life {
       const hue = c.districts[m.district].hue / 360;
       for (let j = 0; j < k; j++, n++) {
         const seed = hash(mi * 13.1 + j);
-        this.walkers.push({ p: loop, s: seed * loop.len, v: (0.25 + seed * 0.3) * (seed > 0.5 ? 1 : -1), loop: true, color: new THREE.Color().setHSL(hue + (seed - 0.5) * 0.12, 0.45, 0.55 + seed * 0.2),
+        this.walkers.push({ p: loop, s: seed * loop.len, v: (0.25 + seed * 0.3) * (seed > 0.5 ? 1 : -1), loop: true, color: new THREE.Color().setHSL(hue + (seed - 0.5) * 0.12, 0.65, 0.36 + seed * 0.14),
           badge: null, hold: 0, lantern: seed < 0.35, seed, kind: 'res' });
       }
     });
@@ -146,7 +146,7 @@ export class Life {
       const pts = W.roads.linkPts.get(k); if (!pts) continue;
       for (let j = 0; j < Math.min(3, Math.ceil(w)); j++) {
         const seed = hash(k * 3.3 + j), side = j % 2 ? 0.55 : -0.55, p = path(offset(seed > 0.5 ? pts : [...pts].reverse(), side));
-        this.walkers.push({ p, s: seed * p.len, v: 0.45 + seed * 0.25, loop: true, color: new THREE.Color().setHSL(seed, 0.35, 0.62), badge: null, hold: 0, lantern: seed < 0.3, seed, kind: 'com' });
+        this.walkers.push({ p, s: seed * p.len, v: 0.45 + seed * 0.25, loop: true, color: new THREE.Color().setHSL(seed, 0.6, 0.42), badge: null, hold: 0, lantern: seed < 0.3, seed, kind: 'com' });
       }
     }
     // police patrol the security districts, on their streets
@@ -154,7 +154,7 @@ export class Life {
     c.districts.forEach((d, di) => {
       const loop = this.patrols[di];
       if (W.styles[di] !== 'fortress' || !loop) return;
-      this.cars.push({ type: 'police', p: path(loop), s: 0, v: 1.6, loop: true, color: new THREE.Color('#e9eef7'), siren: 0, hold: 0, key: 'd' + di });
+      this.cars.push({ type: 'police', p: path(loop), s: 0, v: 1.6, loop: true, color: new THREE.Color('#1f3a6e'), siren: 0, hold: 0, key: 'd' + di });
     });
     this.setLitter([...this.litterD]);
     // flocks over the parks (or over district centres when there are none)
@@ -200,7 +200,7 @@ export class Life {
     for (const fi of files.slice(0, 8)) {
       const f = c.files[fi]; if (!f) continue;
       const m = c.modules[f.m], from = this.edgePoint(m, f.x, f.z);
-      this.walkers.push({ p: path([from, [f.x + 0.4, f.z + 0.4]]), s: 0, v: 0.9, loop: false, color: new THREE.Color('#f4f6fa'), badge: new THREE.Color('#9ad1ff'),
+      this.walkers.push({ p: path([from, [f.x + 0.4, f.z + 0.4]]), s: 0, v: 0.9, loop: false, color: new THREE.Color('#2b3a55'), badge: new THREE.Color('#3f8fd9'),
         hold: 4, lantern: false, seed: Math.random(), kind: 'insp', mark: new THREE.Color(ok ? '#3ddc84' : '#ff4d5e'), plate: [m.x, m.z, m.x + m.w, m.z + m.h] });
     }
   }
@@ -214,7 +214,7 @@ export class Life {
       const f = this.city.files[fi]; if (!f) continue;
       for (let j = 0; j < 6; j++) {
         const a = j / 6 * Math.PI * 2 + fi, x = f.x + Math.cos(a) * 0.7, z = f.z + Math.sin(a) * 0.7;
-        this.walkers.push({ p: path([[x, z], [x + 0.001, z]]), s: 0, v: 0, loop: false, color: new THREE.Color().setHSL(hash(fi + j), 0.4, 0.6), badge: null, hold: Infinity,
+        this.walkers.push({ p: path([[x, z], [x + 0.001, z]]), s: 0, v: 0, loop: false, color: new THREE.Color().setHSL(hash(fi + j), 0.6, 0.42), badge: null, hold: Infinity,
           lantern: j % 3 === 0, seed: hash(fi * 7 + j), kind: 'crowd', face: Math.atan2(Math.sin(a), -Math.cos(a)), key: String(fi), plate: [this.city.modules[f.m].x, this.city.modules[f.m].z, this.city.modules[f.m].x + this.city.modules[f.m].w, this.city.modules[f.m].z + this.city.modules[f.m].h] });
       }
     }
@@ -243,7 +243,7 @@ export class Life {
     if (!this.enabled) return;
     let best: Pt[] | null = null, bl = 0;
     for (const pts of this.world.roads.linkPts.values()) { const l = path(pts).len; if (l > bl) { bl = l; best = pts; } }
-    if (best) this.cars.push({ type: 'tanker', p: path(Math.random() < 0.5 ? best : [...best].reverse()), s: 0, v: 2.2, loop: false, color: new THREE.Color('#d8dde6'), siren: 0, hold: 0 });
+    if (best) this.cars.push({ type: 'tanker', p: path(Math.random() < 0.5 ? best : [...best].reverse()), s: 0, v: 2.2, loop: false, color: new THREE.Color('#c2611f'), siren: 0, hold: 0 });
   }
 
   // Something went wrong at a place: an ambulance comes from the place nearest the airfield.
@@ -252,7 +252,7 @@ export class Life {
     const W = this.world, A = this.dress.airport;
     let best: Ref | null = null, bd = Infinity;
     for (const r of W.roads.places) { const p = W.center(r); const d = Math.hypot(p.x - A.x, p.z - A.z); if (d < bd && (r[0] !== to[0] || r[1] !== to[1])) { bd = d; best = r; } }
-    if (best) this.drive('ambulance', best, to, new THREE.Color('#f4f6fa'), 8, 4);
+    if (best) this.drive('ambulance', best, to, new THREE.Color('#c8322b'), 8, 4);
   }
 
   private drive(type: VType, from: Ref, to: Ref, color: THREE.Color, siren = 0, hold = 0.8) {
@@ -303,7 +303,7 @@ export class Life {
         const sa = st(pick.a), sb = st(pick.b), armored = (sa === 'bank' && sb === 'vault') || (sa === 'vault' && sb === 'bank');
         const fwd = Math.random() < 0.5, src = fwd ? pick.a : pick.b, d = this.city.districts[src[0] === 1 ? this.city.modules[src[1]].district : this.city.externals[src[1]].district];
         this.cars.push({ type: armored ? 'armored' : 'van', p: path(fwd ? pts : [...pts].reverse()), s: 0, v: 2 + Math.random(), loop: false,
-          color: armored ? new THREE.Color('#5d6470') : new THREE.Color().setHSL((d?.hue ?? 200) / 360, 0.55, 0.55), siren: 0, hold: 0 });
+          color: armored ? new THREE.Color('#5d6470') : new THREE.Color().setHSL((d?.hue ?? 200) / 360, 0.65, 0.42), siren: 0, hold: 0 });
       }
     }
     // people: only once single buildings are readable, growing in rather than popping
@@ -328,6 +328,7 @@ export class Life {
     });
     this.people.count = np; this.badges.count = nb; this.lanterns.count = nl; this.umbrellas.count = nu; this.marks.count = nm;
     (this.lanterns.material as THREE.MeshBasicMaterial).color.setRGB(1, 0.78, 0.42).multiplyScalar(0.6 + night);
+    (this.people.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.55 * night; // a white glow by day washes the tints out against the light ground
     for (const m of [this.people, this.badges, this.lanterns, this.umbrellas, this.marks]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
 
     // vehicles drive on the right
@@ -350,7 +351,7 @@ export class Life {
       }
       return true;
     });
-    for (const k in this.vmesh) { const m = this.vmesh[k as VType]; m.count = counts[k as VType]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+    for (const k in this.vmesh) { const m = this.vmesh[k as VType]; m.count = counts[k as VType]; m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; (m.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.2 * night; }
     this.heads.count = nh; this.heads.instanceMatrix.needsUpdate = true;
     (this.heads.material as THREE.MeshBasicMaterial).color.setRGB(1, 0.95, 0.8).multiplyScalar(0.15 + night * 1.4);
     this.sirens.count = ns; this.sirens.instanceMatrix.needsUpdate = true; if (this.sirens.instanceColor) this.sirens.instanceColor.needsUpdate = true;

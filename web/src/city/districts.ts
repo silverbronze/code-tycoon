@@ -6,6 +6,19 @@ import type { City } from '../api';
 // not as one field of blocks. They follow the district boxes, so a dragged
 // place takes its district's edge along (refit).
 const M = 1.2; // ground beyond the outermost plots; the server leaves 1.5 before the avenue
+export const LOT_MARGIN = M;
+const RIM = 0.8; // border width
+
+// A flat band between two outlines with matching points (a lot and the same lot inset).
+function band(outer: THREE.Vector2[], inner: THREE.Vector2[]) {
+  const pos: number[] = [], n = Math.min(outer.length, inner.length);
+  for (let i = 0; i < n; i++) {
+    const a = outer[i], b = inner[i], c = outer[(i + 1) % n], e = inner[(i + 1) % n];
+    pos.push(a.x, 0, -a.y, b.x, 0, -b.y, c.x, 0, -c.y, c.x, 0, -c.y, b.x, 0, -b.y, e.x, 0, -e.y);
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return g;
+}
 
 function lot(x: number, z: number, w: number, h: number, r: number) {
   // in the XY plane with y = -z, laid flat by the mesh's rotation
@@ -21,16 +34,18 @@ function lot(x: number, z: number, w: number, h: number, r: number) {
 
 export class DistrictGrounds {
   group = new THREE.Group();
-  private items: { fill: THREE.Mesh; rim: THREE.LineLoop; born: number; hue: number }[] = [];
+  private items: { fill: THREE.Mesh; rim: THREE.Mesh; born: number; hue: number }[] = [];
 
   constructor(private city: City) {
     this.city.districts.forEach(d => {
       const fill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial({
         roughness: 1, emissive: new THREE.Color().setHSL(d.hue / 360, 0.6, 0.5) })); // colour: tone()
       fill.rotation.x = -Math.PI / 2; fill.position.y = -0.02; fill.receiveShadow = true;
-      const rim = new THREE.LineLoop(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({
-        color: new THREE.Color().setHSL(d.hue / 360, 0.7, 0.5), transparent: true, opacity: 0.55 }));
-      rim.position.y = -0.005;
+      // the border: a solid band in the district's colour along the inside of the lot,
+      // unlit, outside the filmic tone mapping and the pale fog (both wash colours into
+      // pastels), so it stays vivid on grass and at night
+      const rim = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: new THREE.Color().setHSL(d.hue / 360, 0.85, 0.45), side: THREE.DoubleSide, toneMapped: false, fog: false }));
+      rim.position.y = -0.01;
       this.items.push({ fill, rim, born: d.born, hue: d.hue });
       this.group.add(fill, rim);
     });
@@ -43,17 +58,20 @@ export class DistrictGrounds {
       if (!d.members.length) { fill.visible = rim.visible = false; return; }
       const s = lot(d.x - M, d.z - M, d.w + M * 2, d.h + M * 2, 2);
       fill.geometry.dispose(); fill.geometry = new THREE.ShapeGeometry(s, 6);
-      rim.geometry.dispose(); rim.geometry = new THREE.BufferGeometry().setFromPoints(s.getPoints(6).map(p => new THREE.Vector3(p.x, 0, -p.y)));
+      const inner = lot(d.x - M + RIM, d.z - M + RIM, d.w + M * 2 - RIM * 2, d.h + M * 2 - RIM * 2, 2 - RIM);
+      rim.geometry.dispose(); rim.geometry = band(s.getPoints(6), inner.getPoints(6));
     });
   }
 
-  // n: 1 night (dark lots, faint glow), 0 day (pale tinted lots)
+  // n: 1 night (dark lots, faint glow), 0 day (lots in a clear tint of their colour: the
+  // sun and tone mapping lighten them a lot, so a pale tint renders near white and
+  // neighbouring districts run together)
   tone(n: number) {
     for (const it of this.items) {
       const m = it.fill.material as THREE.MeshStandardMaterial;
-      m.color.setHSL(it.hue / 360, 0.14 + 0.21 * n, 0.84 - 0.765 * n);
+      m.color.setHSL(it.hue / 360, 0.55 - 0.2 * n, 0.6 - 0.525 * n);
       m.emissiveIntensity = 0.025 * n;
-      (it.rim.material as THREE.LineBasicMaterial).color.setHSL(it.hue / 360, 0.7, 0.5 - 0.08 * (1 - n));
+      (it.rim.material as THREE.MeshBasicMaterial).color.setHSL(it.hue / 360, 0.9, 0.42 + 0.12 * n);
     }
   }
 

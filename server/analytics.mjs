@@ -511,7 +511,6 @@ const COSMETICS = [
   { key: 'sign', label: 'City name sign', by: 'first-commit' },
   { key: 'landmark', label: 'Landmark spire', by: 'commits-100' },
   { key: 'fireworks', label: 'Fireworks on commits', by: 'streak-7' },
-  { key: 'snow', label: 'Snowfall', by: 'week-80' },
   { key: 'aurora', label: 'Aurora sky', by: 'streak-30' },
   { key: 'gold', label: 'Golden spire', by: 'commits-1000' },
 ];

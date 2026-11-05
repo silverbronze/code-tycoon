@@ -26,7 +26,7 @@ const std = (color: string, glow = 0.06, extra: THREE.MeshStandardMaterialParame
 function kit(): Kit {
   const lean = (w: number, h: number) => { const s = new THREE.Shape(); s.moveTo(-0.5, 0); s.lineTo(0.5, 0); s.lineTo(0, h); s.closePath(); return new THREE.ExtrudeGeometry(s, { depth: w, bevelEnabled: false }).rotateY(Math.PI / 2).translate(-w / 2, 0, 0); };
   const hyper = new THREE.LatheGeometry(Array.from({ length: 9 }, (_, i) => { const y = i / 8; return new THREE.Vector2(0.55 - Math.sin(y * Math.PI) * 0.18 - y * 0.08, y * 1.6); }), 16);
-  return {
+  const K: Kit = {
     tree: { geo: merge(cyl(0.04, 0.05, 0.22), new THREE.ConeGeometry(0.2, 0.5, 7).translate(0, 0.45, 0)), mat: std('#2f6a3c', 0.08), shadow: true },
     roundTree: { geo: merge(cyl(0.04, 0.05, 0.2), new THREE.IcosahedronGeometry(0.2, 0).translate(0, 0.36, 0)), mat: std('#3d7a35', 0.08), shadow: true },
     grass: { geo: box(0.92, 0.02, 0.92), mat: std('#1f4a29', 0.12) },
@@ -71,6 +71,7 @@ function kit(): Kit {
     sheep: { geo: merge(box(0.2, 0.11, 0.12, 0, 0.05), box(0.02, 0.05, 0.02, -0.06), box(0.02, 0.05, 0.02, 0.06)), mat: std('#f2f0ea', 0.05, { roughness: 1, metalness: 0 }), shadow: true },
     sheepHead: { geo: box(0.06, 0.06, 0.06, 0.12, 0.1), mat: std('#2b2a28', 0.02, { roughness: 1, metalness: 0 }) },
   };
+  return K;
 }
 
 class Batch {

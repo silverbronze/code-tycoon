@@ -4,7 +4,8 @@
 // connectors (with different costs).
 
 export interface Rect { x0: number; z0: number; x1: number; z1: number }
-export interface RouteCost { share: number; turn: number; near: number } // step on a used street; per turn; next to a plot
+// step on a used street; per turn; next to a plot; mid: k / (cells to the nearest plot), so streets keep to the middle of open ground
+export interface RouteCost { share: number; turn: number; near: number; mid?: number; ends?: number } // ends: to start or end beside another street
 export type Pt = [number, number];
 
 export class StreetGrid {
@@ -12,12 +13,14 @@ export class StreetGrid {
   nx: number; nz: number; ox: number; oz: number;
   owner: Int32Array;      // -1 open ground, else the place standing on the cell
   near: Uint8Array;       // open cell touching a plot
+  dist: Uint8Array;       // steps from the nearest plot (0 on a plot)
   use: Uint16Array;       // per cell: [east edge, south edge] street usage
   private rings: Int32Array[];
   private g: Float32Array; private from: Int32Array; private touched: number[] = [];
   private goal: Uint8Array;
 
-  constructor(public places: Rect[], pad = 0.35, margin = 6) {
+  // face: a street starts and ends only on cells square in front of a place's own side, `face` cells clear of its corners
+  constructor(public places: Rect[], pad = 0.35, margin = 6, face = -1) {
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
     for (const p of places) { x0 = Math.min(x0, p.x0); z0 = Math.min(z0, p.z0); x1 = Math.max(x1, p.x1); z1 = Math.max(z1, p.z1); }
     if (!places.length) x0 = z0 = x1 = z1 = 0;
@@ -42,11 +45,19 @@ export class StreetGrid {
         const c = j * this.nx + i;
         if (this.owner[c] !== -1) continue;
         const side = (i < i0 || i > i1) !== (j < j0 || j > j1); // not a corner
+        if (face >= 0) {
+          const [x, z] = this.center(c), m = (lo: number, hi: number) => Math.min(face, (hi - lo) / 2);
+          if (i < i0 || i > i1 ? z < p.z0 + m(p.z0, p.z1) || z > p.z1 - m(p.z0, p.z1) : x < p.x0 + m(p.x0, p.x1) || x > p.x1 - m(p.x0, p.x1)) continue;
+        }
         if (side && this.touches(c, k)) out.push(c);
       }
       return Int32Array.from(out);
     });
     for (let c = 0; c < N; c++) if (this.owner[c] === -1) for (const n of this.nbrs(c)) if (n >= 0 && this.owner[n] !== -1) { this.near[c] = 1; break; }
+    this.dist = new Uint8Array(N).fill(255);
+    const q: number[] = [];
+    for (let c = 0; c < N; c++) if (this.owner[c] !== -1) { this.dist[c] = 0; q.push(c); }
+    for (let h = 0; h < q.length; h++) for (const n of this.nbrs(q[h])) if (n >= 0 && this.dist[n] === 255 && this.dist[q[h]] < 254) { this.dist[n] = this.dist[q[h]] + 1; q.push(n); }
   }
 
   // cells whose centre lies inside the padded footprint (at least one)
@@ -78,7 +89,8 @@ export class StreetGrid {
     const lo = Math.min(cost.share, 1);
     const hOf = (c: number) => { const [x, z] = this.center(c); return (Math.max(0, Math.abs(x - hx) - hw) + Math.max(0, Math.abs(z - hz) - hh)) * lo; };
     const heap = new Heap();
-    for (const c of A) { const s = c * 5 + 4; this.g[s] = 0; this.from[s] = -1; this.touched.push(s); heap.push(s, hOf(c)); }
+    const crowd = (c: number) => cost.ends && [c, ...this.nbrs(c)].some(n => n >= 0 && this.busy(n)) ? cost.ends : 0;
+    for (const c of A) { const s = c * 5 + 4; this.g[s] = crowd(c); this.from[s] = -1; this.touched.push(s); heap.push(s, hOf(c)); }
     let end = -1;
     while (heap.size) {
       const s = heap.pop(), c = (s / 5) | 0, d0 = s % 5, gs = this.g[s];
@@ -91,6 +103,8 @@ export class StreetGrid {
         let w = this.use[this.edge(c, d)] ? cost.share : 1;
         if (d0 !== 4 && d0 !== d) w += cost.turn;
         if (this.near[n]) w += cost.near;
+        if (cost.mid) w += cost.mid / this.dist[n];
+        if (this.goal[n]) w += crowd(n);
         const t = n * 5 + d, gn = gs + w;
         if (gn < this.g[t]) { if (this.g[t] === Infinity) this.touched.push(t); this.g[t] = gn; this.from[t] = s; heap.push(t, gn + hOf(n)); }
       }
@@ -102,6 +116,9 @@ export class StreetGrid {
     this.touched.length = 0;
     return path;
   }
+
+  // Does a street run through cell c?
+  busy(c: number) { return this.nbrs(c).some((n, d) => n >= 0 && this.use[this.edge(c, d)] > 0); }
 
   // Mark a routed path as street, so later routes like to share it.
   lay(path: number[]) { for (let k = 1; k < path.length; k++) this.use[this.edgeBetween(path[k - 1], path[k])]++; }

@@ -36,9 +36,11 @@ import { h } from './util';
 //  8. Distance means nothing, only who is tied to whom. Lines are taut: straight runs,
 //     few turns, a short jog becomes one 45° diagonal, every bend has the same radius.
 //     No wiggles that show a corner nobody needs to know about.
-//  9. Every line has the same weight; the count is written on it, not drawn as width.
+//  9. Every line has the same weight; a count is never drawn as width. The overview prints no
+//     numbers along its lines; a hovered district or card writes its counts beside them.
 //     Each line has a dark casing, so two lines crossing or running side by side never
-//     merge into one thick one. A line starts at a station (●) and ends in an arrow.
+//     merge into one thick one. A line starts at a station (●) and ends in a slim arrow on its
+//     last straight run, square onto a side of what it reaches, never at a corner.
 // 10. The busiest district is the centre of the map, its row ordered outwards by weight;
 //     every other row is ordered under the districts it is tied to, so lines run short and
 //     rarely cross. Districts with no ties go to the edges.
@@ -76,8 +78,8 @@ const NODE: Record<Kind, { stroke: string; fill: string; label: string; group: s
 };
 const UI = "'Space Grotesk', system-ui, sans-serif", MONO = "'JetBrains Mono', Consolas, monospace";
 // layout, in world units (one unit is a pixel at zoom 1)
-const CW = 176, CH = 46, GAP = 14, PAD = 14, HEAD = 36, DGAP = 72, G = 12; // G: routing cell, one lane
-const DGAP_MIN = 56, LANES_X = 6, LANES_Y = 8; // gutters: the narrowest, and how many extra lanes they may grow by (rule 11)
+const CW = 176, CH = 46, GAP = 14, PAD = 14, HEAD = 36, DGAP = 72, G = 18; // G: routing cell, one lane (wide enough that lines side by side read as two)
+const DGAP_MIN = 100, LANES_X = 6, LANES_Y = 8; // gutters: the narrowest, and how many extra lanes they may grow by (rule 11)
 const JOG = 6 * G; // a jog this short between two straight runs becomes a 45° diagonal (rule 8)
 const BG = '#f7f7f5';
 const REACH = 130; // islands: from the module's side to its neighbours
@@ -129,7 +131,7 @@ export class Schematic {
     this.legend = h('div', { class: 'sch-legend glass' },
       h('div', { class: 'lg-h' }, 'Connections'),
       tog('imp', 'Imports  (→ imported)'), tog('ref', 'Names a system  (→ system)'), tog('work', 'Changed together', true),
-      h('div', { class: 'lg-note' }, 'Lines join districts: hover one for all of its ties. Zoom in and click a card to float its connections out below. Scroll to zoom, drag to move.'),
+      h('div', { class: 'lg-note' }, 'Lines join districts: hover one for all of its ties and how many there are. Zoom in and click a card to float its connections out below. Scroll to zoom, drag to move.'),
       h('div', { class: 'lg-h' }, 'Cards'),
       shape('module'), shape('store'), shape('host'), shape('service'), shape('web'), shape('local')) as HTMLDivElement;
     this.zoomBox = h('div', { class: 'sch-zoom glass' },
@@ -322,16 +324,20 @@ export class Schematic {
 
   // District connectors are routed through the gutters the first time they are drawn.
   private routeBundle(u: Bundle) {
-    if (!this.grid) this.grid = new StreetGrid(this.boxes.map(b => ({ x0: b.x / G, z0: b.y / G, x1: (b.x + b.w) / G, z1: (b.y + b.h) / G })), 1.2, 4);
+    if (!this.grid) this.grid = new StreetGrid(this.boxes.map(b => ({ x0: b.x / G, z0: b.y / G, x1: (b.x + b.w) / G, z1: (b.y + b.h) / G })), 2, 4, 60 / G); // lanes keep two cells off a block, room to leave it straight, bend and land an arrow; ends face a side, inset() from corners
     // overlaps cost more than detours, so every line keeps its own lane; turns cost more still, so lines stay taut (rule 8)
-    const p = this.grid.route(u.a, u.b, { share: 1.4, turn: 6, near: 0.2 });
+    const p = this.grid.route(u.a, u.b, { share: 1.4, turn: 6, near: 0.2, mid: 3, ends: 8 }); // mid: along the middle of a gutter, clear of the blocks; ends: two arrows never land side by side
     if (!p) { u.pts = []; return; }
     const pts = this.grid.corners(p).map(q => [q[0] * G, q[1] * G] as Pt);
     const grid = collinear([...port(this.boxes[u.a], pts[0]), ...pts, ...port(this.boxes[u.b], pts[pts.length - 1]).reverse()]);
     // the simplest line that is clear wins over the street the grid found (rule 8)
     const best = taut(this.boxes[u.a], this.boxes[u.b], grid).find(c => this.clear(c, u.a, u.b));
     if (best) { u.pts = best; this.layWorld(best); }
-    else { this.grid.lay(p); u.pts = diagonals(this.unjog(this.unjog(grid, u.b).reverse(), u.a).reverse(), this.solid([u.a, u.b])); }
+    else {
+      this.grid.lay(p);
+      const ends = enter(enter(this.unjog(this.unjog(grid, u.b).reverse(), u.a), this.boxes[u.a]).reverse(), this.boxes[u.b]);
+      u.pts = diagonals(collinear(ends), this.solid([u.a, u.b]));
+    }
     for (let k = 1; k < u.pts.length; k++) this.laid.push([u.pts[k - 1], u.pts[k]]);
   }
   private laid: [Pt, Pt][] = []; // every segment of the connectors drawn so far
@@ -349,7 +355,7 @@ export class Schematic {
   }
   // Containers a line must keep out of: a margin round each, the two it joins only their inside.
   private solid(own: number[] = []): R[] {
-    return this.boxes.flatMap((b, i) => !b.members.length ? [] : own.includes(i) ? [{ x: b.x + 1, y: b.y + 1, w: b.w - 2, h: b.h - 2 }] : [{ x: b.x - 4, y: b.y - 4, w: b.w + 8, h: b.h + 8 }]);
+    return this.boxes.flatMap((b, i) => !b.members.length ? [] : own.includes(i) ? [{ x: b.x + 1, y: b.y + 1, w: b.w - 2, h: b.h - 2 }] : [{ x: b.x - G, y: b.y - G, w: b.w + 2 * G, h: b.h + 2 * G }]);
   }
   // A line through no container and along no lane another line already runs in.
   private clear(pts: Pt[], a: number, b: number) {
@@ -495,6 +501,28 @@ export class Schematic {
     const n = this.nodes[i];
     this.goTo(n.x + CW / 2, n.y + CH / 2, Math.max(this.view.s, 1.1), true);
   }
+  // Switching layers keeps a place where it was on screen (cityview setLayer): where a card's
+  // middle is on the map, the card nearest a point, and the camera moved to put a card at one.
+  // All in client coordinates.
+  screenOf(r: Ref): Pt | null {
+    const i = this.idx(r); if (i < 0) return null;
+    const n = this.nodes[i], box = this.canvas.getBoundingClientRect(), [ox, oy] = this.origin();
+    return [(n.x + CW / 2 - this.view.cx) * this.view.s + ox + box.left, (n.y + CH / 2 - this.view.cy) * this.view.s + oy + box.top];
+  }
+  refAt(x: number, y: number): Ref | null {
+    const box = this.canvas.getBoundingClientRect(), [wx, wy] = this.toWorld(x - box.left, y - box.top);
+    let best = -1, d = Infinity;
+    this.nodes.forEach((n, i) => { const e = Math.hypot(n.x + CW / 2 - wx, n.y + CH / 2 - wy); if (this.alive(n.born) && e < d) { d = e; best = i; } });
+    return best >= 0 ? this.nodes[best].ref : null;
+  }
+  pin(r: Ref, x: number, y: number) {
+    const i = this.idx(r); if (i < 0) return;
+    if (!this.fitted) { this.fit(false); this.fitted = true; }
+    const n = this.nodes[i], box = this.canvas.getBoundingClientRect(), [ox, oy] = this.origin();
+    this.anim = null;
+    this.view = { cx: n.x + CW / 2 - (x - box.left - ox) / this.view.s, cy: n.y + CH / 2 - (y - box.top - oy) / this.view.s, s: this.view.s };
+    this.dirty = true;
+  }
 
   // ------------------------------------------------------------------ view
   private anim: { from: View; to: View; t: number; dur: number } | null = null;
@@ -541,7 +569,9 @@ export class Schematic {
         if (drag.moved) { this.anim = null; this.view.cx = drag.cx - dx / this.view.s; this.view.cy = drag.cy - dy / this.view.s; this.dirty = true; this.host.onHover(null, 0, 0); return; }
       }
       const px = e.clientX - box.left, py = e.clientY - box.top;
-      const [i, bi, is] = this.pick(px, py);
+      let [i, bi, is] = this.pick(px, py);
+      // zoomed out from a hovered card: it stays hovered while the pointer stays on its district's block
+      if (i < 0 && is < 0 && !this.tier() && this.hover >= 0 && this.hoverIs < 0 && bi === this.nodes[this.hover].box) i = this.hover;
       const fold = i < 0 ? this.pickFold(px, py) : null;
       if (i !== this.hover || bi !== this.hoverBox || fold !== this.hoverFold || is !== this.hoverIs) { this.hover = i; this.hoverBox = bi; this.hoverFold = fold; this.hoverIs = is; this.dirty = true; }
       cv.style.cursor = i >= 0 || fold || this.hitAt(px, py) ? 'pointer' : '';
@@ -653,7 +683,8 @@ export class Schematic {
     // focus (rule 5): a hovered card, else the module of the island in use (rule 6), which the map
     // shows at any zoom; zoomed out its ties run from its district block. A hovered district shows its own.
     const tier = this.tier(), act = this.activeIs >= 0 ? this.sel : -1;
-    const f = tier && this.hover >= 0 && this.hoverIs < 0 ? this.hover : this.hoverBox >= 0 ? -1 : act;
+    // A card hovered when zooming out stays the focus: its block lists it, picked out, and its ties run from the block.
+    const f = this.hover >= 0 && this.hoverIs < 0 ? this.hover : this.hoverBox >= 0 ? -1 : act;
     const fb = f >= 0 ? -1 : this.hoverBox;
     const soft = f >= 0 && f === act; // the island's module: the rest of the map stays readable around it
     const mine: SEdge[] = [], near = new Set<number>();
@@ -710,11 +741,23 @@ export class Schematic {
       if (!tier) {
         ctx.font = `500 10.5px ${UI}`; ctx.textBaseline = 'middle';
         const room = Math.floor((hh - 30) / 15);
-        b.members.filter(m => this.alive(this.nodes[m].born)).forEach((m, k, all) => {
+        const list = b.members.filter(m => this.alive(this.nodes[m].born)), shown = list.length > room ? room - 1 : room;
+        const fk = list.indexOf(f);
+        if (fk >= shown && shown > 0) { list.splice(fk, 1); list.splice(shown - 1, 0, f); } // the focus is never under "+ more"
+        list.forEach((m, k, all) => {
           if (k >= room) return;
           const n = this.nodes[m], more = k === room - 1 && all.length > room, ly = y + 30 + k * 15;
+          const left = `+ ${all.length - k} more`, t = more
+            ? (ctx.measureText(left).width <= w - 18 ? left : clip(ctx, `+${all.length - k}`, w - 18)) // a narrow block keeps "+N" inside its frame
+            : clip(ctx, (n.kind === 'store' ? '◫ ' : '') + n.title, w - 22);
+          if (m === f && !more) { // picked out like the card it was
+            ctx.font = `600 10.5px ${UI}`;
+            ctx.fillStyle = '#111111'; rrect(ctx, x + 5, ly - 7, Math.min(w - 10, ctx.measureText(t).width + 8), 14, 4); ctx.fill();
+            ctx.fillStyle = '#ffffff'; ctx.fillText(t, x + 9, ly); ctx.font = `500 10.5px ${UI}`;
+            return;
+          }
           ctx.fillStyle = more ? 'rgba(0, 0, 0, 0.4)' : this.active.has(m) ? '#111111' : '#444444';
-          ctx.fillText(more ? `+ ${all.length - k} more` : clip(ctx, (n.kind === 'store' ? '◫ ' : '') + n.title, w - 18), x + 9, ly);
+          ctx.fillText(t, x + 9, ly);
         });
         const act = [...new Set(b.members.flatMap(m => this.active.get(m) || []))];
         const pulse = 0.5 + 0.5 * Math.sin(time * 4);
@@ -724,19 +767,19 @@ export class Schematic {
     ctx.globalAlpha = 1;
 
     // district connectors (rules 4, 8, 9): one weight for all, thin enough zoomed out that neighbouring lanes stay apart
-    const pills: { at: Pt[]; t: string; c: string }[] = [];
-    const lw = Math.min(3, Math.max(1.4, G * s * 0.4));
+    // Counts are not printed along the lines of the overview (rule 9): only the lines of a hovered district or card carry them.
+    const pills: { at: Run[]; t: string; c: string }[] = [];
+    const lw = Math.min(3, Math.max(1.4, 12 * s * 0.4));
     for (const type of ['work', 'ref', 'imp'] as EdgeType[]) for (const u of shownBundles) {
       if (u.type !== type) continue;
       if (!u.pts) this.routeBundle(u);
       if (!u.pts || u.pts.length < 2) continue;
       const pts = u.pts.map(p => this.sp(p)), e = pts.length - 1;
       ctx.globalAlpha = type === 'work' ? 0.7 : 0.95;
-      this.metroLine(pts, COL[type], lw, type === 'work' ? [6, 5] : null);
-      const head = 4 + lw;
-      if (u.ab) arrow(ctx, pts[e - 1], pts[e], head); else station(ctx, pts[e], COL[type], lw + 1.5);
-      if (u.ba) arrow(ctx, pts[1], pts[0], head); else station(ctx, pts[0], COL[type], lw + 1.5);
-      pills.push({ at: mids(pts), t: String(u.n), c: COL[type] });
+      this.metroLine(pts, COL[type], lw, type === 'work' ? [6, 5] : null, Math.min(14, Math.max(5, 1.6 * G * s)), !!u.ab, !!u.ba);
+      if (!u.ab) station(ctx, pts[e], COL[type], lw + 1.5);
+      if (!u.ba) station(ctx, pts[0], COL[type], lw + 1.5);
+      if (fb >= 0) pills.push({ at: mids(pts), t: String(u.n), c: COL[type] });
     }
     ctx.globalAlpha = 1;
 
@@ -774,11 +817,9 @@ export class Schematic {
     }
     for (const type of ['work', 'ref', 'imp'] as EdgeType[]) ties.forEach((t, k) => {
       if (t.type !== type) return;
-      const pts = octo(curves[k]).map(p => this.sp(p)), e = pts.length - 1;
+      const pts = octo(curves[k]).map(p => this.sp(p));
       ctx.globalAlpha = type === 'work' ? 0.75 : 0.95;
-      this.metroLine(pts, COL[type], type === 'imp' ? 2.2 : 1.8, type === 'work' ? [5, 4] : null, 8);
-      if (t.out) arrow(ctx, pts[e - 1], pts[e], 5);
-      if (t.inn) arrow(ctx, pts[1], pts[0], 5);
+      this.metroLine(pts, COL[type], type === 'imp' ? 2.2 : 1.8, type === 'work' ? [5, 4] : null, 8, t.out, t.inn);
       if (t.n > 1) pills.push({ at: mids(pts), t: String(t.n), c: COL[type] });
     });
     ctx.globalAlpha = 1;
@@ -815,17 +856,21 @@ export class Schematic {
       ctx.shadowBlur = 0;
     }
 
-    // counts on district connectors, never on top of each other
+    // counts on the focused lines: set beside the line like a station name, not on it, never on top of each other
     const taken: { x0: number; y0: number; x1: number; y1: number }[] = [];
     const free = (r: { x0: number; y0: number; x1: number; y1: number }) => !taken.some(o => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0) && (taken.push(r), true);
     ctx.font = `600 10.5px ${MONO}`; ctx.textBaseline = 'middle';
     for (const p of pills) { // on the longest straight run that has room, else the next one
-      const w = ctx.measureText(p.t).width + 10;
-      const m = p.at.find(m => free({ x0: m[0] - w / 2, y0: m[1] - 8, x1: m[0] + w / 2, y1: m[1] + 8 }));
-      if (!m) continue;
-      ctx.fillStyle = '#ffffff'; rrect(ctx, m[0] - w / 2, m[1] - 8, w, 16, 8); ctx.fill();
-      ctx.strokeStyle = p.c; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = p.c; ctx.textAlign = 'center'; ctx.fillText(p.t, m[0], m[1] + 0.5); ctx.textAlign = 'left';
+      const w = ctx.measureText(p.t).width, hh = 12;
+      const spot = p.at.flatMap(r => { // above a level run, right of an upright one, else the other side
+        const lvl = Math.abs(r.d[0]) >= Math.abs(r.d[1]), g = 4 + lw;
+        return lvl ? [[r.m[0], r.m[1] - g - hh / 2], [r.m[0], r.m[1] + g + hh / 2]] as Pt[] : [[r.m[0] + g + w / 2, r.m[1]], [r.m[0] - g - w / 2, r.m[1]]] as Pt[];
+      }).find(m => free({ x0: m[0] - w / 2 - 2, y0: m[1] - hh / 2, x1: m[0] + w / 2 + 2, y1: m[1] + hh / 2 }));
+      if (!spot) continue;
+      ctx.textAlign = 'center'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = BG; ctx.lineWidth = 4; ctx.strokeText(p.t, spot[0], spot[1] + 0.5);
+      ctx.fillStyle = p.c; ctx.fillText(p.t, spot[0], spot[1] + 0.5);
+      ctx.textAlign = 'left'; ctx.lineJoin = 'miter';
     }
 
     this.drawIslands(time, W, H, tier, act);
@@ -1020,9 +1065,7 @@ export class Schematic {
         const lx = lane.get(e), pts = (lx == null ? [p0, p3] : [p0, [lx, p0[1]], [lx, p3[1]], p3] as Pt[]).map(q => this.sp(q)), z = pts.length - 1;
         const hot = c.g ? this.hoverFold === c : hov === c.i;
         ctx.globalAlpha = r.a * (hov >= 0 && !hot ? 0.25 : c.type === 'work' ? 0.7 : 0.9);
-        this.metroLine(pts, COL[c.type], hot ? 2.6 : 1.6, c.type === 'work' ? [5, 4] : null, 8);
-        if (c.out) arrow(ctx, pts[z - 1], pts[z], hot ? 5.5 : 4.5);
-        if (c.inn) arrow(ctx, pts[1], pts[0], hot ? 5.5 : 4.5);
+        this.metroLine(pts, COL[c.type], hot ? 2.6 : 1.6, c.type === 'work' ? [5, 4] : null, 8, c.out, c.inn);
         if (c.g && r.a === 1) pills.push({ x: (pts[z - 1][0] + pts[z][0]) / 2, y: pts[z][1], t: String(c.g.n), c: COL[c.type] });
       }
     }
@@ -1145,11 +1188,20 @@ export class Schematic {
   }
 
   // A line on the diagram (rule 9): a dark casing first, so a line crossing or running beside another stays two lines.
-  private metroLine(pts: Pt[], color: string, lw: number, dash: number[] | null, r = 10) {
-    const ctx = this.ctx;
-    ctx.beginPath(); roundedPath(ctx, pts, r);
+  // With arrowheads the line stops at the head's base, and the head sits on the last straight run, never on a bend.
+  private metroLine(pts: Pt[], color: string, lw: number, dash: number[] | null, r = 10, out = false, inn = false) {
+    const ctx = this.ctx, e = pts.length - 1;
+    const len = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const head = (a: Pt, b: Pt) => Math.min(headLen(lw), Math.max(len(a, b) - 3, headLen(lw) * 0.8)); // a stunted head reads as a nick in the line
+    const hOut = out ? head(pts[e - 1], pts[e]) : 0, hIn = inn ? head(pts[1], pts[0]) : 0;
+    const line = pts.map(p => [p[0], p[1]] as Pt);
+    if (hOut) line[e] = back(pts[e - 1], pts[e], hOut * 0.7);
+    if (hIn) line[0] = back(pts[1], pts[0], hIn * 0.7);
+    ctx.beginPath(); roundedPath(ctx, line, r, hOut, hIn);
     ctx.strokeStyle = BG; ctx.lineWidth = lw + 3; ctx.stroke();
     ctx.setLineDash(dash ?? []); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke(); ctx.setLineDash([]);
+    if (hOut) arrow(ctx, pts[e - 1], pts[e], hOut, lw, color);
+    if (hIn) arrow(ctx, pts[1], pts[0], hIn, lw, color);
   }
 
   private drawGrid(W: number, H: number) {
@@ -1185,12 +1237,38 @@ function curve(a: R, b: R): [Pt, Pt, Pt, Pt] {
   const sg = Math.sign(dy), p0: Pt = [ax, ay + sg * a.h / 2], p3: Pt = [bx, by - sg * b.h / 2], k = Math.max(30, Math.abs(p3[1] - p0[1]) * 0.45);
   return [p0, [ax, p0[1] + sg * k], [bx, p3[1] - sg * k], p3];
 }
-// Where a connector leaves a container, out of the side facing its first cell, and
-// the jog that keeps it at right angles when that cell sits off the container's edge.
+// How far a line keeps from the corners of a container side this long: enough to read as clear of the corner zoomed out.
+const inset = (side: number) => Math.max(14, Math.min(60, side * 0.12));
+// Where a connector leaves a container, out of the side facing its first cell, clear of the corners, and
+// the turn that keeps it at right angles when that cell sits off the side (past a corner, it turns in square).
 function port(b: SBox, p: Pt): Pt[] {
-  const cx = Math.min(b.x + b.w, Math.max(b.x, p[0])), cz = Math.min(b.y + b.h, Math.max(b.y, p[1]));
-  if (Math.abs(p[0] - cx) >= Math.abs(p[1] - cz)) return cz === p[1] ? [[cx, cz]] : [[cx, cz], [p[0], cz]];
-  return cx === p[0] ? [[cx, cz]] : [[cx, cz], [cx, p[1]]];
+  const ox = Math.max(b.x - p[0], p[0] - b.x - b.w, 0), oz = Math.max(b.y - p[1], p[1] - b.y - b.h, 0);
+  if (oz >= ox) { // top or bottom
+    const M = inset(b.w), x = Math.min(b.x + b.w - M, Math.max(b.x + M, p[0])), side = p[1] < b.y + b.h / 2 ? b.y : b.y + b.h;
+    return x === p[0] ? [[x, side]] : [[x, side], [x, p[1]]];
+  }
+  const M = inset(b.h), z = Math.min(b.y + b.h - M, Math.max(b.y + M, p[1])), side = p[0] < b.x + b.w / 2 ? b.x : b.x + b.w;
+  return z === p[1] ? [[side, z]] : [[side, z], [p[0], z]];
+}
+// The last run of a line must arrive square onto a side of container `b`, clear of its corners, so its arrow
+// or station points into the container. A run that ends at a corner, or passes alongside, turns in instead.
+function enter(pts: Pt[], b: SBox): Pt[] {
+  const n = pts.length; if (n < 2) return pts;
+  const p = pts[n - 1], q = pts[n - 2];
+  if (q[1] !== p[1] && q[0] !== p[0]) return pts;
+  const ax = q[1] === p[1] ? 0 : 1, ay = 1 - ax; // the axis the run goes along
+  const lo = [b.x, b.y], hi = [b.x + b.w, b.y + b.h], M = inset(ay ? b.h : b.w), N = inset(ax ? b.h : b.w);
+  if (p[ay] >= lo[ay] + M && p[ay] <= hi[ay] - M) { // faces a side: land right on it
+    const e: Pt = [p[0], p[1]]; e[ax] = q[ax] < lo[ax] ? lo[ax] : q[ax] > hi[ax] ? hi[ax] : p[ax];
+    return [...pts.slice(0, n - 1), e];
+  }
+  const side = p[ay] < (lo[ay] + hi[ay]) / 2 ? lo[ay] : hi[ay], gap = Math.abs(side - p[ay]);
+  if (gap < 8 || (p[ay] > lo[ay] && p[ay] < hi[ay])) return pts; // no room to turn in
+  const sg = Math.sign(p[ax] - q[ax]), near = sg > 0 ? lo[ax] + N + G : hi[ax] - N - G;
+  let at = sg > 0 ? Math.max(q[ax], near) : Math.min(q[ax], near);
+  at = Math.min(hi[ax] - N, Math.max(lo[ax] + N, at));
+  const c: Pt = [0, 0], e: Pt = [0, 0]; c[ax] = at; c[ay] = p[ay]; e[ax] = at; e[ay] = side;
+  return [...pts.slice(0, n - 1), c, e];
 }
 function rrectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
@@ -1205,34 +1283,45 @@ function cylinderPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
   ctx.moveTo(x, y + e); ctx.ellipse(x + w / 2, y + e, w / 2, e, 0, Math.PI, 0); ctx.lineTo(x + w, y + h - e);
   ctx.ellipse(x + w / 2, y + h - e, w / 2, e, 0, 0, Math.PI); ctx.closePath();
 }
-// An orthogonal polyline with rounded corners.
-function roundedPath(ctx: CanvasRenderingContext2D, pts: Pt[], r: number) {
+// An orthogonal polyline with rounded corners. keepEnd/keepStart: room an arrowhead needs on the last/first
+// run, so the bend before it finishes first.
+function roundedPath(ctx: CanvasRenderingContext2D, pts: Pt[], r: number, keepEnd = 0, keepStart = 0) {
   ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length - 1; i++) {
+  const n = pts.length;
+  for (let i = 1; i < n - 1; i++) {
     const [ax, ay] = pts[i - 1], [bx, by] = pts[i], [cx, cy] = pts[i + 1];
-    const rr = Math.min(r, Math.hypot(bx - ax, by - ay) / 2, Math.hypot(cx - bx, cy - by) / 2);
-    ctx.arcTo(bx, by, cx, cy, rr);
+    const l0 = Math.hypot(bx - ax, by - ay) - (i === 1 ? keepStart * 0.3 : 0), l1 = Math.hypot(cx - bx, cy - by) - (i === n - 2 ? keepEnd * 0.3 : 0);
+    ctx.arcTo(bx, by, cx, cy, Math.max(0, Math.min(r, l0 / 2, l1 / 2)));
   }
-  ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+  ctx.lineTo(pts[n - 1][0], pts[n - 1][1]);
 }
-function arrow(ctx: CanvasRenderingContext2D, from: Pt, to: Pt, size: number) {
+// The point `d` back from `to` towards `from`.
+function back(from: Pt, to: Pt, d: number): Pt {
+  const l = Math.hypot(to[0] - from[0], to[1] - from[1]) || 1;
+  return [to[0] - (to[0] - from[0]) * d / l, to[1] - (to[1] - from[1]) * d / l];
+}
+// How long an arrowhead is on a line of width lw: in proportion, as on a printed diagram.
+const headLen = (lw: number) => 5 + lw * 2.2;
+// A slim arrowhead with a notched back, its tip on `to`, cased like the line so two heads side by side stay apart.
+function arrow(ctx: CanvasRenderingContext2D, from: Pt, to: Pt, len: number, lw: number, color: string) {
   const dx = to[0] - from[0], dy = to[1] - from[1], l = Math.hypot(dx, dy) || 1, ux = dx / l, uy = dy / l;
-  ctx.fillStyle = ctx.strokeStyle as string;
+  const hw = Math.max(lw * 1.5, len * 0.42), bx = to[0] - ux * len, by = to[1] - uy * len, nx = to[0] - ux * len * 0.72, ny = to[1] - uy * len * 0.72;
   ctx.beginPath(); ctx.moveTo(to[0], to[1]);
-  ctx.lineTo(to[0] - ux * size * 2 + uy * size, to[1] - uy * size * 2 - ux * size);
-  ctx.lineTo(to[0] - ux * size * 2 - uy * size, to[1] - uy * size * 2 + ux * size);
-  ctx.closePath(); ctx.fill();
+  ctx.lineTo(bx + uy * hw, by - ux * hw); ctx.lineTo(nx, ny); ctx.lineTo(bx - uy * hw, by + ux * hw); ctx.closePath();
+  ctx.lineJoin = 'round'; ctx.strokeStyle = BG; ctx.lineWidth = 2.5; ctx.stroke(); ctx.lineJoin = 'miter';
+  ctx.fillStyle = color; ctx.fill();
 }
 // The station a line starts from (rule 9): a ring in the line's colour with a light centre.
 function station(ctx: CanvasRenderingContext2D, p: Pt, color: string, r: number) {
   ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
   ctx.fillStyle = '#ffffff'; ctx.fill(); ctx.lineWidth = Math.max(1.2, r * 0.5); ctx.strokeStyle = color; ctx.stroke();
 }
-// The middles of a polyline's straight runs, longest first: where its label reads best.
-function mids(pts: Pt[]): Pt[] {
-  const runs = pts.slice(1).map((p, i) => ({ m: [(pts[i][0] + p[0]) / 2, (pts[i][1] + p[1]) / 2] as Pt, l: Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]) }));
+// The middles of a polyline's straight runs and which way they go, longest first: where its label reads best.
+interface Run { m: Pt; d: Pt }
+function mids(pts: Pt[]): Run[] {
+  const runs = pts.slice(1).map((p, i) => ({ m: [(pts[i][0] + p[0]) / 2, (pts[i][1] + p[1]) / 2] as Pt, d: [p[0] - pts[i][0], p[1] - pts[i][1]] as Pt, l: Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]) }));
   runs.sort((a, b) => b.l - a.l);
-  return runs.filter((r, k) => !k || r.l >= 28).map(r => r.m);
+  return runs.filter((r, k) => !k || r.l >= 28);
 }
 // Rule 8: a short jog between two straight runs going the same way becomes one 45° diagonal,
 // where the diagonal clears every container and leaves the runs at either end some length.
@@ -1269,26 +1358,27 @@ function collinear(pts: Pt[]): Pt[] {
 // The simplest lines between two containers, simplest first (rule 8): straight across facing sides, then
 // straight out, one 45° diagonal, straight in; then, keeping the ports of the grid's route, one right-angle turn.
 function taut(a: SBox, b: SBox, route: Pt[]): Pt[][] {
-  const out: Pt[][] = [], M = 14; // ports keep this far from a container's corners
+  const out: Pt[][] = []; // ports keep inset() from a container's corners
   for (const ax of [1, 0]) { // 1: one container above the other, 0: side by side
     const ay = 1 - ax, lo = (r: SBox) => ax ? r.y : r.x, hi = (r: SBox) => ax ? r.y + r.h : r.x + r.w;
-    const xlo = (r: SBox) => (ax ? r.x : r.y) + M, xhi = (r: SBox) => (ax ? r.x + r.w : r.y + r.h) - M;
+    const xlo = (r: SBox) => (ax ? r.x : r.y) + inset(ax ? r.w : r.h), xhi = (r: SBox) => (ax ? r.x + r.w : r.y + r.h) - inset(ax ? r.w : r.h);
     const [f, t] = hi(a) <= lo(b) ? [a, b] : hi(b) <= lo(a) ? [b, a] : [null, null];
     if (!f || !t) continue;
     const gap = lo(t) - hi(f), flip = f !== a;
     const at = (along: number, across: number): Pt => { const p: Pt = [0, 0]; p[ax] = along; p[ay] = across; return p; };
     const line = (pts: Pt[]) => out.push(flip ? pts.reverse() : pts);
     // straight: anywhere both containers face each other, from the middle of that stretch outwards
+    // (a lane short of that, still straight down the middle: a little nearer a corner beats a nick in the line)
     const s0 = Math.max(xlo(f), xlo(t)), s1 = Math.min(xhi(f), xhi(t));
-    if (s0 <= s1) for (const d of [0, 1, -1, 2, -2, 3, -3]) {
+    if (s0 <= s1 + G) for (const d of [0, 1, -1, 2, -2, 3, -3]) {
       const c = (s0 + s1) / 2 + d * G;
-      if (c >= s0 && c <= s1) line([at(hi(f), c), at(lo(t), c)]);
+      if (c >= Math.min(s0, s1) && c <= Math.max(s0, s1) || !d) line([at(hi(f), c), at(lo(t), c)]);
     }
     // straight, one diagonal, straight: from the nearest ends of the two sides
     const cf = Math.min(xhi(f), Math.max(xlo(f), (xlo(t) + xhi(t)) / 2)), ct = Math.min(xhi(t), Math.max(xlo(t), (xlo(f) + xhi(f)) / 2));
     for (const d of [0, 1, -1, 2, -2]) {
       const pf = Math.min(xhi(f), Math.max(xlo(f), cf + d * G)), pt = Math.min(xhi(t), Math.max(xlo(t), ct + d * G)), across = Math.abs(pt - pf);
-      if (across < 1 || across > gap - 40) continue; // each end leaves straight for a while
+      if (across < G || across > gap - 40) continue; // a shorter jog is a nick, not a diagonal; each end leaves straight for a while
       const run = (gap - across) / 2;
       line([at(hi(f), pf), at(hi(f) + run, pf), at(lo(t) - run, pt), at(lo(t), pt)]);
     }

@@ -4,12 +4,17 @@ import type { Stage } from './scene';
 import { Construction } from './construction';
 import { Roads } from './roads';
 import { blocked, fitDistricts, places, saveMove, shift } from './layout';
-import { DistrictGrounds } from './districts';
-import { ENV } from './env';
+import { DistrictGrounds, LOT_MARGIN } from './districts';
+import { Highlight } from './highlight';
+import { ENV, glowBlend, ink } from './env';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { FACADE, RoofKit, SHAPE, hash, styleOf, type Style } from './themes';
 import { Dressing } from './dressing';
 import { Life } from './life';
+import { Follies } from './follies';
 
 // ---- building material: lit windows on the facades, activity glow -------------
 // Per-instance attributes: aEm (emissive rgb), aSeed (window pattern), aStyle
@@ -73,7 +78,14 @@ function buildingMaterial(rise: { value: number }) {
         float leaf = h21(floor(iq) + vSeed * 7.0);
         float ivy = side0 * step(0.02, age) * step(vY01, age * (0.35 + 0.55 * leaf)) * step(0.22, leaf);
         diffuseColor.rgb *= 1.0 - 0.3 * age;
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.19, 0.07) * (0.7 + 0.6 * leaf), ivy);`)
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.19, 0.07) * (0.7 + 0.6 * leaf), ivy);
+        // by day a session at work paints its building in its colour (added light is lost
+        // on pale walls); white flashes (selection) have no hue and leave the walls alone.
+        // Module blocks and warehouses get a third of the light (world.ts 'big'), so scale back up.
+        float emX = max(vEm.r, max(vEm.g, vEm.b)), emN = min(vEm.r, min(vEm.g, vEm.b));
+        float paint = (1.0 - uNight) * (emX - emN) / max(emX, 1e-4) * smoothstep(0.0, 0.2, emX * (vStyle > 0.5 && vStyle < 2.5 ? 3.3 : 1.0));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vEm / max(emX, 1e-4) * 0.45, paint * 0.9);
+        vec3 vEmD = vEm * (1.0 - 0.7 * paint); // and glows less, or it washes back to pastel`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.18, fresh) + age * 0.3;`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
@@ -115,16 +127,16 @@ function buildingMaterial(rise: { value: number }) {
         if (vStyle < 0.5) {
           totalEmissiveRadiance += side * win * lit * warm * 0.22;
           totalEmissiveRadiance += roof * tint * 0.55;
-          totalEmissiveRadiance += vEm * (side * win * 2.2 + roof * 1.3 + 0.18);
+          totalEmissiveRadiance += vEmD * (side * win * 2.2 + roof * 1.3 + 0.18);
         } else if (vStyle < 1.5) {
           totalEmissiveRadiance += side * stripes * vec3(0.95, 0.62, 0.25) * 0.10;
-          totalEmissiveRadiance += vEm * (side * stripes * 1.8 + roof * 0.9 + 0.15);
+          totalEmissiveRadiance += vEmD * (side * stripes * 1.8 + roof * 0.9 + 0.15);
         } else if (vStyle < 2.5) {
           totalEmissiveRadiance += side * win * lit * warm * 0.16;
           totalEmissiveRadiance += roof * tint * 0.5;
-          totalEmissiveRadiance += vEm * (side * win * 1.6 + roof * 1.1 + 0.15);
+          totalEmissiveRadiance += vEmD * (side * win * 1.6 + roof * 1.1 + 0.15);
         } else {
-          totalEmissiveRadiance += vEm * (0.6 + roof);
+          totalEmissiveRadiance += vEmD * (0.6 + roof);
           totalEmissiveRadiance += side * step(0.85, fract(vWPos.y * 1.5)) * vec3(0.5, 0.7, 1.0) * 0.25;
         }`);
   };
@@ -155,7 +167,7 @@ const glowTex = (() => {
 })();
 const glowGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 const waveGeo = new THREE.RingGeometry(0.86, 1, 64).rotateX(-Math.PI / 2);
-const additive = (o: object) => ({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0, ...o });
+const additive = (o: object) => ({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0, toneMapped: false, fog: false, ...o });
 
 function makeInst(n: number, rise: { value: number }, geo: THREE.BufferGeometry = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), style = 0): Inst {
   const em = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
@@ -208,7 +220,8 @@ export class World {
   plates: THREE.InstancedMesh; plateOf: Ref[] = []; plateIdx = new Map<string, number>();
   plateRise: Float32Array; plateTo: Float32Array; plateDim: Float32Array;
   roads!: Roads;
-  selLines: THREE.LineSegments | null = null;
+  selLines: THREE.Group | null = null;
+  private selNear: { tt: number; ti: number; color: THREE.Color }[] = []; // the places a selection is tied to
   private auras = new Map<string, Aura>();
   private auraGroup = new THREE.Group();
   beacons: THREE.InstancedMesh; beaconFlash: Float32Array;
@@ -220,9 +233,11 @@ export class World {
   private labelsOf = new Map<string, Label[]>(); // labels that ride on a place
   private districtLabels: { d: number; L: Label }[] = [];
   private sel: { tt: number; ti: number } | null = null;
+  private highlight = new Highlight();
   onMoved: (() => void) | null = null; // a place was dragged somewhere else
   occluders: { left: number; top: number; right: number; bottom: number }[] = []; // panels on top of the canvas
   tagBoxes: { x: number; y: number; w: number; h: number }[] = [];                  // drone name tags, placed by the view
+  private labelBoxes: { x: number; y: number; w: number; h: number }[] = [];        // labels shown last frame (the pin clears them)
   private baseFileCol!: Float32Array; private baseModCol!: Float32Array;
   private pins: THREE.InstancedMesh; private pinList: { ti: number; color: THREE.Color; multi: boolean }[] = [];
   private marks: { tt: number; ti: number; color: THREE.Color }[] = [];
@@ -232,7 +247,7 @@ export class World {
   fileRoofs!: RoofKit; modRoofs!: RoofKit;
   private scaffold!: THREE.InstancedMesh;
   private ageAt = -Infinity;
-  dressing!: Dressing; life!: Life;
+  dressing!: Dressing; life!: Life; follies!: Follies;
   private ticker: Label | null = null;
   private grounds: DistrictGrounds;
   private ground: THREE.Mesh; private grid: THREE.GridHelper; private plateHue: number[] = []; private toned = -1;
@@ -253,7 +268,7 @@ export class World {
     grid.position.y = -0.03;
     this.group.add(ground, grid);
     this.grounds = new DistrictGrounds(c);
-    this.group.add(this.grounds.group);
+    this.group.add(this.grounds.group, this.highlight.mesh, this.highlight.pin);
 
     // one plate per place, tinted by its district
     const places: { ref: Ref; x: number; z: number; w: number; h: number; d: number }[] = [];
@@ -373,7 +388,8 @@ export class World {
     this.buildRoads();
     this.dressing = new Dressing(this, c);
     this.life = new Life(this, this.dressing, c);
-    this.group.add(this.dressing.group, this.life.group);
+    this.follies = new Follies(c); this.follies.build((x, z) => this.roads.free(x, z));
+    this.group.add(this.dressing.group, this.life.group, this.follies.group);
 
     // labels
     this.labels = document.createElement('div');
@@ -441,7 +457,7 @@ export class World {
     this.roads = new Roads(this.city, rects, this.t0, this.uT, this.uTime);
     if (old) { this.roads.group.visible = old.group.visible; this.roads.traffic = old.traffic; }
     this.group.add(this.roads.group);
-    if (old && this.dressing) { this.dressing.build(); this.dressing.setTime(this.tNow); this.life.rebuild(); this.placeTicker(); }
+    if (old && this.dressing) { this.dressing.build(); this.dressing.setTime(this.tNow); this.life.rebuild(); this.placeTicker(); this.follies.build((x, z) => this.roads.free(x, z)); this.follies.setTime(this.tNow); }
   }
 
   // Start dragging the place under the pointer (a module's area with its buildings,
@@ -503,10 +519,15 @@ export class World {
     if (from && to) this.roads.travel(from, to, color);
   }
 
-  // arcs from a selected file (imports / imported by) or place (all its ties)
+  // arcs from a selected file (imports / imported by) or place (all its ties); the places
+  // at their other ends light up in the tie's colour (selFrame)
   showSelection(sel: { tt: number; ti: number } | null) {
-    if (this.selLines) { this.group.remove(this.selLines); this.selLines.geometry.dispose(); this.selLines = null; }
-    this.sel = sel;
+    if (this.selLines) {
+      this.group.remove(this.selLines);
+      for (const l of this.selLines.children as LineSegments2[]) { l.geometry.dispose(); l.material.dispose(); }
+      this.selLines = null;
+    }
+    this.sel = sel; this.selNear = [];
     this.roads.select([]);
     if (!sel) return;
     const c = this.city;
@@ -520,7 +541,9 @@ export class World {
       const top = (i: number) => new THREE.Vector3(c.files[i].x, this.files.heights[i] * this.files.rise[i] + 0.4, c.files[i].z);
       for (const [a, b] of c.fileEdges) {
         if (a !== sel.ti && b !== sel.ti) continue;
-        arc(top(a), top(b), new THREE.Color(a === sel.ti ? '#ffb547' : '#5ee6ff')); // amber: imports, cyan: imported by
+        const col = new THREE.Color(a === sel.ti ? TIE.imp : TIE.work); // amber: imports, cyan: imported by
+        arc(top(a), top(b), col);
+        this.selNear.push({ tt: 0, ti: a === sel.ti ? b : a, color: col });
       }
     } else if (sel.tt === 1 || sel.tt === 3) {
       // ties with a street light it up; the few without one arc over the city
@@ -529,21 +552,93 @@ export class World {
       c.links.forEach((l, k) => {
         const ka = refKey(l.a as Ref), kb = refKey(l.b as Ref);
         if (ka !== me && kb !== me) return;
-        const col = new THREE.Color(linkColor(l));
+        const col = new THREE.Color(linkColor(l)), other = (ka === me ? l.b : l.a) as Ref;
+        this.selNear.push({ tt: other[0], ti: other[1], color: col });
         if (this.roads.hasRoad(k)) { lit.push({ k, color: col }); return; }
-        const other = (ka === me ? l.b : l.a) as Ref;
         const p0 = this.center([sel.tt, sel.ti]), p1 = this.center(other);
         p0.y = 1; p1.y = 1;
-        arc(p0, p1, col.multiplyScalar(0.55), 2);
+        arc(p0, p1, col, 2);
       });
       this.roads.select(lit);
     }
     if (!pts.length) return;
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
-    this.selLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    // fat screen-space lines over everything, each on a white casing so it reads on grass, lots and roofs alike
+    const line = (width: number, color: boolean, order: number) => {
+      const g = new LineSegmentsGeometry(); g.setPositions(pts);
+      if (color) g.setColors(cols);
+      const m = new LineMaterial({ color: 0xffffff, vertexColors: color, linewidth: width, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false });
+      const l = new LineSegments2(g, m); l.renderOrder = order; l.frustumCulled = false;
+      return l;
+    };
+    this.selLines = new THREE.Group();
+    this.selLines.add(line(6, false, 20), line(3, true, 21));
     this.group.add(this.selLines);
+  }
+
+  // The selection frame follows the selected place (it can be dragged, it rises in a
+  // replay) and its buildings glow: a file, or every building of a block.
+  private selFrame(dt: number, t: number) {
+    const s = this.sel, c = this.city;
+    let r: { x: number; z: number; w: number; h: number; y: number; line: number; onTop?: boolean } | null = null;
+    const lit: { tt: number; ti: number }[] = [];
+    if (s?.tt === 0 && c.files[s.ti]) {
+      const k = this.plateIdx.get(refKey([1, c.files[s.ti].m]));
+      if (this.lod === 'modules' && k != null) r = this.plateRect(k, 0.14);
+      else { const i = s.ti, F = this.files, g = 0.3; r = { x: F.pos[i * 3] - F.w[i] / 2 - g, z: F.pos[i * 3 + 2] - F.d[i] / 2 - g, w: F.w[i] + g * 2, h: F.d[i] + g * 2, y: 0.32, line: 0.1, onTop: true }; } // its neighbours would hide it
+      lit.push(s);
+    } else if (s && (s.tt === 1 || s.tt === 3)) {
+      const k = this.plateIdx.get(refKey([s.tt, s.ti]));
+      if (k != null && this.plateRise[k] > 0.05) r = this.plateRect(k, 0.14);
+      lit.push(s);
+      if (s.tt === 1 && this.lod === 'files') c.files.forEach((f, i) => { if (f.m === s.ti) lit.push({ tt: 0, ti: i }); });
+    } else if (s?.tt === 2) {
+      const d = c.districts[s.ti];
+      if (d?.members.length) r = { x: d.x - LOT_MARGIN, z: d.z - LOT_MARGIN, w: d.w + LOT_MARGIN * 2, h: d.h + LOT_MARGIN * 2, y: 0.02, line: 0.28 };
+    }
+    this.highlight.set(r);
+    // what it is tied to glows in the colour of the tie (a block's files too, when files are shown)
+    const near = (m: { tt: number; ti: number }, color: THREE.Color) => {
+      const b = this.resolve(m.tt, m.ti); if (!b) return;
+      b.I.flash[b.i] = Math.max(b.I.flash[b.i], 0.5 + 0.1 * Math.sin(t * 4));
+      const col = b.I.col; col[b.i * 3] = color.r; col[b.i * 3 + 1] = color.g; col[b.i * 3 + 2] = color.b;
+    };
+    for (const n of this.selNear) {
+      near(n, n.color);
+      if (n.tt === 1 && this.lod === 'files') c.files.forEach((f, i) => { if (f.m === n.ti) near({ tt: 0, ti: i }, n.color); });
+    }
+    let top = 0;
+    for (const m of lit) {
+      const b = this.resolve(m.tt, m.ti); if (!b) continue;
+      const lift = b.I === this.files ? this.fileRise.value : b.I === this.modules ? this.modRise.value : 1;
+      top = Math.max(top, b.I.mesh.position.y + b.I.heights[b.i] * b.I.rise[b.i] * lift);
+      b.I.flash[b.i] = Math.max(b.I.flash[b.i], 0.32 + 0.12 * Math.sin(t * 4));
+      const col = b.I.col; col[b.i * 3] = col[b.i * 3 + 1] = col[b.i * 3 + 2] = 1;
+    }
+    // the pin hangs over the middle of the footprint, above its tallest building
+    const pt = r && s?.tt !== 2 ? { x: r.x + r.w / 2, y: Math.max(top, r.y) + 0.4, z: r.z + r.h / 2 } : null;
+    this.highlight.setTop(pt);
+    this.highlight.lift += (this.pinLift(pt) - this.highlight.lift) * Math.min(1, dt * 8);
+    this.highlight.frame(dt, t, this.stage.viewSize);
+  }
+  // Session tags and labels sit right over building tops and would hide the pin: it rises
+  // (world units) until it clears every box it would overlap on screen.
+  private pinLift(p: { x: number; y: number; z: number } | null) {
+    if (!p) return 0;
+    const a = this.stage.project(new THREE.Vector3(p.x, p.y, p.z)), b = this.stage.project(new THREE.Vector3(p.x, p.y + 1, p.z));
+    const ppu = a.y - b.y; // screen pixels per world unit up
+    if (!a.visible || ppu <= 0) return 0;
+    const R = this.highlight.reach(this.stage.viewSize), len = (R.hi - R.lo) * ppu, w = Math.max(14, R.w * ppu * 1.3);
+    let tip = a.y - R.lo * ppu;
+    const boxes = [...this.tagBoxes, ...this.labelBoxes];
+    for (let moved = true, n = 0; moved && n < 12; n++) {
+      moved = false;
+      for (const q of boxes) if (Math.abs(q.x - a.x) * 2 < q.w + w && tip - len < q.y + q.h / 2 && tip > q.y - q.h / 2) { tip = q.y - q.h / 2 - 4; moved = true; }
+    }
+    return (a.y - tip) / ppu - R.lo;
+  }
+  private plateRect(k: number, line: number) {
+    const D = this.plateDim;
+    return { x: D[k * 4], z: D[k * 4 + 1], w: D[k * 4 + 2], h: D[k * 4 + 3], y: 0.32, line };
   }
 
   setLod(z: number) {
@@ -597,23 +692,27 @@ export class World {
       }
       const beat = 0.5 + 0.5 * Math.sin(t * 3.1 + a.seed); // one breath every ~2s
       I.beat[i] = a.level * (0.3 + 0.7 * beat);
+      const c = ink(a.color, tmpC), day = 1 - ENV.night.value, blend = glowBlend();
       if (a.on) { // drift the building's glow colour to the session's
-        I.col[i * 3] += (a.color.r - I.col[i * 3]) * 0.1; I.col[i * 3 + 1] += (a.color.g - I.col[i * 3 + 1]) * 0.1; I.col[i * 3 + 2] += (a.color.b - I.col[i * 3 + 2]) * 0.1;
+        I.col[i * 3] += (c.r - I.col[i * 3]) * 0.1; I.col[i * 3 + 1] += (c.g - I.col[i * 3 + 1]) * 0.1; I.col[i * 3 + 2] += (c.b - I.col[i * 3 + 2]) * 0.1;
       }
+      for (const o of [a.glow, a.roof, ...a.waves]) (o.material as THREE.Material).blending = blend;
       const rise = I.rise[i] * (I === this.files ? this.fileRise.value : I === this.modules ? this.modRise.value : 1);
       const x = I.pos[i * 3], z = I.pos[i * 3 + 2], base = I.mesh.position.y + 0.03, top = base + I.heights[i] * rise;
       const r = Math.min(Math.max(I.w[i], I.d[i]), 4) * 0.72 * zoom; // a whole module block must not flood the city
       a.glow.position.set(x, base, z);
       a.glow.scale.setScalar(r * (4 + beat));
-      const gm = a.glow.material as THREE.MeshBasicMaterial; gm.color.copy(a.color); gm.opacity = a.level * (0.3 + 0.4 * beat);
+      // by day these cover the ground instead of lighting it: a softer pool, a smaller
+      // roof halo (it would hide the painted roof), rings at full strength
+      const gm = a.glow.material as THREE.MeshBasicMaterial; gm.color.copy(c); gm.opacity = a.level * (0.3 + 0.4 * beat) * (1 - 0.35 * day);
       a.roof.position.set(x, top + 0.25, z);
-      a.roof.scale.setScalar(r * (2.2 + 1.4 * beat));
-      const rm = a.roof.material as THREE.SpriteMaterial; rm.color.copy(a.color); rm.opacity = a.level * (0.25 + 0.45 * beat);
+      a.roof.scale.setScalar(r * (2.2 + 1.4 * beat) * (1 - 0.4 * day));
+      const rm = a.roof.material as THREE.SpriteMaterial; rm.color.copy(c); rm.opacity = a.level * (0.25 + 0.45 * beat) * (1 - 0.4 * day);
       a.waves.forEach((m, k) => {
         const ph = (t * 0.5 + k / WAVES + a.seed) % 1;
         m.position.set(x, base + 0.02, z);
         m.scale.setScalar(r * (0.9 + ph * 3.6));
-        const mm = m.material as THREE.MeshBasicMaterial; mm.color.copy(a.color).multiplyScalar(1.6); mm.opacity = a.level * 0.85 * (1 - ph) * (1 - ph);
+        const mm = m.material as THREE.MeshBasicMaterial; mm.color.copy(c).multiplyScalar(1 + 0.6 * ENV.night.value); mm.opacity = a.level * 0.85 * (1 - ph) * (1 - ph * ENV.night.value);
       });
     }
   }
@@ -818,6 +917,7 @@ export class World {
     if (!animate || Math.abs(t - this.ageAt) > 3600e3) { this.ageAt = t; this.ages(Math.min(t, Date.now())); }
     this.grounds.update(t);
     this.dressing?.setTime(t);
+    this.follies?.setTime(t);
     const c = this.city;
     const born = (I: Inst, i: number, alive: boolean) => {
       const to = alive ? 1 : 0;
@@ -874,6 +974,17 @@ export class World {
     return b[lo];
   }
 
+  // The folly (follies.ts) under the pointer, unless a building stands in front of it.
+  follyAt(clientX: number, clientY: number) {
+    const r = this.stage.renderer.domElement.getBoundingClientRect();
+    const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1), this.stage.camera);
+    const f = this.follies.hit(ray.ray);
+    if (!f) return null;
+    const front = ray.intersectObjects([this.towers.mesh, this.domes.mesh, this.stores.mesh, this.lod === 'files' ? this.files.mesh : this.modules.mesh], false)
+      .find(h => h.instanceId != null && !(h.object === this.files.mesh && this.files.rise[h.instanceId] < 0.05));
+    return front && front.distance < f.dist ? null : this.follies.rides[f.i];
+  }
+
   pick(clientX: number, clientY: number): { tt: number; ti: number } | null {
     const r = this.stage.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
@@ -905,7 +1016,7 @@ export class World {
     (this.grid.material as THREE.LineBasicMaterial).color.copy(GRID_DAY).lerp(GRID_NIGHT, n);
     (this.grid.material as THREE.LineBasicMaterial).opacity = 0.07 + 0.48 * n; // by day the grass carries the ground
     this.grounds.tone(n);
-    this.plateHue.forEach((hue, k) => this.plates.setColorAt(k, tmpC.setHSL(hue / 360, 0.3 + 0.15 * n, 0.7 - 0.6 * n)));
+    this.plateHue.forEach((hue, k) => this.plates.setColorAt(k, tmpC.setHSL(hue / 360, 0.45, 0.76 - 0.66 * n)));
     if (this.plates.instanceColor) this.plates.instanceColor.needsUpdate = true;
   }
 
@@ -921,6 +1032,7 @@ export class World {
     this.files.mesh.visible = this.fileRise.value > 0.01;
     this.modules.mesh.visible = this.modRise.value > 0.01;
 
+    this.selFrame(dt, t);
     for (const m of this.marks) { // hovered footprint: held lit
       const r = this.resolve(m.tt, m.ti); if (!r) continue;
       r.I.flash[r.i] = Math.max(r.I.flash[r.i], 0.55 + 0.25 * Math.sin(t * 6));
@@ -973,6 +1085,7 @@ export class World {
     this.fileRoofs.sync(); this.modRoofs.sync();
     this.roads.frame(dt, this.stage.viewSize);
     this.dressing.frame(dt, t);
+    this.follies.frame(dt, t);
     this.life.frame(dt, t, this.stage.viewSize);
     // beacons ride on their buildings and blink: slow idle pulse + flash on traffic
     const bc = this.beacons.instanceColor;
@@ -1026,6 +1139,7 @@ export class World {
       if (L.el.style.display === 'none') L.el.style.display = '';
       L.el.style.transform = `translate(${o.x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%)`;
     }
+    this.labelBoxes = taken;
   }
 
   dispose() {
@@ -1045,9 +1159,11 @@ function scaffoldGeo() {
 }
 
 // Why two places are tied: amber imports, violet named in code, cyan worked on together.
+// Deep enough to read on the light day ground; the schematic's COL uses the same three.
+const TIE = { imp: '#d98a1c', ref: '#8a5cf0', work: '#1798bd' };
 export function linkColor(l: { imp: number; ref: number; task: number; commit: number }) {
   const imp = Math.log2(1 + l.imp) * 1.5, ref = Math.log2(1 + l.ref) * 2, work = Math.log2(1 + l.task) * 1.2 + Math.log2(1 + l.commit);
-  return imp >= ref && imp >= work ? '#ffb547' : ref >= work ? '#b48cff' : '#5ee6ff';
+  return imp >= ref && imp >= work ? TIE.imp : ref >= work ? TIE.ref : TIE.work;
 }
 
 // 0 cold blue -> 1 hot amber/white, for the colour modes

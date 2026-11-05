@@ -29,7 +29,8 @@ function roadMaterial(uT: { value: number }, uTime: { value: number }) {
         if (aBorn > uT) transformed = vec3(0.0);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform float uTime; uniform float uNight; varying vec4 vRoad; varying float vKind; varying float vGlow; varying vec3 vCol;
+        uniform float uTime; uniform float uNight;
+        varying vec4 vRoad; varying float vKind; varying float vGlow; varying vec3 vCol;
         // a line of half width w around d == 0 that fades out instead of shimmering when thinner than a pixel
         float line(float d, float w) { float f = max(fwidth(d), 1e-4); return clamp((w - abs(d)) / f + 0.5, 0.0, 1.0) * clamp(w * 2.5 / f, 0.0, 1.0); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
@@ -46,7 +47,9 @@ function roadMaterial(uT: { value: number }, uTime: { value: number }) {
         diffuseColor.rgb = mix(mix(vec3(0.2, 0.2, 0.21), vec3(0.42, 0.42, 0.43), curb), mix(vec3(0.085, 0.09, 0.105), vec3(0.2, 0.21, 0.24), curb), uNight);
         float day = 1.0 - uNight;
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.85), edgeL * 0.7 * day);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vKind > 0.5 ? vec3(0.95, 0.62, 0.12) : vec3(0.9), paint * day);`)
+        diffuseColor.rgb = mix(diffuseColor.rgb, vKind > 0.5 ? vec3(0.95, 0.62, 0.12) : vec3(0.9), paint * day);
+        // a lit street (selection, traffic) by day: the glow would not show on grey asphalt, so the lane takes its colour
+        diffuseColor.rgb = mix(diffuseColor.rgb, vCol, min(vGlow, 1.0) * 0.85 * day * (1.0 - curb));`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += vec3(0.5, 0.53, 0.6) * edgeL * 0.22 * uNight;
         totalEmissiveRadiance += (vKind > 0.5 ? vec3(1.0, 0.7, 0.25) : vec3(0.8, 0.8, 0.76)) * paint * 0.5 * uNight;
@@ -211,7 +214,7 @@ export class Roads {
   // Hold the streets of a selected place lit, each in the colour of its tie.
   select(list: { k: number; color: THREE.Color }[]) {
     this.hold.fill(0);
-    for (const { k, color } of list) { const qs = this.linkQuads.get(k); if (!qs) continue; for (const q of qs) this.hold[q] = 0.75; this.paint(qs, color); }
+    for (const { k, color } of list) { const qs = this.linkQuads.get(k); if (!qs) continue; for (const q of qs) this.hold[q] = 1; this.paint(qs, color); }
   }
   hasRoad(k: number) { return this.linkQuads.has(k); }
 

@@ -5,7 +5,7 @@ import type { World } from './world';
 // The city's look follows its health (smog for spend, lit streets for shipping,
 // litter by stale uncommitted files, run-down buildings for churn, cones where
 // sessions collided), and milestones unlock cosmetics: a name sign, a landmark
-// spire (golden at 1,000 commits), fireworks on commits, snow and an aurora.
+// spire (golden at 1,000 commits), fireworks on commits and an aurora.
 // Cosmetics never touch the score. Everything here is owned by one World.
 const GRAVITY = 9;
 type Burst = { pts: THREE.Points; vel: Float32Array; age: number; life: number };
@@ -17,7 +17,6 @@ export class Mood {
   private litter: THREE.InstancedMesh; private cones: THREE.InstancedMesh;
   private sign: THREE.Group; private signLabel: HTMLDivElement | null = null;
   private spire: THREE.Group; private spireMat: THREE.MeshStandardMaterial; private spireTip: THREE.MeshBasicMaterial;
-  private snow: THREE.Points | null = null; private snowVel: Float32Array | null = null;
   private aurora: THREE.Group | null = null;
   private bursts: Burst[] = [];
   private on = new Set<string>();
@@ -122,7 +121,6 @@ export class Mood {
     const gold = this.on.has('gold');
     this.spireMat.color.set(gold ? '#d9a93f' : '#8fa3c8'); this.spireMat.emissive.set(gold ? '#6a4a0c' : '#1d2a44');
     this.spireTip.color.set(gold ? '#ffd27a' : '#7fe0ff');
-    if (this.on.has('snow') && !this.snow) this.makeSnow(); else if (!this.on.has('snow') && this.snow) { this.group.remove(this.snow); this.snow.geometry.dispose(); this.snow = null; }
     if (this.on.has('aurora') && !this.aurora) this.makeAurora(); else if (!this.on.has('aurora') && this.aurora) { this.group.remove(this.aurora); this.aurora = null; }
   }
   has(key: string) { return this.on.has(key); }
@@ -148,19 +146,6 @@ export class Mood {
     pts.frustumCulled = false;
     this.group.add(pts);
     this.bursts.push({ pts, vel, age: 0, life: 2.2 });
-  }
-
-  private makeSnow() {
-    const B = this.bounds, n = 1800, pos = new Float32Array(n * 3);
-    this.snowVel = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      pos.set([B.x0 - 20 + Math.random() * (B.x1 - B.x0 + 40), Math.random() * B.span * 0.35, B.z0 - 20 + Math.random() * (B.z1 - B.z0 + 40)], i * 3);
-      this.snowVel[i] = 2 + Math.random() * 3;
-    }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.snow = new THREE.Points(g, new THREE.PointsMaterial({ color: '#dfe9ff', size: 2, sizeAttenuation: false, transparent: true, opacity: 0.8, depthWrite: false }));
-    this.snow.frustumCulled = false;
-    this.group.add(this.snow);
   }
 
   // ribbons of light that always face the camera, hung high over the far side of the city
@@ -196,15 +181,6 @@ export class Mood {
       pa.needsUpdate = true;
       (b.pts.material as THREE.PointsMaterial).opacity = Math.max(0, 1 - b.age / b.life);
       if (b.age >= b.life) { this.group.remove(b.pts); b.pts.geometry.dispose(); (b.pts.material as THREE.Material).dispose(); this.bursts.splice(k, 1); }
-    }
-    if (this.snow && this.snowVel) {
-      const pa = this.snow.geometry.attributes.position as THREE.BufferAttribute, p = pa.array as Float32Array, top = this.bounds.span * 0.35;
-      for (let i = 0; i < this.snowVel.length; i++) {
-        p[i * 3 + 1] -= this.snowVel[i] * dt;
-        p[i * 3] += Math.sin(t * 0.7 + i) * dt * 0.4;
-        if (p[i * 3 + 1] < 0) p[i * 3 + 1] = top;
-      }
-      pa.needsUpdate = true;
     }
     if (this.aurora) {
       const cam = this.world.stage.camera, B = this.bounds;
