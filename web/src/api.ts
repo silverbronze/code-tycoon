@@ -147,6 +147,39 @@ export interface OptJob {
   changed?: string[]; created?: string[]; kept?: string[]; undo: boolean;
 }
 
+// The domain map (server/domain.mjs): what the project is about, tied to the code and the real world
+export type EStatus = 'solid' | 'shaky' | 'partial' | 'missing' | 'unknown';
+export interface DEntity {
+  id: string; name: string; group: string; what: string; real: string; world: string[]; states: string[]; facts: string[];
+  code: { p: string; does: 'defines' | 'stores' | 'changes' | 'shows' | 'uses'; note: string }[]; status: EStatus; statusWhy: string;
+}
+// start, end, step files and risks are missing on maps built before they were asked for
+export interface DFlow {
+  id: string; name: string; why: string; start?: { world: string | null; by: string }; end?: { world: string | null; outcome: string };
+  steps: { e: string; do: string; files?: string[]; risk?: string }[]; files: string[]; status: 'works' | 'partial' | 'broken' | 'unknown'; note: string;
+}
+export interface DAssumption {
+  id: string; text: string; holds: boolean; was: string; now: string; entities: string[]; files: string[];
+  evidence: string; cost: string; fix: string; severity: 'high' | 'medium' | 'low';
+}
+export interface DomainModel {
+  summary: string; groups: { id: string; name: string; what: string }[];
+  world: { id: string; name: string; kind: 'person' | 'system' | 'device' | 'place' | 'thing' | 'money'; what: string }[];
+  entities: DEntity[]; relations: { a: string; b: string; verb: string; card: string }[]; flows: DFlow[]; assumptions: DAssumption[];
+}
+export interface DriftFile { p: string; score: number; markers: { line: number; text: string }[]; markerCount: number; pinned: { line: number; text: string }[]; lines: number; rework: number; age: number; twin: boolean; churn: number }
+export interface DomainJob { id: string; kind: 'build' | 'update'; state: 'working' | 'done' | 'error'; started: number; ended?: number; model: string | null; cost: number; error?: string }
+export interface BriefResult {
+  goal: string; entities: string[]; flows: string[]; newEntities: { name: string; what: string }[]; done: string[]; missing: string[];
+  files: { p: string; why: string; act: 'edit' | 'read' | 'new' }[]; respect: { a: string | null; text: string }[];
+  drift: { a: string | null; text: string; how: string; why: string }[]; steps: string[]; questions: string[]; prompt: string;
+}
+export interface Brief { id: string; task: string; state: 'working' | 'done' | 'error'; started: number; ended?: number; model: string | null; cost: number; error?: string; result: BriefResult | null }
+export interface DomainState {
+  model: DomainModel | null; job: DomainJob | null; briefs: Brief[]; drift: DriftFile[]; llm: string | null;
+  meta: { builtAt: number; head: string | null; cost: number; model: string | null; kind: string; changed: string[]; changedCount: number } | null;
+}
+
 // hooks: live updates from Claude Code; autostart: null where the platform has none
 export interface Setup { hooks: boolean; autostart: boolean | null }
 
@@ -194,6 +227,16 @@ export const api = {
     const r = await post(`/api/projects/${enc(id)}/optimize/${step}`, { key, ...extra });
     return { status: r.status, ...(await r.json()) } as { status: number; job?: OptJob; error?: string; busy?: { id: string; title: string | null }[]; restored?: string[]; kept?: string[] };
   },
+  domain: (id: string) => get<DomainState>(`/api/projects/${enc(id)}/domain`),
+  domainStep: async (id: string, step: 'build' | 'update' | 'stop') => {
+    const r = await post(`/api/projects/${enc(id)}/domain/${step}`, {});
+    return { status: r.status, ...(await r.json()) } as { status: number; job?: DomainJob; error?: string };
+  },
+  brief: async (id: string, task: string) => {
+    const r = await post(`/api/projects/${enc(id)}/brief`, { task });
+    return { status: r.status, ...(await r.json()) } as { status: number; brief?: Brief; error?: string };
+  },
+  dropBrief: (id: string, bid: string) => post(`/api/projects/${enc(id)}/brief/drop`, { id: bid }),
   file: (id: string, p: string) => get<{ path: string; tasks: { id: string; s: string; ts: number; kinds: string; title: string | null; prompt: string }[] }>(`/api/projects/${enc(id)}/file?p=${enc(p)}`),
 };
 

@@ -41,6 +41,7 @@ export class Stage {
   private ro: ResizeObserver;
   readonly el: HTMLElement;
   fps = 60;
+  hidden = false; // another layer is showing: frames still run, nothing is drawn
   onZoom: ((z: number) => void) | null = null;
   // the camera angle changed; atDefault is true when it is (heading back to) the default angle
   onView: ((azimuth: number, elevation: number, atDefault: boolean) => void) | null = null;
@@ -116,6 +117,9 @@ export class Stage {
       this.target.z + d * Math.cos(this.elevation) * Math.sin(this.azimuth));
     this.camera.lookAt(this.target);
     this.camera.updateProjectionMatrix();
+    // haze only past the back of the view: a fixed fog paled the far half of the city
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) { fog.near = d + v * 0.45; fog.far = d + v * 1.6; }
     if (v !== this.lastZoom) { this.lastZoom = v; this.onZoom?.(v); }
     this.onView?.(this.azimuth, this.elevation, this.atDefaultAngle());
   }
@@ -144,6 +148,17 @@ export class Stage {
     this.panVel.set(0, 0); this.zoomAnchor = null;
     gsap.to(this.goal, { x, z, duration, ease: 'power3.inOut' });
     if (viewSize) gsap.to(this.goal, { viewSize, duration, ease: 'power3.inOut' });
+  }
+
+  // Jump, at the current zoom and angle, so ground point p shows at a screen point (client coordinates).
+  pin(p: THREE.Vector3, clientX: number, clientY: number) {
+    this.stopMotion();
+    Object.assign(this.goal, { x: this.target.x, z: this.target.z, viewSize: this.size, azimuth: this.azimuth, elevation: this.elevation });
+    this.updateCamera();
+    const g = this.groundAt(clientX, clientY, p.y);
+    if (!g) return;
+    this.target.x = this.goal.x += p.x - g.x; this.target.z = this.goal.z += p.z - g.z;
+    this.updateCamera();
   }
 
   // Back to the default angle with the whole city in view, turning the short way round.
@@ -320,7 +335,7 @@ export class Stage {
     this.fps = this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05;
     this.step(dt);
     for (const f of this.frames) f(dt, now / 1000);
-    this.composer.render(dt);
+    if (!this.hidden) this.composer.render(dt);
   };
 
   dispose() {

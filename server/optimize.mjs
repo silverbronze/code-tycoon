@@ -66,7 +66,7 @@ function scope(c, key) {
   return { label, kind, desc, files };
 }
 
-function runCli(args, { cwd, env, prompt, timeoutMs, onSpawn }) {
+export function runCli(args, { cwd, env, prompt, timeoutMs, onSpawn }) {
   return new Promise((resolve, reject) => {
     const p = spawn(findClaudeCli(), ['-p', '--output-format', 'json', ...args], { cwd, windowsHide: true, env: { ...process.env, ...env } });
     onSpawn?.(p);

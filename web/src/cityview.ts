@@ -9,6 +9,7 @@ import { World, linkColor } from './city/world';
 import { Actors, colorCss } from './city/actors';
 import { TimelineView, KIND_COLORS } from './ui/timeline';
 import { Schematic } from './schematic';
+import { DomainMap } from './domain';
 import { applyLayout, hasLayout, resetLayout } from './city/layout';
 import { Pulse } from './pulse';
 import { HealthChip } from './health';
@@ -29,13 +30,16 @@ const STATE_ORDER: [string, string][] = [['needs-you', 'Needs you'], ['working',
 const COLOR_MODES: [string, string][] = [['district', 'Colour: district'], ['recent', 'Colour: recent edits'], ['churn', 'Colour: churn'], ['rework', 'Colour: rework (30d)'],
   ['growth', 'Colour: growth (30d)'], ['tested', 'Colour: tested'], ['session', 'Colour: last session']];
 type ColorMode = 'district' | 'recent' | 'churn' | 'rework' | 'growth' | 'tested' | 'session';
+type Layer = 'domain' | 'city' | 'schematic';
+const LAYERS: Layer[] = ['domain', 'city', 'schematic'];
+const LAYER_NAME: Record<Layer, string> = { domain: 'Domain', city: 'City', schematic: 'Schematic' };
 type Tab = 'log' | 'inspect' | 'digest' | 'review' | 'insights';
 const CHECK_NAME: Record<string, string> = { test: 'Tests', build: 'Build', types: 'Types', lint: 'Lint' };
 
 export class CityView {
   root: HTMLDivElement;
-  stage!: Stage; world!: World; actors!: Actors; tl!: TimelineView; schem!: Schematic;
-  layer: 'city' | 'schematic' = 'city';
+  stage!: Stage; world!: World; actors!: Actors; tl!: TimelineView; schem!: Schematic; domain!: DomainMap;
+  layer: Layer = 'city';
   city!: City; data!: Timeline;
   colors: THREE.Color[] = []; colorStr: string[] = [];
   sIndex = new Map<string, number>(); taskIndex = new Map<string, number>(); agentIndex = new Map<string, number>();
@@ -123,6 +127,8 @@ export class CityView {
     this.stage.grab = (x, y) => this.layer === 'city' ? this.world.grab(x, y) : null;
     this.actors = new Actors(this.stage, this.world);
     this.makeSchematic();
+    this.domain = new DomainMap(this.root, this.pid, city, { onFile: p => this.openFile(p), onLayout: () => this.placeOccluders() });
+    this.root.insertBefore(this.domain.el, this.els.layers);
     this.makeMood();
     this.sky = new Sky(this.stage);
     this.stage.onFrame((dt, t) => this.sky?.update(dt, t, this.t));
@@ -165,6 +171,10 @@ export class CityView {
     this.stage.viewSize = span * 0.9; this.stage.updateCamera();
     this.stage.flyTo(0, 0, span * 0.55, 1.8);
     if (this.pendingFollow) { const sid = this.pendingFollow; this.pendingFollow = null; setTimeout(() => this.focusOn(sid), 1900); }
+    // the domain map is the front page; a layer picked before is kept per browser
+    let first: Layer = 'domain';
+    try { const v = localStorage.getItem('vz-layer') as Layer; if (LAYERS.includes(v)) first = v; } catch {}
+    this.setLayer(first);
   }
 
   private indexFiles() { this.fileIndex = new Map(this.city.files.map((f, i) => [f.p.toLowerCase(), i])); }
@@ -204,10 +214,10 @@ export class CityView {
       const b = h('button', { class: 'ly-check' + (on0 ? ' on' : ''), title, onclick: () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); f(on); } }, h('i', {}), label);
       return b;
     };
-    const thumb = (which: 'city' | 'schematic') => { const t = h('span', { class: 'ly-thumb' }); t.innerHTML = which === 'city' ? CITY_THUMB : SCHEM_THUMB; return t; };
-    e.layerTile = h('button', { class: 'ly-tile', title: 'Switch map layer (M)', onclick: () => this.setLayer(this.layer === 'city' ? 'schematic' : 'city') });
-    e.layerTypes = h('div', { class: 'ly-types' }, ...(['city', 'schematic'] as const).map(w =>
-      h('button', { class: 'ly-type' + (w === 'city' ? ' on' : ''), 'data-layer': w, onclick: () => this.setLayer(w) }, thumb(w), w === 'city' ? 'City' : 'Schematic')));
+    const thumb = (which: Layer) => { const t = h('span', { class: 'ly-thumb' }); t.innerHTML = THUMB[which]; return t; };
+    e.layerTile = h('button', { class: 'ly-tile', title: 'Switch map layer (M)', onclick: () => this.setLayer(this.nextLayer()) });
+    e.layerTypes = h('div', { class: 'ly-types' }, ...LAYERS.map(w =>
+      h('button', { class: 'ly-type' + (w === this.layer ? ' on' : ''), 'data-layer': w, onclick: () => this.setLayer(w) }, thumb(w), LAYER_NAME[w])));
     e.cityOpts = h('div', { class: 'ly-opts' }, h('div', { class: 'ly-h' }, 'City details'),
       check('Roads', 'Streets between places that work together', on => this.world.showRoads(on)),
       check('Traffic', 'Cars drive the street a session just took', on => this.world.showTraffic(on)),
@@ -245,9 +255,9 @@ export class CityView {
       c.project.isGit ? e.changesBtn : null,
       e.colorSel,
       e.levelChip = h('span', { class: 'chip ghost', title: 'Zoom out for modules, in for files' }, 'Level: ', e.lod),
-      h('button', { class: 'chip icon', title: 'Rotate left (Q)', onclick: () => this.stage.rotate(-1) }, '⟲'),
-      h('button', { class: 'chip icon', title: 'Rotate right (E)', onclick: () => this.stage.rotate(1) }, '⟳'),
-      h('button', { class: 'chip icon', title: 'Fit city', onclick: () => this.stage.flyTo(0, 0, (c.project.w + c.project.h) * 0.55) }, '⤢'));
+      h('button', { class: 'chip icon', title: 'Rotate left (Q)', onclick: () => this.viewStage().rotate(-1) }, '⟲'),
+      h('button', { class: 'chip icon', title: 'Rotate right (E)', onclick: () => this.viewStage().rotate(1) }, '⟳'),
+      h('button', { class: 'chip icon', title: 'Fit the map', onclick: () => this.layer === 'domain' ? this.domain.fit() : this.stage.flyTo(0, 0, (c.project.w + c.project.h) * 0.55) }, '⤢'));
     e.header = header;
 
     e.drawer = h('div', { class: 'drawer glass' });
@@ -324,13 +334,17 @@ export class CityView {
     const box = this.root.getBoundingClientRect(), r = (x: HTMLElement) => x.getBoundingClientRect();
     const frame = { left: r(e.left).right, top: r(e.header).bottom, right: r(e.right).left, bottom: r(e.bottom).top };
     if (frame.right - frame.left < 200) { frame.left = box.left; frame.right = box.right; }
+    this.frameRect = frame;
+    // on the domain layer its panel takes the left of that part; the floating bits move right of it
+    const left = this.layer === 'domain' ? Math.min(frame.left + this.domain.panelWidth(), frame.right - 200) : frame.left;
     // the machine/session pulse floats at the top of that open part
-    Object.assign(e.pulse.style, { top: `${frame.top - box.top + 10}px`, left: `${(frame.left + frame.right) / 2 - box.left}px`, transform: 'translateX(-50%)', maxWidth: `${Math.max(200, frame.right - frame.left - 28)}px` });
+    Object.assign(e.pulse.style, { top: `${frame.top - box.top + 10}px`, left: `${(left + frame.right) / 2 - box.left}px`, transform: 'translateX(-50%)', maxWidth: `${Math.max(200, frame.right - left - 28)}px` });
     this.world.occluders = [e.header, e.left, e.right, e.bottom, e.drawer, e.pulse]
       .filter(x => x && x.offsetParent && x.style.display !== 'none').map(x => x.getBoundingClientRect());
-    Object.assign(e.layers.style, { left: `${frame.left - box.left + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
+    Object.assign(e.layers.style, { left: `${left - box.left + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
     Object.assign(e.compass.style, { right: `${box.right - frame.right + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
     this.schem?.setFrame(frame);
+    this.domain?.setFrame(frame);
   }
 
   // ---------------------------------------------------------------- layers
@@ -346,23 +360,61 @@ export class CityView {
     this.placeOccluders(); // the frame first, or a rebuilt schematic fits itself to the whole window
     if (this.layer === 'schematic') this.schem.setVisible(true);
   }
-  setLayer(which: 'city' | 'schematic') {
+  setLayer(which: Layer) {
     if (which === this.layer) return;
+    const anchor = this.layer !== 'domain' && which !== 'domain' ? this.layerAnchor() : null;
     this.layer = which;
-    const e = this.els, schem = which === 'schematic';
+    try { localStorage.setItem('vz-layer', which); } catch {}
+    const e = this.els, schem = which === 'schematic', notCity = which !== 'city';
     this.schem.setVisible(schem);
-    e.stage.style.visibility = e.overlay.style.visibility = e.tags.style.visibility = e.compass.style.visibility = schem ? 'hidden' : '';
-    e.levelChip.style.display = schem ? 'none' : '';
-    e.cityOpts.style.display = schem ? 'none' : '';
+    this.domain.setVisible(which === 'domain');
+    this.stage.hidden = notCity;
+    e.stage.style.visibility = e.overlay.style.visibility = e.tags.style.visibility = notCity ? 'hidden' : '';
+    e.compass.style.visibility = schem ? 'hidden' : '';
+    e.levelChip.style.display = notCity ? 'none' : '';
+    e.cityOpts.style.display = notCity ? 'none' : '';
+    e.colorSel.style.display = notCity ? 'none' : '';
     e.layerTypes.querySelectorAll('.ly-type').forEach(b => b.classList.toggle('on', (b as HTMLElement).dataset.layer === which));
     this.paintLayerTile();
     this.placeOccluders();
     this.els.tip.style.opacity = '0';
     if (schem && this.selected) this.schem.setSelected(this.placeRef(this.selected));
+    if (anchor && schem) this.schem.pin(anchor.r, anchor.x, anchor.y);
+    else if (anchor) this.stage.pin(this.world.center(anchor.r), anchor.x, anchor.y);
+  }
+  // The place both layers keep at the same spot on screen when switching: the selection, else the place
+  // nearest the middle of the open frame; where it is now, or that middle if it is out of view.
+  private frameRect = { left: 0, top: 0, right: 0, bottom: 0 };
+  private layerAnchor(): { r: [number, number]; x: number; y: number } | null {
+    const f = this.frameRect, mx = (f.left + f.right) / 2, my = (f.top + f.bottom) / 2;
+    let r = this.selected ? this.placeRef(this.selected) : null, at: [number, number] | null = null;
+    if (this.layer === 'city') {
+      if (!r) {
+        const g = this.stage.groundAt(mx, my); if (!g) return null;
+        let d = Infinity;
+        for (const p of this.world.roads.places) { const c = this.world.center(p), e = Math.hypot(c.x - g.x, c.z - g.z); if (e < d) { d = e; r = p; } }
+      }
+      if (!r) return null;
+      const p = this.stage.project(this.world.center(r)), box = this.stage.el.getBoundingClientRect();
+      at = [p.x + box.left, p.y + box.top];
+    } else {
+      r ??= this.schem.refAt(mx, my);
+      if (!r) return null;
+      at = this.schem.screenOf(r);
+    }
+    const shown = at && at[0] > f.left && at[0] < f.right && at[1] > f.top && at[1] < f.bottom;
+    return { r, x: shown ? at![0] : mx, y: shown ? at![1] : my };
   }
   private paintLayerTile() {
-    const other = this.layer === 'city' ? 'schematic' : 'city', t = this.els.layerTile;
-    t.innerHTML = `<span class="ly-thumb">${other === 'city' ? CITY_THUMB : SCHEM_THUMB}</span><span class="ly-name">${other === 'city' ? 'City' : 'Schematic'}</span>`;
+    const other = this.nextLayer(), t = this.els.layerTile;
+    t.innerHTML = `<span class="ly-thumb">${THUMB[other]}</span><span class="ly-name">${LAYER_NAME[other]}</span>`;
+  }
+  private nextLayer(): Layer { return LAYERS[(LAYERS.indexOf(this.layer) + 1) % LAYERS.length]; }
+  private viewStage() { return this.layer === 'domain' ? this.domain.stage : this.stage; }
+  // A file picked on the domain map opens in the Inspect tab.
+  private openFile(p: string) {
+    const i = this.fileIndex.get(p.toLowerCase());
+    if (i != null) this.select({ tt: 0, ti: i });
   }
   // The module or outside system a selection stands in (a file stands in its module).
   private placeRef(s: { tt: number; ti: number }): [number, number] | null {
@@ -375,7 +427,7 @@ export class CityView {
     if (ev.code === 'Space') { ev.preventDefault(); this.togglePlay(); }
     if (ev.key === 'Escape') { this.select(null); this.focusOn(null); this.toggleDrawer(false); }
     if (ev.key === 'l' || ev.key === 'L') this.goLive();
-    if (ev.key === 'm' || ev.key === 'M') this.setLayer(this.layer === 'city' ? 'schematic' : 'city');
+    if (ev.key === 'm' || ev.key === 'M') this.setLayer(this.nextLayer());
   };
 
   private tab(which: Tab) {
@@ -806,6 +858,7 @@ export class CityView {
       for (const [sid, ts] of this.lastSim) if (this.t - ts > ACTIVE_WINDOW) { this.actors.retire(sid); this.lastSim.delete(sid); }
     } else simDt = 0;
     if (simDt > 0) this.world.decayWarm(Math.exp(-simDt / WARM_TAU));
+    if (this.layer === 'domain') this.domain.setActive(this.world.working.map(w => ({ tt: w.tt, ti: w.ti, color: '#' + w.color.getHexString() })));
     if (this.layer === 'schematic') { this.schem.setTime(this.t); this.schem.setActive(this.world.working.map(w => ({ tt: w.tt, ti: w.ti, color: '#' + w.color.getHexString() }))); }
     if (performance.now() - this.gapNote > 2500 && this.els.gap.textContent) { this.els.gap.textContent = ''; this.warped = 0; }
     if ((this.uiTick++ % 15) === 0) { this.updateClock(); this.placeTags(); if (this.mode === 'replay' && this.playing && this.uiTick % 60 === 1) { this.renderSessions(); this.renderLog(); } }
@@ -947,6 +1000,7 @@ export class CityView {
     this.world.onMoved = this.onPlaceMoved;
     this.actors.world = this.world;
     this.makeSchematic();
+    this.domain.setCity(city);
     this.makeMood();
     this.hookLife();
     this.applyBirths(0, this.data.events.ts.length);
@@ -1535,6 +1589,8 @@ export class CityView {
   };
 
   private onClick(x: number, y: number) {
+    const folly = this.world.follyAt(x, y); // rides on open ground do a trick instead
+    if (folly) { folly.poke(); return; }
     const hit = this.world.pick(x, y);
     this.select(hit, false, true);
     if (!hit && this.curTab === 'inspect') this.tab('log');
@@ -1544,6 +1600,15 @@ export class CityView {
   private onHoverCity = (ev: PointerEvent) => {
     if (ev.buttons) { this.els.tip.style.opacity = '0'; return; }
     const now = performance.now(); if (now - this.hoverT < 60) return; this.hoverT = now;
+    const folly = this.world.follyAt(ev.clientX, ev.clientY);
+    if (folly) {
+      const tip = this.els.tip;
+      this.stage.renderer.domElement.style.cursor = 'pointer';
+      tip.innerHTML = `<b>${esc(folly.name)}</b><span class="hint">${esc(folly.hint)}</span>`;
+      tip.style.opacity = '1';
+      tip.style.transform = `translate(${ev.clientX + 14}px, ${ev.clientY + 14}px)`;
+      return;
+    }
     const hit = this.world.pick(ev.clientX, ev.clientY);
     this.stage.renderer.domElement.style.cursor = hit ? (hit.tt === 2 ? 'pointer' : 'grab') : ''; // places can be dragged, districts only opened
     this.showTip(hit, ev.clientX, ev.clientY);
@@ -1642,6 +1707,7 @@ export class CityView {
     this.mood?.dispose();
     this.sky?.dispose();
     this.schem?.dispose();
+    this.domain?.dispose();
     this.stage?.dispose();
     this.root.remove();
   }
@@ -1658,7 +1724,7 @@ function isStuck(s: LiveSession) {
   const H = s.health; if (!H) return false;
   return !!H.loop && H.loop.n >= 8 || Object.values(H.checks).some(c => c && c.fails >= 3) || (H.median > 0 && H.ratio >= 4 && s.state === 'working');
 }
-const MILESTONE_OF: Record<string, string> = { sign: 'first-commit', landmark: 'commits-100', fireworks: 'streak-7', snow: 'week-80', aurora: 'streak-30', gold: 'commits-1000' };
+const MILESTONE_OF: Record<string, string> = { sign: 'first-commit', landmark: 'commits-100', fireworks: 'streak-7', aurora: 'streak-30', gold: 'commits-1000' };
 function stateLabel(s: string) { return s === 'needs-you' ? 'Needs you' : s === 'working' ? 'Working' : s === 'waiting' ? 'Your turn' : s === 'idle' ? 'Idle' : s; }
 function stat(k: string, v: any) { return h('div', { class: 'stat' }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, String(v))); }
 function esc(s: string) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!)); }
@@ -1666,4 +1732,6 @@ function esc(s: string) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<':
 // Layer tile thumbnails: a little night city, and a little plan.
 const BELL = `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1.2 1.2H2.8z"/><path d="M6.6 14.2a1.5 1.5 0 0 0 2.8 0"/></svg>`;
 const CITY_THUMB =`<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#b9c99c"/><path d="M0 40h64M22 0v64M48 0v64" stroke="#8f8f92" stroke-width="5"/><path d="M0 40h64M22 0v64M48 0v64" stroke="#c9a14a" stroke-width=".7" stroke-dasharray="3 3"/><rect x="4" y="8" width="13" height="26" fill="#9fb0c4"/><rect x="27" y="14" width="16" height="20" fill="#b3a5cf"/><rect x="52" y="6" width="9" height="28" fill="#9cc0bc"/><rect x="5" y="46" width="12" height="14" fill="#c9c1a0"/><rect x="27" y="46" width="16" height="13" fill="#9fb0c4"/><g fill="#ffffff"><rect x="7" y="12" width="2" height="2"/><rect x="12" y="18" width="2" height="2"/><rect x="31" y="18" width="2" height="2"/><rect x="37" y="24" width="2" height="2"/><rect x="55" y="12" width="2" height="2"/><rect x="31" y="50" width="2" height="2"/></g><circle cx="35" cy="40" r="1.6" fill="#4fd8ff"/></svg>`;
+const DOMAIN_THUMB = `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#e9edf0"/><ellipse cx="32" cy="58" rx="30" ry="6" fill="#d3dbc8"/><path d="M21 22 Q32 31 43 24" stroke="#6d5d4b" stroke-width="1.4" fill="none"/><path d="M8 20h18l-9 16z" fill="#8f8270"/><ellipse cx="17" cy="20" rx="9" ry="3.2" fill="#9cbf7f"/><path d="M38 24h20l-10 18z" fill="#8f8270"/><ellipse cx="48" cy="24" rx="10" ry="3.6" fill="#8fc0a6"/><rect x="14" y="13" width="4" height="6" fill="#fff" stroke="#333" stroke-width=".6"/><rect x="45" y="16" width="5" height="7" fill="#fff" stroke="#333" stroke-width=".6"/><path d="M54 22v-9" stroke="#333"/><path d="M54 13h5l-5 3z" fill="#d2232a"/><path d="M17 36v16M48 42v10" stroke="#6a6a6a" stroke-dasharray="2 2"/></svg>`;
 const SCHEM_THUMB = `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#f7f7f5"/><path d="M0 16h64M0 32h64M0 48h64M16 0v64M32 0v64M48 0v64" stroke="#000" stroke-opacity=".06"/><rect x="5" y="6" width="54" height="26" rx="4" fill="none" stroke="#4a7fc0" stroke-opacity=".5" stroke-dasharray="3 2"/><rect x="9" y="11" width="18" height="11" rx="2" fill="#ffffff" stroke="#4a7fc0"/><rect x="37" y="11" width="18" height="11" rx="2" fill="#ffffff" stroke="#4a7fc0"/><path d="M27 16.5h10" stroke="#d98a1c" stroke-width="1.4"/><path d="M18 22v20h12" stroke="#8a5cf0" stroke-width="1.2" fill="none"/><path d="M46 22v20h-6" stroke="#1798bd" stroke-dasharray="2 2" fill="none"/><path d="M30 42h10" stroke="#8a5cf0" stroke-width="1.2"/><path d="M28 38h8l3 5-3 5h-8l-3-5z" fill="#f5f1fd" stroke="#7f55e0"/></svg>`;
+const THUMB: Record<Layer, string> = { domain: DOMAIN_THUMB, city: CITY_THUMB, schematic: SCHEM_THUMB };

@@ -21,6 +21,7 @@ import { scanIdle, idleSummary, stopIdle } from './idle.mjs';
 import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
 import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize } from './optimize.mjs';
 import { hooksInstalled, setHooks } from './hooks-install.mjs';
+import { onDomain, domainView, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted } from './domain.mjs';
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
@@ -82,6 +83,8 @@ onSummaries(msg => {
   else broadcast(msg, msg.pid);
 });
 onOptimize(msg => broadcast(msg, msg.pid));
+settleInterrupted();
+onDomain(msg => broadcast(msg, msg.pid));
 
 // Live items -> city places -> clients
 function fanOut(pid, items) {
@@ -413,6 +416,15 @@ const server = http.createServer(async (req, res) => {
             : parts[4] === 'stop' ? stopOptimize(pid, key)
             : parts[4] === 'undo' ? undoOptimize(pid, city(pid), key) : { error: 'unknown step' };
           return send(res, r.busy ? 409 : r.error ? 400 : 200, r, req);
+        }
+        // the domain map (server/domain.mjs): GET the map, POST build|update|stop, POST brief {task}, POST brief/drop {id}
+        if (parts[3] === 'domain' || parts[3] === 'brief') {
+          if (req.method !== 'POST') return send(res, 200, domainView(pid, city(pid)), req);
+          if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+          const b = JSON.parse(await readBody(req) || '{}');
+          const r = parts[3] === 'brief' ? (parts[4] === 'drop' ? dropBrief(pid, String(b.id || '')) : brief(pid, city(pid), b.task))
+            : parts[4] === 'stop' ? stopDomain(pid) : buildDomain(pid, city(pid), { update: parts[4] === 'update' });
+          return send(res, r.error === 'busy' ? 409 : r.error ? 400 : 200, r, req);
         }
         if (parts[3] === 'live') return send(res, 200, { sessions: openSessions(pid) }, req);
         if (parts[3] === 'task') return send(res, 200, taskDetail(parts[4]) || { error: 'not found' }, req);
