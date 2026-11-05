@@ -1,6 +1,6 @@
 {
   "name": "code-tycoon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Live isometric city of a project's architecture and the Claude Code sessions working on it.",
   "license": "AGPL-3.0-only",
@@ -11,7 +11,14 @@
     "url": "git+https://github.com/silverbronze/code-tycoon.git"
   },
   "bugs": "https://github.com/silverbronze/code-tycoon/issues",
-  "keywords": ["claude-code", "visualization", "isometric", "architecture", "three.js", "developer-tools"],
+  "keywords": [
+    "claude-code",
+    "visualization",
+    "isometric",
+    "architecture",
+    "three.js",
+    "developer-tools"
+  ],
   "bin": {
     "code-tycoon": "bin/code-tycoon.mjs"
   },
