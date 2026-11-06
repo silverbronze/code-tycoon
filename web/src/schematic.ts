@@ -117,6 +117,7 @@ export class Schematic {
   private islandX = 0; private overBottom = 0; // islands hang centred under the map
   private pending: { island: number; from: Pt | null } | null = null; // set around host.onPick: where the click came from
   private hits: { x0: number; y0: number; x1: number; y1: number; fn: () => void }[] = []; // canvas buttons drawn this frame
+  private segs: [Pt, Pt][] = []; // runs of the lines drawn so far this frame (screen px): a later line hops over them
 
   constructor(parent: HTMLElement, public city: City, private host: SchematicHost) {
     this.el = h('div', { class: 'schematic' }) as HTMLDivElement;
@@ -675,7 +676,7 @@ export class Schematic {
     this.o = this.origin();
     ctx.setTransform(d, 0, 0, d, 0, 0);
     ctx.fillStyle = '#f7f7f5'; ctx.fillRect(0, 0, W, H);
-    this.off = [0, 0]; this.hits = [];
+    this.off = [0, 0]; this.hits = []; this.segs = [];
     this.drawGrid(W, H);
     const inIsles = this.islands.length > 0 && this.view.cy > this.overBottom + ISLE_GAP / 2;
     this.legend.style.display = inIsles ? 'none' : ''; // down among the islands the section titles say what colours mean
@@ -1197,11 +1198,24 @@ export class Schematic {
     const line = pts.map(p => [p[0], p[1]] as Pt);
     if (hOut) line[e] = back(pts[e - 1], pts[e], hOut * 0.7);
     if (hIn) line[0] = back(pts[1], pts[0], hIn * 0.7);
-    ctx.beginPath(); roundedPath(ctx, line, r, hOut, hIn);
+    // Where it crosses a line drawn before it, it hops over in a small arc, so the two never read as one junction.
+    // No hop near its ends or bends (the station, the arrowhead and the rounded corner keep their shape).
+    const hr = Math.max(6, lw * 2 + 3), hops: number[][] = [];
+    for (let i = 0; i < e; i++) {
+      const a = line[i], b = line[i + 1], L = len(a, b);
+      const lo = (i === 0 ? 4 : r) + hr + 2, hi = L - (i === e - 1 ? 4 : r) - hr - 2, ds: number[] = [];
+      if (hi > lo) for (const [c, d] of this.segs) { const t = crossAt(a, b, c, d); if (t != null && t * L >= lo && t * L <= hi) ds.push(t * L); }
+      ds.sort((x, y) => x - y);
+      const kept: number[] = [];
+      for (const dd of ds) if (!kept.length || dd - kept[kept.length - 1] >= 2 * hr + 3) kept.push(dd); // lines close together share one hop
+      hops.push(kept);
+    }
+    ctx.beginPath(); roundedPath(ctx, line, r, hOut, hIn, hops, hr);
     ctx.strokeStyle = BG; ctx.lineWidth = lw + 3; ctx.stroke();
     ctx.setLineDash(dash ?? []); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke(); ctx.setLineDash([]);
     if (hOut) arrow(ctx, pts[e - 1], pts[e], hOut, lw, color);
     if (hIn) arrow(ctx, pts[1], pts[0], hIn, lw, color);
+    for (let i = 0; i < e; i++) this.segs.push([line[i], line[i + 1]]);
   }
 
   private drawGrid(W: number, H: number) {
@@ -1283,16 +1297,40 @@ function cylinderPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: nu
   ctx.moveTo(x, y + e); ctx.ellipse(x + w / 2, y + e, w / 2, e, 0, Math.PI, 0); ctx.lineTo(x + w, y + h - e);
   ctx.ellipse(x + w / 2, y + h - e, w / 2, e, 0, 0, Math.PI); ctx.closePath();
 }
+// Where run a→b crosses run c→d, as a fraction along a→b; null if they don't cross squarely enough to hop
+// (parallel, glancing, or touching at either end of c→d, e.g. two lines leaving the same station).
+function crossAt(a: Pt, b: Pt, c: Pt, d: Pt): number | null {
+  const rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1], den = rx * sy - ry * sx;
+  const lr = Math.hypot(rx, ry), ls = Math.hypot(sx, sy);
+  if (!lr || !ls || Math.abs(den) < 0.3 * lr * ls) return null;
+  const qx = c[0] - a[0], qy = c[1] - a[1], t = (qx * sy - qy * sx) / den, u = (qx * ry - qy * rx) / den;
+  if (t <= 0 || t >= 1 || u * ls < 3 || u * ls > ls - 3) return null;
+  return t;
+}
 // An orthogonal polyline with rounded corners. keepEnd/keepStart: room an arrowhead needs on the last/first
-// run, so the bend before it finishes first.
-function roundedPath(ctx: CanvasRenderingContext2D, pts: Pt[], r: number, keepEnd = 0, keepStart = 0) {
+// run, so the bend before it finishes first. hops[i]: distances along run i where it arcs (radius hr) over
+// another line, always bulging up the screen (left on a vertical run).
+function roundedPath(ctx: CanvasRenderingContext2D, pts: Pt[], r: number, keepEnd = 0, keepStart = 0, hops: number[][] = [], hr = 0) {
   ctx.moveTo(pts[0][0], pts[0][1]);
   const n = pts.length;
+  const jump = (i: number) => {
+    const ds = hops[i]; if (!ds?.length) return;
+    const [ax, ay] = pts[i], L = Math.hypot(pts[i + 1][0] - ax, pts[i + 1][1] - ay), ux = (pts[i + 1][0] - ax) / L, uy = (pts[i + 1][1] - ay) / L;
+    // a clockwise arc from behind the crossing to past it bulges to (uy, -ux); go anticlockwise when that points down/right
+    const th = Math.atan2(uy, ux), up = ux > 1e-6 || (Math.abs(ux) <= 1e-6 && uy < 0);
+    for (const d of ds) {
+      const cx = ax + ux * d, cy = ay + uy * d;
+      ctx.lineTo(cx - ux * hr, cy - uy * hr);
+      ctx.arc(cx, cy, hr, th + Math.PI, th, !up);
+    }
+  };
   for (let i = 1; i < n - 1; i++) {
+    jump(i - 1);
     const [ax, ay] = pts[i - 1], [bx, by] = pts[i], [cx, cy] = pts[i + 1];
     const l0 = Math.hypot(bx - ax, by - ay) - (i === 1 ? keepStart * 0.3 : 0), l1 = Math.hypot(cx - bx, cy - by) - (i === n - 2 ? keepEnd * 0.3 : 0);
     ctx.arcTo(bx, by, cx, cy, Math.max(0, Math.min(r, l0 / 2, l1 / 2)));
   }
+  jump(n - 2);
   ctx.lineTo(pts[n - 1][0], pts[n - 1][1]);
 }
 // The point `d` back from `to` towards `from`.
