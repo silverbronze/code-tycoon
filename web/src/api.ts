@@ -168,7 +168,7 @@ export interface DomainModel {
   entities: DEntity[]; relations: { a: string; b: string; verb: string; card: string }[]; flows: DFlow[]; assumptions: DAssumption[];
 }
 export interface DriftFile { p: string; score: number; markers: { line: number; text: string }[]; markerCount: number; pinned: { line: number; text: string }[]; lines: number; rework: number; age: number; twin: boolean; churn: number }
-export interface DomainJob { id: string; kind: 'build' | 'update'; state: 'working' | 'done' | 'error'; started: number; ended?: number; model: string | null; cost: number; error?: string }
+export interface DomainJob { id: string; kind: 'build' | 'update'; auto?: boolean; state: 'working' | 'done' | 'error'; started: number; ended?: number; model: string | null; cost: number; error?: string }
 export interface BriefResult {
   goal: string; entities: string[]; flows: string[]; newEntities: { name: string; what: string }[]; done: string[]; missing: string[];
   files: { p: string; why: string; act: 'edit' | 'read' | 'new' }[]; respect: { a: string | null; text: string }[];
@@ -177,7 +177,8 @@ export interface BriefResult {
 export interface Brief { id: string; task: string; state: 'working' | 'done' | 'error'; started: number; ended?: number; model: string | null; cost: number; error?: string; result: BriefResult | null }
 export interface DomainState {
   model: DomainModel | null; job: DomainJob | null; briefs: Brief[]; drift: DriftFile[]; llm: string | null;
-  meta: { builtAt: number; head: string | null; cost: number; model: string | null; kind: string; changed: string[]; changedCount: number } | null;
+  meta: { builtAt: number; head: string | null; cost: number; model: string | null; kind: string; changed: string[]; changedCount: number;
+    auto: boolean; autoAt: number | null } | null; // auto: updates itself once sessions go quiet; autoAt: when the next one is due
 }
 
 // hooks: live updates from Claude Code; autostart: null where the platform has none
@@ -228,8 +229,8 @@ export const api = {
     return { status: r.status, ...(await r.json()) } as { status: number; job?: OptJob; error?: string; busy?: { id: string; title: string | null }[]; restored?: string[]; kept?: string[] };
   },
   domain: (id: string) => get<DomainState>(`/api/projects/${enc(id)}/domain`),
-  domainStep: async (id: string, step: 'build' | 'update' | 'stop') => {
-    const r = await post(`/api/projects/${enc(id)}/domain/${step}`, {});
+  domainStep: async (id: string, step: 'build' | 'update' | 'stop' | 'auto', body: { on?: boolean } = {}) => {
+    const r = await post(`/api/projects/${enc(id)}/domain/${step}`, body);
     return { status: r.status, ...(await r.json()) } as { status: number; job?: DomainJob; error?: string };
   },
   brief: async (id: string, task: string) => {

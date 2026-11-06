@@ -21,7 +21,7 @@ import { scanIdle, idleSummary, stopIdle } from './idle.mjs';
 import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
 import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize } from './optimize.mjs';
 import { hooksInstalled, setHooks } from './hooks-install.mjs';
-import { onDomain, domainView, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted } from './domain.mjs';
+import { onDomain, domainView, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted, scheduleAuto, setAuto } from './domain.mjs';
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
@@ -73,6 +73,8 @@ onLive(msg => {
     if (was === 'working' && s.state === 'waiting' && s.pid) setImmediate(() => {
       try { checkSession(s.id, s.pid, alertOnce, true); } catch (e) { console.warn('[analytics]', e.message); }
       try { checkCoach(s.id, s.pid, alertOnce); } catch (e) { console.warn('[coach]', e.message); }
+      // the domain map catches up once the project's sessions have gone quiet
+      if (trackedSet().has(s.pid)) scheduleAuto(s.pid, () => city(s.pid), () => openSessions(s.pid).some(x => x.state === 'working'));
     });
   }
   if (msg.type === 'alert' || msg.type === 'alert-resolved' || msg.type === 'alerts-dismissed') broadcast({ ...msg, pid: msg.pid ?? msg.alert?.pid ?? null });
@@ -423,7 +425,8 @@ const server = http.createServer(async (req, res) => {
           if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
           const b = JSON.parse(await readBody(req) || '{}');
           const r = parts[3] === 'brief' ? (parts[4] === 'drop' ? dropBrief(pid, String(b.id || '')) : brief(pid, city(pid), b.task))
-            : parts[4] === 'stop' ? stopDomain(pid) : buildDomain(pid, city(pid), { update: parts[4] === 'update' });
+            : parts[4] === 'stop' ? stopDomain(pid) : parts[4] === 'auto' ? setAuto(pid, b.on !== false)
+            : buildDomain(pid, city(pid), { update: parts[4] === 'update' });
           return send(res, r.error === 'busy' ? 409 : r.error ? 400 : 200, r, req);
         }
         if (parts[3] === 'live') return send(res, 200, { sessions: openSessions(pid) }, req);

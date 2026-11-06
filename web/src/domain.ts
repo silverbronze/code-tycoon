@@ -3,6 +3,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Stage } from './city/scene';
+import { ink } from './city/env';
 import { api, live, type City, type DomainState, type DomainModel, type DEntity, type DFlow, type DAssumption, type Brief, type DriftFile, type EStatus } from './api';
 import { h, put, ago, dur, money } from './util';
 import './domain.css';
@@ -36,9 +37,15 @@ const RED = new THREE.Color('#d2232a');
 const ISLE_Y = 18;          // isle tops float about this high over the real world
 const STRAIN_FLAG = 6;      // summed drift score of an isle's files that raises the red flag
 const TETHER = 0.22;        // opacity of the ties down to the real world when nothing is in focus
+const BRIDGE = '#3f4539', BRIDGE_A = 0.6; // bridges between isles: the ties' fine line, a little firmer
+// The real world stands in quarters around the archipelago, one per kind, in this order.
+type WKind = DomainModel['world'][number]['kind'];
+const KINDS: WKind[] = ['person', 'system', 'device', 'place', 'money', 'thing'];
+const KIND_NAME: Record<WKind, string> = { person: 'People', system: 'Outside systems', device: 'Devices', place: 'Places', money: 'Money', thing: 'Things' };
+const LAND_SCALE = 1.5;     // landmarks are drawn this much over their modelled size, to read from the default zoom
 
 type Sel = { k: 'entity'; id: string } | { k: 'flow'; id: string } | { k: 'assumption'; id: string } | { k: 'brief'; id: string } | { k: 'world'; id: string } | null;
-type Tab = 'task' | 'flows' | 'drift' | 'map';
+type Tab = 'start' | 'task' | 'flows' | 'drift' | 'map';
 
 interface Isle {
   e: DEntity; i: number; x: number; z: number; y: number; r: number; depth: number;
@@ -47,9 +54,12 @@ interface Isle {
   label: HTMLElement; hue: number; tall: number;
 }
 interface Land { w: DomainModel['world'][number]; x: number; z: number; g: THREE.Group; label: HTMLElement; mats: THREE.Material[] }
-interface Bridge { a: Isle; b: Isle; verb: string; line: Line2; mat: LineMaterial; mid: THREE.Vector3; label: HTMLElement }
-interface Tether { isle: Isle; land: Land; line: THREE.Line; mat: THREE.LineDashedMaterial }
-interface Drone { g: THREE.Group; beam: THREE.Line; color: string; isle: Isle | null; house: number; seen: number; phase: number }
+interface Bridge { a: Isle; b: Isle; verb: string; line: THREE.Line; mat: THREE.LineBasicMaterial; mid: THREE.Vector3; label: HTMLElement }
+interface Tether { isle: Isle; land: Land; line: THREE.Line; mat: THREE.LineBasicMaterial }
+// a picked isle's (or landmark's) connections carry a current: marching dashes and beads running outward
+interface LinkFx { line: Line2; mat: LineMaterial; beads: THREE.Mesh[]; pts: THREE.Vector3[]; cum: number[]; len: number; t: number }
+// a session at work: a drone over the isle it touches, and a ring round that isle that reads from any zoom
+interface Drone { g: THREE.Group; beam: THREE.Line; ring: THREE.Mesh; color: string; isle: Isle | null; house: number; seen: number; phase: number }
 // A flow played as a walk: the courier waits at each station (start, every step, end), then
 // travels the arc to the next. k is the step index; -1 is the start, steps.length the end.
 interface Station { p: THREE.Vector3; k: number; isle: Isle | null; houses: Isle['houses']; pi: number; dwell: number; move: number }
@@ -73,6 +83,7 @@ function rng(seed: number) {
 export class DomainMap {
   el: HTMLDivElement;
   stage: Stage;
+  occluders: HTMLElement[] = []; // the host's floating bits over the map: labels keep clear of them
   private canvasBox: HTMLDivElement; private labels: HTMLDivElement; private tip: HTMLDivElement;
   private panel: HTMLDivElement; private body: HTMLDivElement; private headInfo: HTMLDivElement; private headBtns: HTMLDivElement;
   private tabsEl: HTMLDivElement; private empty: HTMLDivElement;
@@ -81,8 +92,11 @@ export class DomainMap {
   private world = new THREE.Group();
   private isles: Isle[] = []; private byId = new Map<string, Isle>();
   private lands: Land[] = []; private bridges: Bridge[] = []; private tethers: Tether[] = [];
+  private links: LinkFx[] = [];
   private groupLabels: { el: HTMLElement; p: THREE.Vector3 }[] = [];
+  private posts: { el: HTMLElement; p: THREE.Vector3; kind: WKind; rows: Map<string, HTMLElement> }[] = []; // one signpost per quarter of the real world
   private clouds: THREE.Object3D[] = [];
+  private worldA = new Map<string, number>(); // where the layout put each thing of the real world on its ring
   private fileIsles = new Map<string, Isle[]>();  // lowercased path -> isles whose code holds it
   private moduleIsles = new Map<number, Isle[]>(); // city module -> isles with files in it
   private driftBy = new Map<string, DriftFile>();
@@ -90,7 +104,7 @@ export class DomainMap {
   private drones = new Map<string, Drone>();
   private sel: Sel = null; private hover: Isle | null = null; private hoverLand: Land | null = null;
   private focusSet: Set<Isle> | null = null; private focusOrder = new Map<Isle, number[]>();
-  private tab: Tab = 'task';
+  private tab: Tab = 'start';
   private draft = '';
   private visible = false; private span = 120; private fitted = false;
   private frame = { left: 0, top: 0, right: 800, bottom: 600 };
@@ -148,26 +162,31 @@ export class DomainMap {
   panelWidth() { return this.panel.style.display === 'none' ? 0 : (this.panel.offsetWidth || 340) + 14; }
   fit(animate = true) {
     if (!this.isles.length) return;
-    const b = new THREE.Box3();
-    for (const s of this.isles) b.expandByPoint(new THREE.Vector3(s.x - s.r, 0, s.z - s.r)).expandByPoint(new THREE.Vector3(s.x + s.r, 0, s.z + s.r));
-    this.home(this.frameBox(b), animate);
+    const pts: { p: THREE.Vector3; r: number }[] = [];
+    for (const s of this.isles) pts.push({ p: new THREE.Vector3(s.x, s.y + s.tall + 2, s.z), r: s.r }, { p: new THREE.Vector3(s.x, s.y - s.depth, s.z), r: s.r * 0.4 });
+    // and the real world around it: its signposts are the ways in, so the first view shows them all,
+    // with room above for the signs and beside them for their width
+    for (const l of this.lands) pts.push({ p: new THREE.Vector3(l.x, 0, l.z), r: 6 });
+    this.home(this.frameAll(pts, this.lands.length ? 64 : 0, this.lands.length ? 44 : 0), animate);
   }
-  // Where the camera looks so that box b (on the ground plan) fills the open part of the screen.
-  private frameBox(b: THREE.Box3) {
-    const c = b.getCenter(new THREE.Vector3()), size = b.getSize(new THREE.Vector3()), ext = Math.max(size.x, size.z);
+  // Where the camera looks, and how far out, so these points (each with a radius around it) fill the open
+  // part of the screen: right of the panel, inside the frame, less padTop/padX pixels for what hangs off
+  // them. Exact for the orthographic camera at the goal angle: points are measured on the screen's axes.
+  private frameAll(pts: { p: THREE.Vector3; r: number }[], padTop = 0, padX = 0) {
     const st = this.stage, cb = this.canvasBox.getBoundingClientRect(), pr = this.panel.getBoundingClientRect();
-    const left = Math.max(this.frame.left, this.panel.style.display === 'none' ? 0 : pr.right) + 10, right = this.frame.right - 10;
-    const openW = Math.max(240, right - left), openH = Math.max(240, this.frame.bottom - this.frame.top - 20);
-    const v = Math.max((ext * 0.75 + 24) * cb.height / openH, (ext * 0.95 + 20) * cb.height / openW);
-    // aim at the isles, which float ISLE_Y over the ground: the ground point behind them on the line of sight
-    const az = st.goal.azimuth, el = st.goal.elevation, back = ISLE_Y * 0.6 / Math.tan(el);
-    let tx = c.x - back * Math.cos(az), tz = c.z - back * Math.sin(az);
-    // then slide the view, as a drag would, so that point sits mid-way in the open area
-    const ox = (left + right) / 2 - (cb.left + cb.width / 2), oy = (this.frame.top + this.frame.bottom) / 2 - (cb.top + cb.height / 2);
-    const unit = v / cb.height, lift = unit / Math.sin(el);
-    tx += -ox * unit * Math.sin(az) - oy * lift * Math.cos(az);
-    tz += ox * unit * Math.cos(az) - oy * lift * Math.sin(az);
-    return { x: tx, z: tz, viewSize: v };
+    const left = Math.max(this.frame.left, this.panel.style.display === 'none' ? 0 : pr.right) + 10 + padX, right = this.frame.right - 10 - padX;
+    const top = this.frame.top + 10 + padTop, bottom = this.frame.bottom - 10;
+    const openW = Math.max(200, right - left), openH = Math.max(160, bottom - top);
+    // the camera's right and up axes (lookAt from azimuth/elevation, up = +y)
+    const az = st.goal.azimuth, el = st.goal.elevation, ca = Math.cos(az), sa = Math.sin(az), ce = Math.cos(el), se = Math.sin(el);
+    const X = (p: THREE.Vector3) => p.x * sa - p.z * ca, Y = (p: THREE.Vector3) => -se * ca * p.x + ce * p.y - se * sa * p.z;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const { p, r } of pts) { const x = X(p), y = Y(p); x0 = Math.min(x0, x - r); x1 = Math.max(x1, x + r); y0 = Math.min(y0, y - r); y1 = Math.max(y1, y + r); }
+    const viewSize = Math.max(20, (x1 - x0) * cb.height / openW, (y1 - y0) * cb.height / openH), unit = viewSize / cb.height;
+    // the middle of the points goes to the middle of the open area: solve for the ground point the camera aims at
+    const ox = (left + right) / 2 - (cb.left + cb.width / 2), oyUp = (cb.top + cb.height / 2) - (top + bottom) / 2;
+    const A = (x0 + x1) / 2 - ox * unit, B = -((y0 + y1) / 2 - oyUp * unit) / se;
+    return { x: sa * A + ca * B, z: -ca * A + sa * B, viewSize };
   }
   private home(to: { x: number; z: number; viewSize: number }, animate: boolean) {
     const st = this.stage;
@@ -241,10 +260,11 @@ export class DomainMap {
       const mat = (m as any).material; if (mat) (Array.isArray(mat) ? mat : [mat]).forEach((y: THREE.Material) => y.dispose());
     });
     for (const c of [...this.world.children]) { dispose(c); this.world.remove(c); }
-    for (const d of this.drones.values()) { dispose(d.g); dispose(d.beam); }
+    for (const d of this.drones.values()) { dispose(d.g); dispose(d.beam); dispose(d.ring); }
     this.drones.clear();
     this.clearFlow();
-    this.isles = []; this.byId.clear(); this.lands = []; this.bridges = []; this.tethers = []; this.groupLabels = []; this.clouds = [];
+    this.clearLinks();
+    this.isles = []; this.byId.clear(); this.lands = []; this.bridges = []; this.tethers = []; this.groupLabels = []; this.posts = []; this.clouds = [];
     this.fileIsles.clear(); this.moduleIsles.clear();
     this.labels.innerHTML = '';
   }
@@ -254,7 +274,8 @@ export class DomainMap {
     const m = this.model;
     this.empty.style.display = m ? 'none' : '';
     if (!m) return;
-    const pos = layout(m);
+    const { pos, worldA } = layout(m);
+    this.worldA = worldA;
     const gIdx = new Map(m.groups.map((g, i) => [g.id, i]));
     const fileOf = new Map(this.city.files.map(f => [f.p.toLowerCase(), f]));
     m.entities.forEach((e, i) => {
@@ -275,10 +296,21 @@ export class DomainMap {
     // drift assumptions raise the flag on the isles they name
     for (const a of m.assumptions) if (!a.holds && a.severity !== 'low') for (const id of a.entities) { const s = this.byId.get(id); if (s && !s.flag) this.raiseFlag(s); }
     for (const s of this.isles) if (!s.flag && s.strain >= STRAIN_FLAG) this.raiseFlag(s);
-    for (const r of m.relations) {
-      const a = this.byId.get(r.a), b = this.byId.get(r.b);
-      if (a && b) this.bridges.push(this.makeBridge(a, b, r.verb));
+    // lanes (rule 12): lines leaving an isle the same way sit side by side, ordered so they never cross there
+    const rels = m.relations.map(r => ({ r, a: this.byId.get(r.a)!, b: this.byId.get(r.b)!, sa: { x: 0, z: 0 }, sb: { x: 0, z: 0 } })).filter(x => x.a && x.b && x.a !== x.b);
+    const lanes = new Map<string, { me: Isle; other: Isle; d: P2; shift: P2 }[]>();
+    for (const x of rels) for (const [me, other, shift] of [[x.a, x.b, x.sa], [x.b, x.a, x.sb]] as [Isle, Isle, P2][]) {
+      const d = exitDir(me, other), key = `${me.i}:${Math.round(d.x * 2)},${Math.round(d.z * 2)}`;
+      if (!lanes.has(key)) lanes.set(key, []);
+      lanes.get(key)!.push({ me, other, d, shift });
     }
+    for (const list of lanes.values()) {
+      if (list.length < 2) continue;
+      const cross = (l: (typeof list)[number]) => l.d.x * (l.other.z - l.me.z) - l.d.z * (l.other.x - l.me.x);
+      list.sort((p, q) => cross(p) - cross(q));
+      list.forEach((l, j) => { const o = (j - (list.length - 1) / 2) * LANE; l.shift.x = -l.d.z * o; l.shift.z = l.d.x * o; });
+    }
+    for (const x of rels) this.bridges.push(this.makeBridge(x.a, x.b, x.r.verb, x.sa, x.sb));
     // archipelago names over each group
     for (const g of m.groups) {
       const members = this.isles.filter(s => s.e.group === g.id);
@@ -438,26 +470,20 @@ export class DomainMap {
     s.label.classList.add('drift');
   }
 
-  private makeBridge(a: Isle, b: Isle, verb: string): Bridge {
-    const pa = new THREE.Vector3(a.x, a.y, a.z), pb = new THREE.Vector3(b.x, b.y, b.z);
-    const dir = pb.clone().sub(pa).setY(0).normalize();
-    const p0 = pa.clone().addScaledVector(dir, a.r * 0.85).setY(a.y + 0.1), p1 = pb.clone().addScaledVector(dir, -b.r * 0.85).setY(b.y + 0.1);
-    const d = p0.distanceTo(p1);
-    const mid = p0.clone().lerp(p1, 0.5); mid.y = Math.min(p0.y, p1.y) - 1 - d * 0.07;
-    const pts: number[] = [];
-    for (let k = 0; k <= 20; k++) {
-      const t = k / 20, u = 1 - t;
-      pts.push(u * u * p0.x + 2 * u * t * mid.x + t * t * p1.x, u * u * p0.y + 2 * u * t * mid.y + t * t * p1.y, u * u * p0.z + 2 * u * t * mid.z + t * t * p1.z);
-    }
-    const geo = new LineGeometry(); geo.setPositions(pts);
-    const mat = new LineMaterial({ color: 0x6d5d4b, linewidth: 2.2, transparent: true, opacity: 1 });
-    const line = new Line2(geo, mat);
-    line.computeLineDistances();
+  // A bridge is a metro line (rules 8, 9, 12): out of its lane on a's rim, one diagonal, into b's rim,
+  // level from deck to deck. Drawn as the ties to the ground are: one fine line, no casing.
+  private makeBridge(a: Isle, b: Isle, verb: string, sa: P2, sb: P2): Bridge {
+    let p = metroPath({ x: a.x + sa.x, z: a.z + sa.z }, { x: b.x + sb.x, z: b.z + sb.z });
+    p = cutStart(p, a, a.r * 0.85);
+    p = cutStart([...p].reverse(), b, b.r * 0.85).reverse();
+    const pts = lift(p, a.y + 0.15, b.y + 0.15);
+    if (pts.length === 1) pts.push(pts[0].clone().setY(pts[0].y + 0.01));
+    const mat = new THREE.LineBasicMaterial({ color: BRIDGE, transparent: true, opacity: BRIDGE_A, depthWrite: false });
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat); line.renderOrder = 2;
     this.world.add(line);
     const label = h('div', { class: 'dm-lb dm-verb' }, verb);
     this.labels.append(label);
-    const m3 = new THREE.Vector3(pts[30], pts[31], pts[32]);
-    return { a, b, verb, line, mat, mid: m3, label };
+    return { a, b, verb, line, mat, mid: alongAt(pts, 0.5), label };
   }
 
   private makeGround(m: DomainModel) {
@@ -475,39 +501,66 @@ export class DomainMap {
     const realL = h('div', { class: 'dm-lb dm-real' }, 'The real world');
     this.labels.append(realL);
     this.groupLabels.push({ el: realL, p: new THREE.Vector3(cx, 0, cz + R * 1.38) });
-    // the real things stand around the archipelago, each on the side of the isles that stand for it,
-    // spread along the ring so none sits under an isle or on top of another
-    const ringR = R * 1.18, minGap = 14 / ringR;
+    // the real things stand around the archipelago in quarters, one per kind (people together,
+    // outside systems together...), each quarter on the side of the isles that stand for its things
+    const ringR = ringRadius(R, m.world);
     const want = m.world.map((w, k) => {
       const users = this.isles.filter(s => s.e.world.includes(w.id));
+      // where the layout put it (it weighed its isles and the flows it starts or ends), else toward its isles
       const ux = users.reduce((s, u) => s + u.x, 0) / (users.length || 1), uz = users.reduce((s, u) => s + u.z, 0) / (users.length || 1);
-      const a = users.length && Math.hypot(ux - cx, uz - cz) > 1 ? Math.atan2(uz - cz, ux - cx) : k / Math.max(1, m.world.length) * Math.PI * 2;
-      return { w, k, a, users };
-    }).sort((p, q) => p.a - q.a);
-    for (let it = 0; it < 80; it++) {
-      let moved = false;
-      for (let j = 0; j < want.length && want.length > 1; j++) {
-        const p = want[j], q = want[(j + 1) % want.length];
-        let gap = q.a - p.a; if (j === want.length - 1) gap += Math.PI * 2;
-        if (gap < minGap) { const d = (minGap - gap) / 2; p.a -= d; q.a += d; moved = true; }
-      }
-      if (!moved) break;
+      const a = this.worldA.get(w.id) ?? (users.length && Math.hypot(ux - cx, uz - cz) > 1 ? Math.atan2(uz - cz, ux - cx) : k / Math.max(1, m.world.length) * Math.PI * 2);
+      return { w, a, users };
+    });
+    const quarters = ringQuarters(want, ringR);
+    if (ringR * 1.25 > R * 1.45) { field.scale.setScalar(ringR * 1.25 / (R * 1.45)); rim.scale.setScalar(ringR * 1.25 / (R * 1.45)); }
+    this.groupLabels[this.groupLabels.length - 1].p.z = cz + Math.max(R * 1.38, ringR + 24); // "the real world", outside the quarters
+    const pave = new THREE.MeshStandardMaterial({ color: '#c3c6bb', roughness: 1 });
+    const kerb = new THREE.MeshBasicMaterial({ color: '#8f9688', toneMapped: false });
+    for (const q of quarters) {
+      // a paved strip under the quarter, and its name on the outer side
+      const pad = 7 / ringR, t0 = q.a - q.half - pad, len = q.half * 2 + pad * 2;
+      const strip = new THREE.Mesh(new THREE.RingGeometry(ringR - 5.5, ringR + 5.5, Math.max(6, Math.round(len * 24)), 1, -t0 - len, len), pave);
+      strip.rotation.x = -Math.PI / 2; strip.position.set(cx, 0.02, cz); strip.receiveShadow = true;
+      const edge = new THREE.Mesh(new THREE.RingGeometry(ringR + 5.5, ringR + 6, Math.max(6, Math.round(len * 24)), 1, -t0 - len, len), kerb);
+      edge.rotation.x = -Math.PI / 2; edge.position.set(cx, 0.03, cz);
+      this.world.add(strip, edge);
+      // its signpost: the kind, and every thing in it as a way in
+      const rows = new Map<string, HTMLElement>();
+      const el = h('div', { class: 'dm-lb dm-post' }, h('div', { class: 'dm-post-h', onclick: () => this.openKind(q.kind) }, KIND_NAME[q.kind], h('span', { class: 'c' }, q.list.length)),
+        h('div', { class: 'dm-post-rows' }, q.list.map(({ w }) => {
+          const r = this.reach(w.id);
+          const b = h('button', { class: 'dm-post-r', title: w.what, onclick: () => this.select(this.sel?.k === 'world' && this.sel.id === w.id ? null : { k: 'world', id: w.id }, true),
+            onmouseenter: () => this.setHover(null, this.lands.find(l => l.w.id === w.id) || null), onmouseleave: () => this.setHover(null, null) },
+            h('span', { class: 'nm' }, w.name), r.drift ? h('i', { class: 'dr', title: `${r.drift} drift on its isles` }) : null,
+            r.flows ? h('span', { class: 'n', title: `${r.flows} flow${r.flows > 1 ? 's' : ''} start or end here` }, r.flows) : null);
+          rows.set(w.id, b);
+          return b;
+        })));
+      this.labels.append(el);
+      this.posts.push({ el, rows, kind: q.kind, p: new THREE.Vector3(cx + Math.cos(q.a) * ringR, 6.5 * LAND_SCALE, cz + Math.sin(q.a) * ringR) });
     }
     for (const { w, a, users } of want) {
       const x = cx + Math.cos(a) * ringR, z = cz + Math.sin(a) * ringR;
       const g = landmark(w.kind);
-      g.position.set(x, 0, z);
+      g.position.set(x, 0, z); g.scale.setScalar(LAND_SCALE);
+      g.rotation.y = -a + Math.PI / 2; // facing the archipelago
       const mats: THREE.Material[] = [], li = this.lands.length;
       g.traverse(o => { o.userData.land = li; const mt = (o as THREE.Mesh).material as THREE.Material | undefined; if (mt) mats.push(mt); o.castShadow = true; });
       this.world.add(g);
-      const label = h('div', { class: 'dm-lb dm-world' }, w.name);
+      // the name tag is a button: every thing in the real world is a way in
+      const starts = m.flows.filter(f => f.start?.world === w.id).length;
+      const label = h('div', { class: 'dm-lb dm-world', title: `${w.what}\nClick to start from here`, onclick: () => this.select({ k: 'world', id: w.id }, true) },
+        w.name, starts ? h('span', { class: 'n', title: `Starts ${starts} flow${starts > 1 ? 's' : ''}` }, '▶ ' + starts) : null);
       this.labels.append(label);
       const land: Land = { w, x, z, g, label, mats };
       this.lands.push(land);
+      // its ties up to the isles that stand for it: a plumb line down from the isle's tip, then a metro line
+      // along the ground (rule 8) into the landmark
       for (const s of users) {
-        const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(s.x, s.y - s.depth - 1, s.z), new THREE.Vector3(x, 3.2, z)]);
-        const mat = new THREE.LineDashedMaterial({ color: '#6a6a6a', dashSize: 1.1, gapSize: 0.9, transparent: true, opacity: TETHER });
-        const line = new THREE.Line(lg, mat); line.computeLineDistances();
+        const run = cutStart([...metroPath({ x: s.x, z: s.z }, { x, z })].reverse(), { x, z }, 3.2 * LAND_SCALE).reverse();
+        const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(s.x, s.y - s.depth - 1, s.z), ...run.map(p => new THREE.Vector3(p.x, 0.12, p.z))]);
+        const mat = new THREE.LineBasicMaterial({ color: '#5f665a', transparent: true, opacity: TETHER, depthWrite: false });
+        const line = new THREE.Line(lg, mat);
         this.world.add(line);
         this.tethers.push({ isle: s, land, line, mat });
       }
@@ -536,16 +589,37 @@ export class DomainMap {
 
   private makeDrone(color: string): Drone {
     const g = new THREE.Group();
-    const c = new THREE.Color(color);
+    // session colours are pale neon made for the night city: ink() gives the deep day version of the hue
+    const c = ink(new THREE.Color(color));
+    color = '#' + c.getHexString();
     const body = new THREE.Mesh(new THREE.SphereGeometry(0.75, 14, 10), new THREE.MeshBasicMaterial({ color: c, toneMapped: false, fog: false }));
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.35, 0.12, 6, 24), new THREE.MeshBasicMaterial({ color: '#1a1a1a', toneMapped: false, fog: false }));
-    ring.rotation.x = Math.PI / 2;
-    g.add(body, ring);
+    const rotor = new THREE.Mesh(new THREE.TorusGeometry(1.35, 0.12, 6, 24), new THREE.MeshBasicMaterial({ color: '#1a1a1a', toneMapped: false, fog: false }));
+    rotor.rotation.x = Math.PI / 2;
+    g.add(body, rotor);
     const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
       new THREE.LineBasicMaterial({ color: c, toneMapped: false, fog: false }));
     beam.frustumCulled = false;
-    this.world.add(g, beam);
-    return { g, beam, color, isle: null, house: -1, seen: 0, phase: (hashStr(color) % 628) / 100 };
+    // a halo in the session's colour just under the isle's top, wider than it, breathing: its rim
+    // shows round the isle from the first, widest view
+    const ring = new THREE.Mesh(new THREE.CircleGeometry(1, 64), new THREE.MeshBasicMaterial({ color: c, toneMapped: false, fog: false, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.renderOrder = 1;
+    this.world.add(g, beam, ring);
+    return { g, beam, ring, color, isle: null, house: -1, seen: 0, phase: (hashStr(color) % 628) / 100 };
+  }
+  // Which isles have a session at work on them now: their label carries a dot per session and always shows.
+  private markLive(now: number) {
+    const by = new Map<Isle, string[]>();
+    for (const d of this.drones.values()) if (d.isle && now - d.seen < 1500) { if (!by.has(d.isle)) by.set(d.isle, []); by.get(d.isle)!.push(d.color); }
+    for (const s of this.isles) {
+      const cs = by.get(s) || [], key = cs.join(',');
+      if ((s.label.dataset.live || '') === key) continue;
+      s.label.dataset.live = key;
+      s.label.classList.toggle('live', cs.length > 0);
+      s.label.style.setProperty('--lc', cs[0] || '');
+      s.label.querySelector('.lv')?.remove();
+      if (cs.length) s.label.append(h('span', { class: 'lv', title: `${cs.length} session${cs.length > 1 ? 's' : ''} working here now` }, cs.map(c => h('i', { style: { background: c } }))));
+      delete (s.label as any)._w;
+    }
   }
 
   // ------------------------------------------------------------------ frame
@@ -558,18 +632,43 @@ export class DomainMap {
     }
     for (const c of this.clouds) { c.position.x += c.userData.v * dt; if (c.position.x > c.userData.x0 + this.span) c.position.x -= this.span * 2; }
     if (this.flowFx) this.walkFlow(dt);
+    if (this.links.length) this.walkLinks(dt);
     const now = performance.now();
+    // the drone keeps a readable size on screen when zoomed out
+    const grow = Math.max(1, this.stage.viewSize / 110);
+    // a live isle's label is always shown, right over the isle's top, where the drone would hover:
+    // lift the drone in screen terms until it clears the label (ortho camera, so px per unit is constant)
+    const pr = this.stage.project(this.tmpV.set(0, 0, 0), { x: 0, y: 0, visible: false });
+    const y0 = pr.y, x0 = pr.x;
+    this.stage.project(this.tmpV.set(0, 1, 0), pr);
+    const pxUp = Math.max(0.01, y0 - pr.y);
+    this.stage.project(this.tmpV.set(1, 0, 0), pr);
+    const pxSide = Math.max(0.01, Math.hypot(pr.x - x0, pr.y - y0));
     for (const [k, d] of this.drones) {
       const on = d.isle && now - d.seen < 1500;
-      d.g.visible = d.beam.visible = !!on;
-      if (!on) { if (now - d.seen > 60e3) { this.world.remove(d.g, d.beam); this.drones.delete(k); } continue; }
+      d.g.visible = d.beam.visible = d.ring.visible = !!on;
+      if (!on) {
+        if (now - d.seen > 60e3) { this.world.remove(d.g, d.beam, d.ring); d.ring.geometry.dispose(); (d.ring.material as THREE.Material).dispose(); this.drones.delete(k); }
+        continue;
+      }
       const s = d.isle!, a = t * 0.9 + d.phase;
-      d.g.position.set(s.x + Math.cos(a) * s.r * 0.45, s.g.position.y + Math.max(7, s.tall + 4) + Math.sin(t * 2 + d.phase) * 0.4, s.z + Math.sin(a) * s.r * 0.45);
+      d.ring.position.set(s.x, s.g.position.y - 0.35, s.z);
+      d.ring.scale.setScalar(s.r * 1.12 + (1.2 + 0.6 * Math.sin(t * 3 + d.phase)) * grow);
+      (d.ring.material as THREE.MeshBasicMaterial).opacity = 0.6 + 0.3 * Math.sin(t * 3 + d.phase);
+      d.g.scale.setScalar(grow);
+      const dx = s.x + Math.cos(a) * s.r * 0.45, dz = s.z + Math.sin(a) * s.r * 0.45;
+      const top = s.g.position.y + s.tall + 1.6; // where the label stands (placeLabels)
+      const lh = (s.label as any)._h || 22, rotorPx = 1.5 * grow * pxSide;
+      const ya = this.stage.project(this.tmpV.set(s.x, top, s.z), pr).y; // the label's bottom edge
+      const yd = this.stage.project(this.tmpV.set(dx, top, dz), pr).y;   // the drone at that height
+      const clear = top + 0.4 + Math.max(0, yd - (ya - lh - 10 - rotorPx)) / pxUp;
+      d.g.position.set(dx, Math.max(s.g.position.y + Math.max(7, s.tall + 4) * Math.min(grow, 2), clear) + Math.sin(t * 2 + d.phase) * 0.4, dz);
       const hs = s.houses[d.house];
       const to = hs ? hs.mesh.getWorldPosition(this.tmpV).setY(s.g.position.y + hs.top) : this.tmpV.set(s.x, s.g.position.y, s.z);
       const pa = d.beam.geometry.attributes.position as THREE.BufferAttribute;
       pa.setXYZ(0, d.g.position.x, d.g.position.y, d.g.position.z); pa.setXYZ(1, to.x, to.y, to.z); pa.needsUpdate = true;
     }
+    this.markLive(now);
     this.placeLabels();
   };
 
@@ -577,11 +676,18 @@ export class DomainMap {
     const box = this.el.getBoundingClientRect(), cb = this.canvasBox.getBoundingClientRect();
     const ox = cb.left - box.left, oy = cb.top - box.top;
     const taken: { x0: number; y0: number; x1: number; y1: number }[] = [];
-    const panel = this.panel.getBoundingClientRect();
+    const covers = [this.panel, ...this.occluders].filter(e => e.offsetParent).map(e => e.getBoundingClientRect()).filter(r => r.width);
     const blocked = (x0: number, y0: number, x1: number, y1: number) =>
-      (x1 + box.left > panel.left && x0 + box.left < panel.right && y1 + box.top > panel.top && y0 + box.top < panel.bottom)
+      covers.some(c => x1 + box.left > c.left && x0 + box.left < c.right && y1 + box.top > c.top && y0 + box.top < c.bottom)
       || taken.some(r => x1 > r.x0 && x0 < r.x1 && y1 > r.y0 && y0 < r.y1);
     const out = { x: 0, y: 0, visible: false };
+    // a working session's drone is the liveliest thing on the map: other labels keep off it
+    for (const d of this.drones.values()) {
+      if (!d.g.visible) continue;
+      this.stage.project(d.g.position, out);
+      const rr = 1.5 * d.g.scale.x * this.stage.el.clientHeight / this.stage.viewSize + 4;
+      if (out.visible) taken.push({ x0: out.x + ox - rr, y0: out.y + oy - rr, x1: out.x + ox + rr, y1: out.y + oy + rr });
+    }
     const place = (el: HTMLElement, p: THREE.Vector3, force: boolean, show = true, below = false) => {
       if (!show) { el.style.display = 'none'; return; }
       this.stage.project(p, out);
@@ -603,17 +709,65 @@ export class DomainMap {
       for (const el of fx.pins) place(el, (el as any)._p, true);
       for (const n of fx.nums) place(n.el, (n.el as any)._p, true);
     }
-    // most important first: what is selected or in focus, then the busiest isles
+    // the real world first: its signposts are the ways in, so they always keep their place;
+    // a thing's own tag shows while it is picked or pointed at, to tell which landmark it is
+    const selW = this.sel?.k === 'world' ? this.sel.id : null;
+    for (const l of this.lands) place(l.label, this.tmpV.set(l.x, 0, l.z), true, l.w.id === selW || l === this.hoverLand, true);
+    // signposts of neighbouring quarters would overlap: one that does rises on a longer pole, or leans aside,
+    // and where the full list has no room it folds to its heading (the list opens on hover).
+    // People first (most flows start with them), then the smallest, so a crowded screen keeps as many as it can.
+    const fr = { x0: this.frame.left - box.left + this.panelWidth(), y0: this.frame.top - box.top, x1: this.frame.right - box.left, y1: this.frame.bottom - box.top };
+    type Post = HTMLElement & { _w?: number; _h?: number; _mw?: number; _mh?: number };
+    const rankP = (q: (typeof this.posts)[number]) => q.kind === 'person' ? -1 : q.rows.size;
+    // signposts are cards: they must never sit over the archipelago, so each isle's screen outline
+    // (its top disc and the rock hanging under it) is off limits to them
+    const isleR: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    for (const s of this.isles) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, seen = false;
+      const y = s.g.position.y;
+      for (const [dx, dy, dz] of [[-s.r, 0, 0], [s.r, 0, 0], [0, 0, -s.r], [0, 0, s.r], [0, s.tall + 1.6, 0], [0, -s.depth - 1.2, 0]]) {
+        this.stage.project(this.tmpV.set(s.x + dx, y + dy, s.z + dz), out);
+        if (!out.visible) continue;
+        seen = true; x0 = Math.min(x0, out.x); x1 = Math.max(x1, out.x); y0 = Math.min(y0, out.y); y1 = Math.max(y1, out.y);
+      }
+      if (seen) isleR.push({ x0: x0 + ox - 6, y0: y0 + oy - 6, x1: x1 + ox + 6, y1: y1 + oy + 6 });
+    }
+    const onIsle = (x0: number, y0: number, x1: number, y1: number) => isleR.some(r => x1 > r.x0 && x0 < r.x1 && y1 > r.y0 && y0 < r.y1);
+    for (const q of [...this.posts].sort((a, b) => rankP(a) - rankP(b))) {
+      const el = q.el as Post;
+      this.stage.project(q.p, out);
+      if (!el._w) {
+        el.style.display = ''; el.classList.remove('mini'); el._w = el.offsetWidth; el._h = el.offsetHeight;
+        el.classList.add('mini'); el._mw = el.offsetWidth; el._mh = el.offsetHeight;
+      }
+      let at: { x: number; y: number; k: number; w: number; hh: number; bx: number; mini: boolean } | null = null;
+      for (const mini of [false, true]) {
+        const w = (mini ? el._mw : el._w) || 120, hh = (mini ? el._mh : el._h) || 24, bx = out.x + ox - w / 2, by = out.y + oy - hh - 6;
+        for (let k = 0; k < 6 && !at; k++) for (const dx of [0, -w * 0.55, w * 0.55, -w * 1.1, w * 1.1]) {
+          const x = bx + dx, y = by - k * 26;
+          if (x < fr.x0 || x + w > fr.x1 || y < fr.y0 || y + hh > fr.y1 || blocked(x, y, x + w, y + hh) || onIsle(x, y, x + w, y + hh)) continue;
+          at = { x, y, k, w, hh, bx, mini }; break;
+        }
+        if (at) break;
+      }
+      if (!out.visible || !at) { el.style.display = 'none'; continue; }
+      el.style.display = '';
+      el.classList.toggle('mini', at.mini);
+      el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
+      el.style.setProperty('--pole', `${6 + at.k * 26}px`);
+      el.style.setProperty('--lean', `${(at.bx - at.x).toFixed(1)}px`);
+      taken.push({ x0: at.x - 4, y0: at.y - 4, x1: at.x + at.w + 4, y1: at.y + at.hh + 4 });
+    }
+    // then what is selected or in focus, then the busiest isles
     const order = [...this.isles].sort((a, b) => this.rank(b) - this.rank(a));
-    for (const s of order) place(s.label, this.tmpV.set(s.x, s.g.position.y + s.tall + 1.6, s.z), this.isFocus(s) && !!this.focusSet);
+    for (const s of order) place(s.label, this.tmpV.set(s.x, s.g.position.y + s.tall + 1.6, s.z), (this.isFocus(s) && !!this.focusSet) || !!s.label.dataset.live);
     for (const g of this.groupLabels) place(g.el, g.p, false, !zoomed || g.el.classList.contains('dm-real'));
-    for (const l of this.lands) place(l.label, this.tmpV.set(l.x, 3.8, l.z), false, !this.focusSet || this.landInFocus(l));
     for (const b of this.bridges) {
       const show = (this.hover && (b.a === this.hover || b.b === this.hover)) || (this.focusSet && this.focusSet.has(b.a) && this.focusSet.has(b.b)) || (zoomed && !this.focusSet);
       place(b.label, b.mid, false, !!show);
     }
   }
-  private rank(s: Isle) { return (this.isFocus(s) && this.focusSet ? 1000 : 0) + (this.hover === s ? 2000 : 0) + s.e.code.length + this.bridges.filter(b => b.a === s || b.b === s).length * 2; }
+  private rank(s: Isle) { return (this.isFocus(s) && this.focusSet ? 1000 : 0) + (this.hover === s ? 2000 : 0) + (s.label.dataset.live ? 3000 : 0) + s.e.code.length + this.bridges.filter(b => b.a === s || b.b === s).length * 2; }
   private isFocus(s: Isle) { return !this.focusSet || this.focusSet.has(s); }
   private landInFocus(l: Land) { return this.tethers.some(t => t.land === l && this.focusSet!.has(t.isle)); }
 
@@ -653,7 +807,17 @@ export class DomainMap {
   private setHover(s: Isle | null, l: Land | null) {
     if (s === this.hover && l === this.hoverLand) return;
     this.hover = s; this.hoverLand = l;
-    for (const b of this.bridges) b.mat.linewidth = s && (b.a === s || b.b === s) ? 3.6 : 2.2;
+    for (const q of this.posts) for (const [id, b] of q.rows) b.classList.toggle('hov', l?.w.id === id);
+    this.paintBridges();
+  }
+  // a fine line can't get wider: hover and focus darken it instead
+  private paintBridges() {
+    const fs = this.focusSet, s = this.hover;
+    for (const b of this.bridges) {
+      const hov = !!s && (b.a === s || b.b === s), on = !fs || (fs.has(b.a) && fs.has(b.b));
+      b.mat.opacity = hov ? 1 : !on ? 0.08 : fs ? 0.95 : BRIDGE_A;
+      b.mat.color.set(hov || (fs && on) ? '#111111' : BRIDGE);
+    }
   }
   private onClick(x: number, y: number) {
     const p = this.pick(x, y);
@@ -668,23 +832,36 @@ export class DomainMap {
     this.sel = s;
     this.applyFocus();
     this.renderPanel();
-    if (fly && s?.k === 'entity') { const i = this.byId.get(s.id); if (i) this.stage.flyTo(i.x, i.z, Math.min(this.stage.viewSize, 90)); }
-    // a flow's start and end may sit on the ground ring: keep them in the frame
-    if (fly && this.focusSet && s?.k !== 'entity') this.flyToSet([...this.focusSet], s?.k === 'flow' && this.flowFx ? this.flowFx.stations.filter(x => !x.isle).map(x => x.p) : []);
+    // picking never zooms in: the focus already lights what belongs to it. The view only moves
+    // (and widens if it must) when some of it is off screen: an isle picked from the panel,
+    // a thing of the real world with its isles, a flow with its start and end on the ground ring.
+    if (!fly || !s) return;
+    const isle = s.k === 'entity' ? this.byId.get(s.id) : null;
+    const land = s.k === 'world' ? this.lands.find(l => l.w.id === s.id) : null;
+    const list = isle ? [isle] : this.focusSet ? [...this.focusSet] : [];
+    const extra = s.k === 'flow' && this.flowFx ? this.flowFx.stations.filter(x => !x.isle).map(x => x.p) : land ? [new THREE.Vector3(land.x, 0, land.z)] : [];
+    this.flyToSet(list, extra);
   }
   private flyToSet(list: Isle[], extra: THREE.Vector3[] = []) {
-    if (!list.length) return;
-    const b = new THREE.Box3();
-    for (const s of list) b.expandByPoint(new THREE.Vector3(s.x - s.r, 0, s.z - s.r)).expandByPoint(new THREE.Vector3(s.x + s.r, 0, s.z + s.r));
-    // frameBox aims at the height of the isles; a point on the ground shows up nearer the camera, so move it out by as much
-    const az = this.stage.goal.azimuth, back = ISLE_Y * 0.6 / Math.tan(this.stage.goal.elevation);
-    for (const p of extra) {
-      const gx = p.x + back * Math.cos(az), gz = p.z + back * Math.sin(az);
-      // wide enough for the pin's label, centred on the point
-      b.expandByPoint(new THREE.Vector3(gx - 46, 0, gz - 46)).expandByPoint(new THREE.Vector3(gx + 46, 0, gz + 46));
-    }
-    const to = this.frameBox(b);
-    this.stage.flyTo(to.x, to.z, Math.max(50, to.viewSize));
+    if (!list.length && !extra.length) return;
+    const pts = list.map(s => ({ p: new THREE.Vector3(s.x, s.y + s.tall, s.z), r: s.r + 4 }));
+    // a start or end on the ground: wide enough for its pin's label
+    for (const p of extra) pts.push({ p, r: 14 });
+    if (this.inView(pts)) return;
+    const to = this.frameAll(pts, 40, 60);
+    this.stage.flyTo(to.x, to.z, Math.max(this.stage.viewSize, to.viewSize));
+  }
+  // Whether all these points (with their radius) are on screen now, right of the panel and inside the frame.
+  private inView(pts: { p: THREE.Vector3; r: number }[]) {
+    const cb = this.canvasBox.getBoundingClientRect(), pr = this.panel.getBoundingClientRect();
+    const left = Math.max(this.frame.left, this.panel.style.display === 'none' ? 0 : pr.right) - cb.left, right = this.frame.right - cb.left;
+    const top = this.frame.top - cb.top, bottom = this.frame.bottom - cb.top, px = cb.height / this.stage.viewSize;
+    const out = { x: 0, y: 0, visible: false };
+    return pts.every(({ p, r }) => {
+      this.stage.project(p, out);
+      const m = r * px * 0.6;
+      return out.visible && out.x - m > left && out.x + m < right && out.y - m > top && out.y + m < bottom;
+    });
   }
   // What the selection lights up; everything else fades back.
   private applyFocus() {
@@ -692,6 +869,7 @@ export class DomainMap {
     // a reload while the same flow plays keeps its place
     const keep = this.flowFx && s?.k === 'flow' && this.flowFx.f.id === s.id ? { t: this.flowFx.t, playing: this.flowFx.playing } : null;
     this.clearFlow();
+    this.clearLinks();
     this.focusOrder.clear();
     let ids: string[] | null = null;
     if (m && s) {
@@ -719,15 +897,75 @@ export class DomainMap {
       i.label.dataset.n = n ? n.join('·') : '';
       delete (i.label as any)._w; // the number badge and bold change its width
     }
-    for (const b of this.bridges) {
-      const on = !fs || (fs.has(b.a) && fs.has(b.b));
-      b.mat.opacity = on ? 1 : 0.12;
-      b.mat.color.set(fs && on ? 0x1a1a1a : 0x6d5d4b);
-    }
+    this.paintBridges();
     // ties to the ground stay faint until something is in focus, or they cross the whole map
     for (const t of this.tethers) t.mat.opacity = !fs ? TETHER : fs.has(t.isle) ? (s?.k !== 'world' || t.land.w.id === s.id ? 0.8 : 0.3) : 0.04;
     const ends = this.flowFx ? [this.flowFx.f.start?.world, this.flowFx.f.end?.world] : [];
-    for (const l of this.lands) { const on = !fs || this.landInFocus(l) || (s?.k === 'world' && s.id === l.w.id) || ends.includes(l.w.id); l.mats.forEach(mt => fade(mt, on ? 1 : 0.2)); }
+    for (const l of this.lands) {
+      const me = s?.k === 'world' && s.id === l.w.id, on = !fs || me || this.landInFocus(l) || ends.includes(l.w.id);
+      l.mats.forEach(mt => fade(mt, on ? 1 : 0.2));
+      l.label.classList.toggle('sel', me); l.label.classList.toggle('faded', !on);
+    }
+    for (const q of this.posts) for (const [id, b] of q.rows) {
+      const l = this.lands.find(x => x.w.id === id);
+      b.classList.toggle('on', s?.k === 'world' && s.id === id);
+      b.classList.toggle('faded', !!fs && !(s?.k === 'world' && s.id === id) && !(l && (this.landInFocus(l) || ends.includes(id))));
+    }
+    if (m && s) this.showLinks(s);
+  }
+
+  // The picked isle's bridges and ties down (or a landmark's ties up) carry a current running away
+  // from the pick: thick dashes marching over the fine line, and a few beads riding it.
+  private showLinks(s: NonNullable<Sel>) {
+    const lines: THREE.Vector3[][] = [];
+    const ptsOf = (l: THREE.Line) => { const a = l.geometry.attributes.position as THREE.BufferAttribute; return Array.from({ length: a.count }, (_, i) => new THREE.Vector3().fromBufferAttribute(a, i)); };
+    if (s.k === 'entity') {
+      const isle = this.byId.get(s.id); if (!isle) return;
+      for (const b of this.bridges) if (b.a === isle || b.b === isle) { const p = ptsOf(b.line); lines.push(b.a === isle ? p : p.reverse()); }
+      for (const t of this.tethers) if (t.isle === isle) lines.push(ptsOf(t.line));
+    } else if (s.k === 'world') {
+      for (const t of this.tethers) if (t.land.w.id === s.id) lines.push(ptsOf(t.line).reverse());
+    } else return;
+    for (const pts of lines) {
+      if (pts.length < 2) continue;
+      const cum = [0];
+      for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i - 1].distanceTo(pts[i]));
+      const len = cum[cum.length - 1]; if (len < 0.5) continue;
+      const geo = new LineGeometry(); geo.setPositions(pts.flatMap(p => [p.x, p.y, p.z]));
+      const mat = new LineMaterial({ color: 0x111111, linewidth: 3, dashed: true, dashSize: 1.4, gapSize: 1.6, transparent: true, depthWrite: false, toneMapped: false, fog: false } as any);
+      const line = new Line2(geo, mat); line.computeLineDistances(); line.renderOrder = 4;
+      const beads = Array.from({ length: Math.min(4, Math.max(1, Math.round(len / 18))) }, () => {
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.5, 10, 8), new THREE.MeshBasicMaterial({ color: 0x111111, toneMapped: false, fog: false }));
+        b.renderOrder = 4; this.world.add(b); return b;
+      });
+      this.world.add(line);
+      this.links.push({ line, mat, beads, pts, cum, len, t: 0 });
+    }
+    this.walkLinks(0);
+  }
+  private walkLinks(dt: number) {
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    for (const k of this.links) {
+      if (!still) { k.t += dt; k.mat.dashOffset -= dt * 5; }
+      k.beads.forEach((b, j) => {
+        // evenly spaced along the line, riding out at a steady speed and starting over at the far end
+        const d = ((k.t * 9) + j * k.len / k.beads.length) % k.len;
+        let i = 0; while (i < k.cum.length - 2 && k.cum[i + 1] < d) i++;
+        const seg = k.cum[i + 1] - k.cum[i];
+        b.position.lerpVectors(k.pts[i], k.pts[i + 1], seg ? (d - k.cum[i]) / seg : 0);
+        // fade in from the pick, out toward the far end
+        const u = d / k.len;
+        b.scale.setScalar(Math.max(0.15, Math.min(1, u * 6, (1 - u) * 6)));
+      });
+    }
+  }
+  private clearLinks() {
+    for (const k of this.links) {
+      this.world.remove(k.line, ...k.beads);
+      k.line.geometry.dispose(); k.mat.dispose();
+      for (const b of k.beads) { b.geometry.dispose(); (b.material as THREE.Material).dispose(); }
+    }
+    this.links = [];
   }
 
   private flowWho(f: DFlow) { return this.model?.world.find(w => w.id === f.start?.world)?.name || ''; }
@@ -748,16 +986,14 @@ export class DomainMap {
     });
     if (!stations.length) return;
     // start and end sit on their real-world landmark, or on the first and last isle
-    stations.unshift({ ...stations[0], p: sl ? new THREE.Vector3(sl.x, 4.5, sl.z) : stations[0].p, k: -1, isle: null, houses: [] });
+    stations.unshift({ ...stations[0], p: sl ? new THREE.Vector3(sl.x, 6.5, sl.z) : stations[0].p, k: -1, isle: null, houses: [] });
     const last = stations[stations.length - 1];
-    add(el ? new THREE.Vector3(el.x, 4.5, el.z) : last.p, n, null);
+    add(el ? new THREE.Vector3(el.x, 6.5, el.z) : last.p, n, null);
     const pts: THREE.Vector3[] = [stations[0].p.clone()];
     for (let j = 1; j < stations.length; j++) {
       const a = pts[pts.length - 1], p = stations[j].p;
-      if (a.distanceTo(p) > 0.01) {
-        const mid = a.clone().lerp(p, 0.5); mid.y = Math.max(a.y, p.y) + 4 + a.distanceTo(p) * 0.08;
-        for (let i = 1; i <= 16; i++) { const t = i / 16, u = 1 - t; pts.push(new THREE.Vector3(u * u * a.x + 2 * u * t * mid.x + t * t * p.x, u * u * a.y + 2 * u * t * mid.y + t * t * p.y, u * u * a.z + 2 * u * t * mid.z + t * t * p.z)); }
-      }
+      // station to station as a metro line (rule 8): straight, one diagonal, straight, its height going evenly
+      if (a.distanceTo(p) > 0.01) pts.push(...lift(metroPath(a, p), a.y, p.y).slice(1));
       stations[j].pi = pts.length - 1;
     }
     const cum = [0];
@@ -893,10 +1129,15 @@ export class DomainMap {
       : m ? [st!.meta?.changedCount ? btn(`Update · ${st!.meta.changedCount} changed`, 'Update the map from the files changed since it was built:\n' + st!.meta.changed.slice(0, 20).join('\n'), () => this.run('update'), 'chip mini go') : null,
         btn('Rebuild', 'Read the whole project again and redraw the map from scratch', () => this.run('build'))] : null);
     const meta = st?.meta;
+    // the map keeps itself up to date: after sessions go quiet it re-reads what they changed
+    const auto = meta ? h('label', { class: 'dm-auto', title: 'Update the map by itself a few minutes after the project\'s sessions stop working (at most every 20 minutes, only when files changed). Each update is a short run of your model.' },
+      h('input', { type: 'checkbox', checked: meta.auto, onchange: (ev: Event) => api.domainStep(this.pid, 'auto', { on: (ev.target as HTMLInputElement).checked }).then(() => this.load(false)) }),
+      'Auto-update', meta.auto && meta.autoAt && !working ? h('span', { class: 'dim' }, ` · next ${meta.autoAt > Date.now() ? 'in ' + dur(meta.autoAt - Date.now()) : 'soon'}`) : null) : null;
     fill(this.headInfo,
-      working ? h('div', { class: 'dm-working' }, h('span', { class: 'spinner sm' }), `${job!.kind === 'update' ? 'Updating' : 'Reading the code'} with ${job!.model || 'your model'} · `, since(job!.started))
+      working ? h('div', { class: 'dm-working' }, h('span', { class: 'spinner sm' }), `${job!.kind === 'update' ? (job!.auto ? 'Catching up on the latest changes' : 'Updating') : 'Reading the code'} with ${job!.model || 'your model'} · `, since(job!.started))
       : job?.state === 'error' ? h('div', { class: 'dm-err' }, `Last run failed: ${job.error}`)
-      : meta ? `Built ${ago(meta.builtAt)}${meta.model ? ' · ' + meta.model : ''}${meta.cost ? ' · ' + money(meta.cost) + ' API-equiv.' : ''}${meta.changedCount ? '' : ' · up to date'}` : '');
+      : meta ? h('div', {}, `Built ${ago(meta.builtAt)}${meta.model ? ' · ' + meta.model : ''}${meta.cost ? ' · ' + money(meta.cost) + ' API-equiv.' : ''}${meta.changedCount ? '' : ' · up to date'}`) : null,
+      working ? null : auto);
     this.renderEmpty();
     const shown = m || this.busy() ? '' : 'none';
     if (this.panel.style.display !== shown) { this.panel.style.display = shown; this.host.onLayout(); }
@@ -904,16 +1145,44 @@ export class DomainMap {
     const tabB = (t: Tab, label: string, badge?: number) => h('button', { class: 'tab' + (this.tab === t && !this.sel ? ' on' : ''), onclick: () => { this.tab = t; this.select(null); } },
       label, badge ? h('span', { class: 'tbadge' }, badge) : null);
     const driftN = m.assumptions.filter(a => !a.holds).length;
-    fill(this.tabsEl, tabB('task', 'Next task'), tabB('flows', 'Flows'), tabB('drift', 'Drift', driftN), tabB('map', 'Map'));
+    fill(this.tabsEl, m.world.length ? tabB('start', 'Start from') : null, tabB('task', 'Next task'), tabB('flows', 'Flows'), tabB('drift', 'Drift', driftN), tabB('map', 'Map'));
     const sel = this.sel;
     const scroll = this.body.scrollTop;
     const typing = document.activeElement as HTMLTextAreaElement | null;
     const caret = typing?.classList.contains('dm-ta') ? typing.selectionStart : -1;
     if (sel) fill(this.body, this.card(sel));
-    else fill(this.body, this.tab === 'task' ? this.taskTab() : this.tab === 'flows' ? this.flowsTab() : this.tab === 'drift' ? this.driftTab() : this.mapTab());
+    else fill(this.body, this.tab === 'start' && m.world.length ? this.startTab() : this.tab === 'task' || this.tab === 'start' ? this.taskTab() : this.tab === 'flows' ? this.flowsTab() : this.tab === 'drift' ? this.driftTab() : this.mapTab());
     this.body.scrollTop = scroll;
     const ta = caret >= 0 ? this.body.querySelector<HTMLTextAreaElement>('.dm-ta') : null;
     if (ta) { ta.focus(); ta.setSelectionRange(caret, caret); }
+  }
+
+  // What a thing in the real world reaches: flows it starts or ends, isles that stand for it, drift on them.
+  private reach(id: string) {
+    const m = this.model!;
+    const ids = new Set(m.entities.filter(e => e.world.includes(id)).map(e => e.id));
+    return {
+      flows: m.flows.filter(f => f.start?.world === id || f.end?.world === id).length,
+      isles: ids.size,
+      drift: m.assumptions.filter(a => !a.holds && a.entities.some(e => ids.has(e))).length,
+    };
+  }
+  // A signpost's heading: the panel's list of that kind
+  private openKind(kind: WKind) {
+    this.tab = 'start'; this.select(null);
+    [...this.body.querySelectorAll('h3')].find(x => x.textContent === KIND_NAME[kind])?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  // Everyone and everything in the real world, by kind: pick one to start an investigation from it.
+  private startTab() {
+    const m = this.model!;
+    return [h('p', { class: 'dm-help' }, 'Who and what the project serves, grouped as on the ground around the map. Pick one to see the flows it sets going, the isles that stand for it, and what is strained around it.'),
+      ...KINDS.map(kind => this.sect(KIND_NAME[kind], m.world.filter(w => w.kind === kind).map(w => {
+        const r = this.reach(w.id);
+        return h('div', { class: 'dm-row', onclick: () => this.select({ k: 'world', id: w.id }, true) },
+          h('div', { class: 'dm-row-t' }, w.name, r.drift ? h('span', { class: 'pill sev-high', title: 'Drift on its isles' }, r.drift + ' drift') : null),
+          h('div', { class: 'dm-row-s' }, w.what),
+          h('div', { class: 'dm-row-s' }, `${r.flows} flow${r.flows === 1 ? '' : 's'} · ${r.isles} isle${r.isles === 1 ? '' : 's'}`));
+      })))];
   }
 
   private renderEmpty() {
@@ -987,14 +1256,15 @@ export class DomainMap {
   private flowsTab() {
     const m = this.model!;
     return [h('p', { class: 'dm-help' }, 'What people and the system do end to end. Pick one to walk it: where it starts, each isle and file it passes, where it ends.'),
-      ...m.flows.map(f => {
-        const via = f.steps.map(s => this.byId.get(s.e)?.e.name).filter((x, i, a) => x && a[i - 1] !== x);
-        const who = this.flowWho(f);
-        return h('div', { class: 'dm-row', onclick: () => this.select({ k: 'flow', id: f.id }, true) },
-          h('div', { class: 'dm-row-t' }, f.name, h('span', { class: 'pill fl-' + f.status }, FLOW[f.status])),
-          h('div', { class: 'dm-row-s' }, h('span', {}, who ? [h('b', {}, '▶ ' + who), ' → '] : null, via.join(' → '))),
-          f.end?.outcome ? h('div', { class: 'dm-row-s' }, '■ ' + f.end.outcome) : null);
-      })];
+      ...m.flows.map(f => this.flowRow(f))];
+  }
+  private flowRow(f: DFlow) {
+    const via = f.steps.map(s => this.byId.get(s.e)?.e.name).filter((x, i, a) => x && a[i - 1] !== x);
+    const who = this.flowWho(f);
+    return h('div', { class: 'dm-row', onclick: () => this.select({ k: 'flow', id: f.id }, true) },
+      h('div', { class: 'dm-row-t' }, f.name, h('span', { class: 'pill fl-' + f.status }, FLOW[f.status])),
+      h('div', { class: 'dm-row-s' }, h('span', {}, who ? [h('b', {}, '▶ ' + who), ' → '] : null, via.join(' → '))),
+      f.end?.outcome ? h('div', { class: 'dm-row-s' }, '■ ' + f.end.outcome) : null);
   }
 
   private driftTab() {
@@ -1026,14 +1296,14 @@ export class DomainMap {
       this.sect('Archipelagos', m.groups.map(g => h('div', { class: 'dm-row', onclick: () => { this.select(null); this.flyToSet(this.isles.filter(s => s.e.group === g.id)); } },
         h('div', { class: 'dm-row-t' }, g.name), h('div', { class: 'dm-row-s' }, g.what),
         h('div', { class: 'dm-chips' }, m.entities.filter(e => e.group === g.id).map(e => this.chipE(e.id)))))),
-      this.sect('The real world below', m.world.map(w => h('div', { class: 'dm-row', onclick: () => this.select({ k: 'world', id: w.id }, true) },
-        h('div', { class: 'dm-row-t' }, w.name, h('span', { class: 'dim' }, ' · ' + w.kind)), h('div', { class: 'dm-row-s' }, w.what)))),
+      ...KINDS.map(kind => this.sect('The real world · ' + KIND_NAME[kind], m.world.filter(w => w.kind === kind).map(w => h('div', { class: 'dm-row', onclick: () => this.select({ k: 'world', id: w.id }, true) },
+        h('div', { class: 'dm-row-t' }, w.name), h('div', { class: 'dm-row-s' }, w.what))))),
     ];
   }
 
   private card(s: NonNullable<Sel>) {
     const m = this.model!;
-    const back = h('button', { class: 'dm-back', onclick: () => this.select(null) }, '← ', { task: 'Next task', flows: 'Flows', drift: 'Drift', map: 'Map' }[this.tab]);
+    const back = h('button', { class: 'dm-back', onclick: () => this.select(null) }, '← ', { start: 'Start from', task: 'Next task', flows: 'Flows', drift: 'Drift', map: 'Map' }[this.tab]);
     if (s.k === 'entity') {
       const e = this.byId.get(s.id)?.e; if (!e) return back;
       const rel = m.relations.filter(r => r.a === e.id || r.b === e.id);
@@ -1056,9 +1326,38 @@ export class DomainMap {
       ];
     }
     if (s.k === 'world') {
+      // a starting point: what it sets going, what comes back to it, where it lives in the code, what is wrong around it
       const w = m.world.find(x => x.id === s.id); if (!w) return back;
-      return [back, h('div', { class: 'dm-kicker' }, 'Real world · ' + w.kind), h('h2', {}, w.name), h('p', {}, w.what),
-        this.sect('Stands for it in the code', h('div', { class: 'dm-chips' }, m.entities.filter(e => e.world.includes(w.id)).map(e => this.chipE(e.id))))];
+      const ents = m.entities.filter(e => e.world.includes(w.id)), ids = new Set(ents.map(e => e.id));
+      const starts = m.flows.filter(f => f.start?.world === w.id);
+      const ends = m.flows.filter(f => f.end?.world === w.id && !starts.includes(f));
+      const passes = m.flows.filter(f => !starts.includes(f) && !ends.includes(f) && f.steps.some(x => ids.has(x.e)));
+      const asm = m.assumptions.filter(a => a.entities.some(id => ids.has(id)));
+      const drift = asm.filter(a => !a.holds), rules = asm.filter(a => a.holds);
+      const files = new Set(ents.flatMap(e => e.code.map(c => c.p)));
+      const weak = ents.filter(e => e.status !== 'solid');
+      const live = [...this.drones.values()].filter(d => d.isle && ids.has(d.isle.e.id) && d.g.visible);
+      const asmRow = (a: DAssumption) => h('div', { class: 'dm-row' + (a.holds ? '' : ' drift'), onclick: () => this.select({ k: 'assumption', id: a.id }, true) },
+        h('div', { class: 'dm-row-t' }, a.text, a.holds ? null : h('span', { class: 'pill sev-' + a.severity }, a.severity)));
+      const brief = () => { this.tab = 'task'; this.draft = `${w.name}: `; this.select(null);
+        const ta = this.body.querySelector<HTMLTextAreaElement>('.dm-ta'); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } };
+      return [back, h('div', { class: 'dm-kicker' }, 'Real world · ' + KIND_NAME[w.kind]), h('h2', {}, w.name), h('p', {}, w.what),
+        h('div', { class: 'dm-facts' },
+          h('span', {}, h('b', {}, ents.length), ents.length === 1 ? ' isle' : ' isles'),
+          h('span', {}, h('b', {}, files.size), files.size === 1 ? ' file' : ' files'),
+          h('span', {}, h('b', {}, starts.length + ends.length + passes.length), ' flows'),
+          drift.length ? h('span', { class: 'red' }, h('b', {}, drift.length), ' drift') : null),
+        live.length ? h('div', { class: 'dm-live' }, live.map(d => h('i', { style: { background: d.color } })), `${live.length} session${live.length > 1 ? 's' : ''} working on it now`) : null,
+        h('div', { class: 'dm-actions' }, h('button', { class: 'chip mini', onclick: brief, title: 'Write the next task with this as its subject' }, 'Brief a task about it')),
+        this.sect('Starts these flows', starts.map(f => this.flowRow(f))),
+        this.sect('Flows that end here', ends.map(f => this.flowRow(f))),
+        this.sect('Stands for it in the code', ents.length ? h('div', { class: 'dm-chips' }, ents.map(e => this.chipE(e.id))) : null),
+        this.sect('Not solid yet', weak.map(e => h('div', { class: 'dm-row', onclick: () => this.select({ k: 'entity', id: e.id }, true) },
+          h('div', { class: 'dm-row-t' }, e.name, h('span', { class: 'pill st-' + e.status }, STATUS[e.status])), e.statusWhy ? h('div', { class: 'dm-row-s' }, e.statusWhy) : null))),
+        this.sect('Drift around it', drift.map(asmRow)),
+        this.sect('Other flows through its isles', passes.map(f => this.flowRow(f))),
+        this.sect('Rules to keep', rules.map(asmRow)),
+        !ents.length && !starts.length && !ends.length ? h('p', { class: 'dim' }, 'Nothing in the code is tied to it yet.') : null];
     }
     if (s.k === 'flow') {
       const f = m.flows.find(x => x.id === s.id); if (!f) return back;
@@ -1203,57 +1502,237 @@ function landmark(kind: string) {
   return g;
 }
 
-// Isles of a group cluster together; related isles pull toward each other;
-// nothing overlaps. Deterministic, so the map keeps its shape between loads.
+// ------------------------------------------------------------------ layout
+// One optimisation over everything an isle is tied to: the isles it relates to, the isles a flow
+// hops to from it, and the thing in the real world it stands for. The real world stands on a ring
+// around the archipelago in quarters by kind, re-placed as the isles settle, so an isle drifts to the
+// side its landmark is on and its tie down stays short. Then, like the metro maps' rule 10, the
+// busiest isles sit in the middle, isles tied to nothing go to the edges, and isles of a size swap
+// places wherever that makes the lines shorter. Deterministic, so the map keeps its shape between loads.
+const ISLE_GAP = 22, GROUP_GAP = 40; // open sky between neighbouring isles, and between archipelagos
+const RING_SPACE = 13, RING_GAP = 26; // ring length between neighbours in a quarter, and between quarters
+type WorldThing = DomainModel['world'][number];
+function ringRadius(R: number, world: WorldThing[]) {
+  const kindsIn = KINDS.filter(k => world.some(w => w.kind === k)).length;
+  return Math.max(R * 1.3 + ISLE_Y, ((world.length - kindsIn) * RING_SPACE + kindsIn * RING_GAP) / (Math.PI * 2 * 0.9));
+}
+// The real world's quarters on a ring of radius ringR: each quarter centred on where its things pull,
+// pushed apart until none overlap; each thing's angle `a` is rewritten to its final place.
+function ringQuarters<T extends { w: WorldThing; a: number }>(want: T[], ringR: number) {
+  const step = RING_SPACE / ringR, gapA = RING_GAP / ringR;
+  const quarters = KINDS.map(kind => {
+    const list = want.filter(x => x.w.kind === kind);
+    if (!list.length) return null;
+    const a = Math.atan2(list.reduce((s, x) => s + Math.sin(x.a), 0), list.reduce((s, x) => s + Math.cos(x.a), 0));
+    // inside the quarter, each thing keeps its side: sorted by where its isles pull it
+    list.sort((p, q) => Math.atan2(Math.sin(p.a - a), Math.cos(p.a - a)) - Math.atan2(Math.sin(q.a - a), Math.cos(q.a - a)));
+    return { kind, list, a, half: (list.length - 1) * step / 2 };
+  }).filter(Boolean).sort((p, q) => p!.a - q!.a) as { kind: WKind; list: T[]; a: number; half: number }[];
+  for (let it = 0; it < 120 && quarters.length > 1; it++) {
+    let moved = false;
+    for (let j = 0; j < quarters.length; j++) {
+      const p = quarters[j], q = quarters[(j + 1) % quarters.length];
+      let gap = q.a - p.a; if (j === quarters.length - 1) gap += Math.PI * 2;
+      const need = p.half + q.half + gapA;
+      if (gap < need) { const d = (need - gap) / 2; p.a -= d; q.a += d; moved = true; }
+    }
+    if (!moved) break;
+  }
+  for (const q of quarters) q.list.forEach((x, j) => { x.a = q.a - q.half + j * step; });
+  return quarters;
+}
+
 function layout(m: DomainModel) {
-  const deg = new Map<string, number>();
-  for (const r of m.relations) { deg.set(r.a, (deg.get(r.a) || 0) + 1); deg.set(r.b, (deg.get(r.b) || 0) + 1); }
   const radius = (e: DEntity) => e.status === 'missing' ? 3.6 : 4 + Math.sqrt(e.code.length) * 1.5;
-  const groups = m.groups.map(g => ({ g, list: m.entities.filter(e => e.group === g.id).sort((a, b) => (deg.get(b.id) || 0) - (deg.get(a.id) || 0)) })).filter(x => x.list.length);
-  // order groups around the ring so linked groups sit side by side
-  const gOf = new Map(m.entities.map(e => [e.id, e.group]));
-  const w = new Map<string, number>();
-  for (const r of m.relations) { const a = gOf.get(r.a)!, b = gOf.get(r.b)!; if (a !== b) { const k = [a, b].sort().join('|'); w.set(k, (w.get(k) || 0) + 1); } }
+  const E = m.entities, n = E.length;
+  const idx = new Map(E.map((e, i) => [e.id, i]));
+  // ties between isles, weighted: a relation 1, each hop of a flow 0.5 (summed, capped)
+  const tieW = new Map<string, number>();
+  const tie = (a: number | undefined, b: number | undefined, w: number) => {
+    if (a == null || b == null || a === b) return;
+    const k = a < b ? `${a}|${b}` : `${b}|${a}`; tieW.set(k, Math.min(2.5, (tieW.get(k) || 0) + w));
+  };
+  for (const r of m.relations) tie(idx.get(r.a), idx.get(r.b), 1);
+  // ties down to the real world: what an isle stands for 1, where a flow starts or ends 0.5
+  const down = new Map<string, Map<number, number>>(m.world.map(w => [w.id, new Map()]));
+  const tieDown = (wid: string | null | undefined, i: number | undefined, w: number) => {
+    const d = wid ? down.get(wid) : null; if (!d || i == null) return; d.set(i, Math.min(2, (d.get(i) || 0) + w));
+  };
+  E.forEach((e, i) => { for (const w of e.world) tieDown(w, i, 1); });
+  for (const f of m.flows) {
+    const seq = f.steps.map(s => idx.get(s.e)).filter((x): x is number => x != null);
+    for (let j = 1; j < seq.length; j++) tie(seq[j - 1], seq[j], 0.5);
+    tieDown(f.start?.world, seq[0], 0.5); tieDown(f.end?.world, seq[seq.length - 1], 0.5);
+  }
+  const ties = [...tieW].map(([k, w]) => { const [a, b] = k.split('|').map(Number); return { a, b, w }; });
+  const deg = new Float64Array(n);
+  for (const t of ties) { deg[t.a] += t.w; deg[t.b] += t.w; }
+  for (const d of down.values()) for (const [i, w] of d) deg[i] += w * 0.5;
+
+  // a first guess: archipelagos around a ring, linked ones side by side, isles in a sunflower
+  const groups = m.groups.map(g => ({ g, list: E.map((e, i) => i).filter(i => E[i].group === g.id).sort((a, b) => deg[b] - deg[a]) })).filter(x => x.list.length);
+  const gOf = E.map(e => e.group);
+  const gw = new Map<string, number>();
+  for (const t of ties) { const a = gOf[t.a], b = gOf[t.b]; if (a !== b) { const k = [a, b].sort().join('|'); gw.set(k, (gw.get(k) || 0) + t.w); } }
   const ring: typeof groups = [];
   const left = [...groups].sort((a, b) => b.list.length - a.list.length);
-  ring.push(left.shift()!);
+  if (left.length) ring.push(left.shift()!);
   while (left.length) {
     const last = ring[ring.length - 1].g.id;
-    left.sort((a, b) => (w.get([b.g.id, last].sort().join('|')) || 0) - (w.get([a.g.id, last].sort().join('|')) || 0));
+    left.sort((a, b) => (gw.get([b.g.id, last].sort().join('|')) || 0) - (gw.get([a.g.id, last].sort().join('|')) || 0));
     ring.push(left.shift()!);
   }
-  const gR = ring.map(x => 10 + Math.sqrt(x.list.reduce((s, e) => s + radius(e) ** 2, 0)) * 2.7);
-  const circ = gR.reduce((s, r) => s + r * 2 + 18, 0);
-  const R = ring.length > 1 ? Math.max(circ / (2 * Math.PI), gR[0] + 6) : 0;
-  const pos = new Map<string, { x: number; z: number; r: number; gx: number; gz: number }>();
+  const P = E.map(e => ({ x: 0, z: 0, r: radius(e) }));
+  const gR = ring.map(x => 14 + Math.sqrt(x.list.reduce((s, i) => s + P[i].r ** 2, 0)) * 3.6);
+  const circ = gR.reduce((s, r) => s + r * 2 + GROUP_GAP, 0);
+  const R0 = ring.length > 1 ? Math.max(circ / (2 * Math.PI), gR[0] + 6) : 0;
   let ang = 0;
   ring.forEach((x, gi) => {
-    const share = (gR[gi] * 2 + 18) / circ * Math.PI * 2;
+    const share = (gR[gi] * 2 + GROUP_GAP) / circ * Math.PI * 2;
     const a = ang + share / 2; ang += share;
-    const gx = Math.cos(a) * R, gz = Math.sin(a) * R;
-    x.list.forEach((e, k) => {
-      const t = k * 2.399, d = k ? 11 * Math.sqrt(k) : 0;
-      pos.set(e.id, { x: gx + Math.cos(t) * d, z: gz + Math.sin(t) * d, r: radius(e), gx, gz });
-    });
+    x.list.forEach((i, k) => { const t = k * 2.399, d = k ? 16 * Math.sqrt(k) : 0; P[i].x = Math.cos(a) * R0 + Math.cos(t) * d; P[i].z = Math.sin(a) * R0 + Math.sin(t) * d; });
   });
-  const ids = [...pos.keys()], P = ids.map(id => pos.get(id)!);
-  const idx = new Map(ids.map((id, i) => [id, i]));
-  const springs = m.relations.map(r => [idx.get(r.a), idx.get(r.b)]).filter(([a, b]) => a != null && b != null) as [number, number][];
-  for (let it = 0; it < 500; it++) {
-    const k = 1 - it / 500;
-    for (const [a, b] of springs) {
-      const p = P[a], q = P[b], dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 1;
-      const want = p.r + q.r + 18, f = (d - want) / d * 0.03 * k;
+  const members = groups.map(x => x.list);
+
+  // the real world on its ring, placed from where its isles are now
+  const wpos = new Map<string, { x: number; z: number; a: number }>();
+  const placeWorld = () => {
+    let cx = 0, cz = 0; for (const p of P) { cx += p.x; cz += p.z; } cx /= n || 1; cz /= n || 1;
+    let R = 30; for (const p of P) R = Math.max(R, Math.hypot(p.x - cx, p.z - cz) + p.r);
+    const ringR = ringRadius(R, m.world);
+    const want = m.world.map((w, k) => {
+      let vx = 0, vz = 0; for (const [i, wt] of down.get(w.id)!) { vx += (P[i].x - cx) * wt; vz += (P[i].z - cz) * wt; }
+      return { w, a: Math.hypot(vx, vz) > 1 ? Math.atan2(vz, vx) : k / Math.max(1, m.world.length) * Math.PI * 2 };
+    });
+    ringQuarters(want, ringR);
+    for (const x of want) wpos.set(x.w.id, { x: cx + Math.cos(x.a) * ringR, z: cz + Math.sin(x.a) * ringR, a: x.a });
+    return { cx, cz, R };
+  };
+  let ctr = { cx: 0, cz: 0, R: 30 };
+  const repel = (f0: number) => {
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      const p = P[i], q = P[j], dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 0.01;
+      const min = p.r + q.r + ISLE_GAP + (gOf[i] === gOf[j] ? 0 : 12);
+      if (d < min) { const f = (min - d) / d * f0; p.x -= dx * f; p.z -= dz * f; q.x += dx * f; q.z += dz * f; }
+    }
+  };
+  const IT = 600;
+  for (let it = 0; it < IT; it++) {
+    const k = 1 - it / IT;
+    if (it % 25 === 0) ctr = placeWorld();
+    // ties pull isles to a comfortable span, never closer than their open sky
+    for (const t of ties) {
+      const p = P[t.a], q = P[t.b], dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 1;
+      const want = p.r + q.r + ISLE_GAP + 8, f = (d - want) / d * 0.03 * k * t.w;
       p.x += dx * f; p.z += dz * f; q.x -= dx * f; q.z -= dz * f;
     }
-    for (const p of P) { p.x += (p.gx - p.x) * 0.012 * k; p.z += (p.gz - p.z) * 0.012 * k; }
-    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
-      const p = P[i], q = P[j], dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 0.01;
-      const min = p.r + q.r + 12;
-      if (d < min) { const f = (min - d) / d * 0.5; p.x -= dx * f; p.z -= dz * f; q.x += dx * f; q.z += dz * f; }
+    // each archipelago holds together
+    for (const list of members) {
+      let gx = 0, gz = 0; for (const i of list) { gx += P[i].x; gz += P[i].z; } gx /= list.length; gz /= list.length;
+      for (const i of list) { P[i].x += (gx - P[i].x) * 0.012 * k; P[i].z += (gz - P[i].z) * 0.012 * k; }
     }
+    // the busiest to the middle; an isle tied to nothing gets no pull and drifts to the edge
+    for (let i = 0; i < n; i++) { const c = 0.0012 * k * Math.min(deg[i], 6); P[i].x -= P[i].x * c; P[i].z -= P[i].z * c; }
+    // and toward the side its real-world things stand on: a point half-way out on that side, not the ring
+    // itself, or the archipelago would grow toward the ring and push the ring out after it
+    for (const [wid, d] of down) {
+      const w = wpos.get(wid); if (!w) continue;
+      const tx = ctr.cx + Math.cos(w.a) * ctr.R * 0.5, tz = ctr.cz + Math.sin(w.a) * ctr.R * 0.5;
+      for (const [i, wt] of d) { const f = 0.006 * k * wt; P[i].x += (tx - P[i].x) * f; P[i].z += (tz - P[i].z) * f; }
+    }
+    repel(0.5);
   }
-  let cx = 0, cz = 0; for (const p of P) { cx += p.x; cz += p.z; } cx /= P.length || 1; cz /= P.length || 1;
-  for (const p of P) { p.x -= cx; p.z -= cz; }
-  return pos;
+  // swaps: two isles of about one size trade places when that shortens the lines they draw
+  const at = (i: number, x: number, z: number) => {
+    let c = 0;
+    for (const t of ties) if (t.a === i || t.b === i) { const o = P[t.a === i ? t.b : t.a]; c += t.w * Math.hypot(o.x - x, o.z - z); }
+    for (const [wid, d] of down) { const wt = d.get(i); const w = wpos.get(wid); if (wt && w) c += wt * 0.6 * Math.hypot(w.x - x, w.z - z); }
+    return c;
+  };
+  placeWorld();
+  for (let round = 0; round < 4; round++) {
+    let swapped = false;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      if (gOf[i] !== gOf[j] || Math.abs(P[i].r - P[j].r) > 2.5) continue;
+      const before = at(i, P[i].x, P[i].z) + at(j, P[j].x, P[j].z);
+      const pi = { x: P[i].x, z: P[i].z };
+      P[i].x = P[j].x; P[i].z = P[j].z; P[j].x = pi.x; P[j].z = pi.z;
+      if (at(i, P[i].x, P[i].z) + at(j, P[j].x, P[j].z) < before - 1) swapped = true;
+      else { P[j].x = P[i].x; P[j].z = P[i].z; P[i].x = pi.x; P[i].z = pi.z; }
+    }
+    if (!swapped) break;
+    placeWorld();
+  }
+  for (let it = 0; it < 60; it++) repel(0.5);
+  const { cx, cz } = placeWorld();
+  const pos = new Map<string, { x: number; z: number; r: number }>();
+  E.forEach((e, i) => pos.set(e.id, { x: P[i].x - cx, z: P[i].z - cz, r: P[i].r }));
+  // angles are about the centre, which the shift does not change
+  const worldA = new Map([...wpos].map(([id, w]) => [id, w.a]));
+  return { pos, worldA };
 }
+
+// ------------------------------------------------------------------ metro lines
+// Lines are drawn by the rules of the schematic layer (schematic.ts, rules 8, 9, 12, after Beck's
+// Underground map): taut, straight out, at most one 45° diagonal, straight in; every bend the same
+// radius; a light casing so two lines crossing stay two lines; lines leaving an isle the same way each
+// keep their own lane.
+type P2 = { x: number; z: number };
+const BEND = 3.5, LANE = 1.9;
+function metroPath(a: P2, b: P2): P2[] {
+  const dx = b.x - a.x, dz = b.z - a.z, ax = Math.abs(dx), az = Math.abs(dz);
+  const major = Math.max(ax, az), minor = Math.min(ax, az);
+  if (minor < 0.4 || major - minor < 0.4) return [a, b]; // already one straight run
+  const sx = Math.sign(dx), sz = Math.sign(dz), run = (major - minor) / 2;
+  const p1 = ax > az ? { x: a.x + sx * run, z: a.z } : { x: a.x, z: a.z + sz * run };
+  const p2 = { x: p1.x + sx * minor, z: p1.z + sz * minor };
+  return fillet([a, p1, p2, b]);
+}
+// The direction a metro line leaves a from (toward b), as one of 8.
+function exitDir(a: P2, b: P2): P2 {
+  const p = metroPath(a, b), q = p[1], d = Math.hypot(q.x - a.x, q.z - a.z) || 1;
+  return { x: (q.x - a.x) / d, z: (q.z - a.z) / d };
+}
+// Round each corner with the same radius (less where a run is too short to hold it).
+function fillet(pts: P2[]): P2[] {
+  const out: P2[] = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], c = pts[i], b = pts[i + 1];
+    const l0 = Math.hypot(c.x - a.x, c.z - a.z), l1 = Math.hypot(b.x - c.x, b.z - c.z);
+    const t = Math.min(BEND, l0 / 2, l1 / 2);
+    if (t < 0.05) { out.push(c); continue; }
+    const s = { x: c.x + (a.x - c.x) / l0 * t, z: c.z + (a.z - c.z) / l0 * t }, e = { x: c.x + (b.x - c.x) / l1 * t, z: c.z + (b.z - c.z) / l1 * t };
+    for (let k = 0; k <= 4; k++) { const u = k / 4, v = 1 - u; out.push({ x: v * v * s.x + 2 * v * u * c.x + u * u * e.x, z: v * v * s.z + 2 * v * u * c.z + u * u * e.z }); }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+// Drop the start of a line that lies inside a circle (an isle's rim), cutting at the rim.
+function cutStart(pts: P2[], c: P2, r: number): P2[] {
+  const inside = (p: P2) => Math.hypot(p.x - c.x, p.z - c.z) < r;
+  let i = 0; while (i < pts.length - 1 && inside(pts[i + 1])) i++;
+  if (i >= pts.length - 1) return pts.slice(-1);
+  const a = pts[i], b = pts[i + 1];
+  if (!inside(a)) return pts.slice(i);
+  let lo = 0, hi = 1;
+  for (let k = 0; k < 20; k++) { const m = (lo + hi) / 2; if (inside({ x: a.x + (b.x - a.x) * m, z: a.z + (b.z - a.z) * m })) lo = m; else hi = m; }
+  return [{ x: a.x + (b.x - a.x) * hi, z: a.z + (b.z - a.z) * hi }, ...pts.slice(i + 1)];
+}
+// A plan line raised into the scene, its height going evenly from y0 to y1 along its length.
+function lift(pts: P2[], y0: number, y1: number): THREE.Vector3[] {
+  const L = pathLen(pts) || 1;
+  let s = 0;
+  return pts.map((p, i) => { if (i) s += Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z); return new THREE.Vector3(p.x, y0 + (y1 - y0) * s / L, p.z); });
+}
+// The point a fraction t of the way along a line.
+function alongAt(pts: THREE.Vector3[], t: number) {
+  let L = 0; for (let i = 1; i < pts.length; i++) L += pts[i].distanceTo(pts[i - 1]);
+  let want = L * t;
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i].distanceTo(pts[i - 1]);
+    if (want <= d) return pts[i - 1].clone().lerp(pts[i], d ? want / d : 0);
+    want -= d;
+  }
+  return pts[pts.length - 1].clone();
+}
+function pathLen(pts: P2[]) { let s = 0; for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z); return s; }

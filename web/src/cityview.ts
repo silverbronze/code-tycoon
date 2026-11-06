@@ -332,7 +332,8 @@ export class CityView {
     const e = this.els;
     // the open part of the map, between the panels
     const box = this.root.getBoundingClientRect(), r = (x: HTMLElement) => x.getBoundingClientRect();
-    const frame = { left: r(e.left).right, top: r(e.header).bottom, right: r(e.right).left, bottom: r(e.bottom).top };
+    // the sessions column is hidden on the domain map (its sessions lead the task log there)
+    const frame = { left: e.left.style.display === 'none' ? box.left : r(e.left).right, top: r(e.header).bottom, right: r(e.right).left, bottom: r(e.bottom).top };
     if (frame.right - frame.left < 200) { frame.left = box.left; frame.right = box.right; }
     this.frameRect = frame;
     // on the domain layer its panel takes the left of that part; the floating bits move right of it
@@ -344,6 +345,7 @@ export class CityView {
     Object.assign(e.layers.style, { left: `${left - box.left + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
     Object.assign(e.compass.style, { right: `${box.right - frame.right + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
     this.schem?.setFrame(frame);
+    if (this.domain) this.domain.occluders = [e.pulse, e.layers, e.compass].filter(Boolean);
     this.domain?.setFrame(frame);
   }
 
@@ -371,6 +373,9 @@ export class CityView {
     this.stage.hidden = notCity;
     e.stage.style.visibility = e.overlay.style.visibility = e.tags.style.visibility = notCity ? 'hidden' : '';
     e.compass.style.visibility = schem ? 'hidden' : '';
+    // the domain map's own panel takes the left; the open sessions lead the task log instead
+    e.left.style.display = which === 'domain' ? 'none' : 'flex';
+    this.renderLog();
     e.levelChip.style.display = notCity ? 'none' : '';
     e.cityOpts.style.display = notCity ? 'none' : '';
     e.colorSel.style.display = notCity ? 'none' : '';
@@ -858,12 +863,34 @@ export class CityView {
       for (const [sid, ts] of this.lastSim) if (this.t - ts > ACTIVE_WINDOW) { this.actors.retire(sid); this.lastSim.delete(sid); }
     } else simDt = 0;
     if (simDt > 0) this.world.decayWarm(Math.exp(-simDt / WARM_TAU));
-    if (this.layer === 'domain') this.domain.setActive(this.world.working.map(w => ({ tt: w.tt, ti: w.ti, color: '#' + w.color.getHexString() })));
+    if (this.layer === 'domain') { if (this.uiTick % 15 === 0 || !this.domainActive) this.domainActive = this.codeAtWork(); this.domain.setActive(this.domainActive); }
     if (this.layer === 'schematic') { this.schem.setTime(this.t); this.schem.setActive(this.world.working.map(w => ({ tt: w.tt, ti: w.ti, color: '#' + w.color.getHexString() }))); }
     if (performance.now() - this.gapNote > 2500 && this.els.gap.textContent) { this.els.gap.textContent = ''; this.warped = 0; }
     if ((this.uiTick++ % 15) === 0) { this.updateClock(); this.placeTags(); if (this.mode === 'replay' && this.playing && this.uiTick % 60 === 1) { this.renderSessions(); this.renderLog(); } }
     else this.placeTags();
   };
+
+  // Sessions at work and the code they work on, for the domain map: the place they are on when it is a
+  // file or module, else (running a command, reading the web) the last file or module they touched,
+  // so a session shows on its isle the whole time it works, not only while it edits.
+  private domainActive: { tt: number; ti: number; color: string }[] | null = null;
+  private codeAtWork() {
+    const out: { tt: number; ti: number; color: string }[] = [];
+    const ev = this.data.events, since = this.t - 30 * 60e3;
+    const sids = this.mode === 'live'
+      ? [...this.liveSessions.values()].filter(s => s.state === 'working' || s.state === 'needs-you').map(s => s.id)
+      : [...this.lastSim].filter(([, ts]) => this.t - ts < ACTIVE_WINDOW).map(([sid]) => sid);
+    for (const sid of sids) {
+      const si = this.sIndex.get(sid); if (si == null) continue;
+      let place = this.lastPlace.get(sid);
+      if (!place || place[0] > 1) {
+        place = undefined;
+        for (let i = Math.min(this.cursor, ev.ts.length) - 1; i >= 0 && ev.ts[i] > since; i--) if (ev.s[i] === si && (ev.tt[i] === 0 || ev.tt[i] === 1)) { place = [ev.tt[i], ev.ti[i]]; break; }
+      }
+      if (place) out.push({ tt: place[0], ti: place[1], color: this.colorStr[si] });
+    }
+    return out;
+  }
 
   private dispatchHistory() {
     const ev = this.data.events;
@@ -923,8 +950,12 @@ export class CityView {
       case 'session': {
         const s = m.session as LiveSession;
         if (s.pid !== this.pid) return;
-        const isNew = !this.liveSessions.has(s.id) || (this.liveSessions.get(s.id)!.state === 'ended') !== (s.state === 'ended');
+        const prev = this.liveSessions.get(s.id);
+        const isNew = !prev || (prev.state === 'ended') !== (s.state === 'ended');
         this.liveSessions.set(s.id, s);
+        // the task log leads with the open sessions: a new state re-sorts it, a new action is written in place
+        if (!prev || prev.state !== s.state || isStuck(prev) !== isStuck(s) || !!prev.health !== !!s.health) this.renderLog();
+        else { const a = this.els.log?.querySelector(`.task.live[data-sid="${CSS.escape(s.id)}"] .lact`); if (a) a.textContent = this.liveAction(s); }
         this.onSessionHealth(s);
         if (s.title) { const si = this.sIndex.get(s.id); if (si != null) this.data.sessions[si].title = s.title; }
         if (this.mode === 'live') {
@@ -1205,9 +1236,18 @@ export class CityView {
       e.filterChip.append(h('span', { class: 'fchip', style: { '--c': this.colorStr[si] } }, 'Session: ' + (this.data.sessions[si]?.title || ''), h('button', { onclick: () => this.focusOn(null) }, '×')));
     }
     const limitT = this.mode === 'live' ? Infinity : this.t;
+    // live: each open session's current task leads the log, marked with what the session is doing
+    // (the sessions column is hidden on the domain map, so this is where they show there)
+    const now = this.liveNow();
+    const pinned = new Set(now.map(x => x.t));
+    if (now.length) {
+      out.push(h('div', { class: 'sgroup working' }, 'Now', h('span', {}, now.length)));
+      for (const x of now) if (!q || ((x.t.title || '') + ' ' + x.t.prompt).toLowerCase().includes(q)) out.push(this.taskRow(x.t, x.s));
+      out.push(h('div', { class: 'sgroup' }, 'Earlier'));
+    }
     for (let i = tasks.length - 1; i >= 0 && out.length < 250; i--) {
       const t = tasks[i];
-      if (t.ts > limitT) continue;
+      if (t.ts > limitT || pinned.has(t)) continue;
       if (this.focusSession && t.s !== this.focusSession) continue;
       if (q && !((t.title || '') + ' ' + t.prompt).toLowerCase().includes(q)) continue;
       out.push(this.taskRow(t));
@@ -1217,13 +1257,36 @@ export class CityView {
     e.log.append(...out);
   }
 
-  private taskRow(t: TaskT) {
+  // The open sessions' current tasks (live only), the ones that need you first, then working, then your turn.
+  private liveNow(): { t: TaskT; s: LiveSession }[] {
+    if (this.mode !== 'live') return [];
+    const rank = (s: LiveSession) => s.state === 'needs-you' ? 0 : isStuck(s) ? 1 : s.state === 'working' ? 2 : 3;
+    const out: { t: TaskT; s: LiveSession }[] = [];
+    for (const s of this.liveSessions.values()) {
+      if (!['needs-you', 'working', 'waiting'].includes(s.state)) continue;
+      if (this.focusSession && s.id !== this.focusSession) continue;
+      let best: TaskT | null = null;
+      for (let i = this.data.tasks.length - 1; i >= 0; i--) { const t = this.data.tasks[i]; if (t.s === s.id && (!best || t.ts > best.ts)) best = t; }
+      if (best) out.push({ t: best, s });
+    }
+    return out.sort((a, b) => rank(a.s) - rank(b.s) || b.s.lastSeen - a.s.lastSeen);
+  }
+  private liveAction(L: LiveSession) {
+    if (L.needs?.msg) return L.needs.msg;
+    return L.action ? `${VERB[L.action.kind] || 'Using'} ${L.action.path ? tail(L.action.path, 2) : L.action.target || L.action.detail || L.action.tool}` : '';
+  }
+  private taskRow(t: TaskT, L?: LiveSession) {
     const si = this.sIndex.get(t.s) ?? -1;
     const active = t.ts <= this.t && this.t <= (t.end || t.ts) + 60e3;
     const [r, w, c, x, a] = t.n;
-    return h('div', { class: 'task' + (active ? ' active' : ''), style: { '--c': si >= 0 ? this.colorStr[si] : '#888' }, onclick: () => this.openTask(t) },
-      h('div', { class: 'row' }, h('span', { class: 'dot' }), h('span', { class: 'when' }, shortTime(t.ts)), h('span', { class: 'len' }, dur((t.end || t.ts) - t.ts))),
+    const st = L ? (L.state !== 'needs-you' && isStuck(L) ? 'stuck' : L.state) : null, act = L ? this.liveAction(L) : '';
+    return h('div', { class: 'task' + (active ? ' active' : '') + (L ? ' live ' + st : ''), 'data-sid': L ? L.id : null, style: { '--c': si >= 0 ? this.colorStr[si] : '#888' }, onclick: () => this.openTask(t) },
+      h('div', { class: 'row' }, h('span', { class: 'dot' }),
+        L ? h('span', { class: 'state ' + (st === 'stuck' ? 'needs-you' : st), title: st === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, st === 'stuck' ? 'Stuck?' : stateLabel(st!)) : null,
+        h('span', { class: 'when' }, shortTime(t.ts)), h('span', { class: 'len' }, L ? dur(Date.now() - L.since) : dur((t.end || t.ts) - t.ts))),
       h('div', { class: t.title ? 'ttitle' : 'ttitle pending' }, t.title || t.prompt.slice(0, 120)),
+      L ? h('div', { class: 'lact' + (L.needs ? ' needs' : '') }, act) : null,
+      L?.health ? this.healthLine(L.health) : null,
       h('div', { class: 'counts' }, w ? h('span', { class: 'w' }, `✎ ${w}`) : null, r ? h('span', { class: 'r' }, `◉ ${r}`) : null,
         c ? h('span', { class: 'c' }, `⌘ ${c}`) : null, x ? h('span', { class: 'x' }, `⇡ ${x}`) : null, a ? h('span', { class: 'a' }, `⧉ ${a}`) : null,
         t.cost ? h('span', { class: 'm', title: 'API-equivalent cost' }, money(t.cost)) : null,

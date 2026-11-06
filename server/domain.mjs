@@ -61,12 +61,42 @@ function driftOf(pid, city) {
   return list;
 }
 
+// ------------------------------------------------------------------ auto update
+// After a session's turn ends the map catches up on its own: once no session of the project has
+// worked for AUTO_QUIET, at most once per AUTO_GAP, and only when files changed. On by default,
+// switchable per project (kv domain-auto:<pid>).
+const AUTO_QUIET = Number(process.env.VISUALIZER_DOMAIN_QUIET_S || 180) * 1e3;
+const AUTO_GAP = Number(process.env.VISUALIZER_DOMAIN_GAP_MIN || 20) * 60e3;
+const autoTimers = new Map(); // pid -> { timer, at }
+export const autoOn = pid => kvGet('domain-auto:' + pid) !== false;
+export function setAuto(pid, on) { kvSet('domain-auto:' + pid, !!on); if (!on) { clearTimeout(autoTimers.get(pid)?.timer); autoTimers.delete(pid); } emit(pid, {}); return { ok: true, auto: !!on }; }
+// getCity() and busy() come from the server: the city to diff against, and whether a session is at work
+export function scheduleAuto(pid, getCity, busy, delay = AUTO_QUIET) {
+  const st = saved(pid);
+  if (!st || !autoOn(pid)) return;
+  // an automatic run that failed is not retried on every turn: the next try waits out the gap
+  const last = jobs.get(pid);
+  if (last?.auto && last.state === 'error' && Date.now() - last.ended < AUTO_GAP) return;
+  clearTimeout(autoTimers.get(pid)?.timer);
+  const wait = Math.max(delay, st.meta.builtAt + AUTO_GAP - Date.now());
+  const timer = setTimeout(() => {
+    autoTimers.delete(pid);
+    if (!autoOn(pid) || jobs.get(pid)?.state === 'working') return;
+    if (busy()) return scheduleAuto(pid, getCity, busy, 60e3); // still at work: look again in a minute
+    const city = getCity();
+    if (city && changedSince(city, saved(pid).meta).length) build(pid, city, { update: true, auto: true });
+  }, wait);
+  timer.unref?.();
+  autoTimers.set(pid, { timer, at: Date.now() + wait });
+  emit(pid, {});
+}
+
 export function domainView(pid, city) {
   const st = saved(pid);
   const changed = st ? changedSince(city, st.meta) : [];
   return {
     model: st?.model || null,
-    meta: st ? { ...st.meta, changed: changed.slice(0, 60), changedCount: changed.length } : null,
+    meta: st ? { ...st.meta, changed: changed.slice(0, 60), changedCount: changed.length, auto: autoOn(pid), autoAt: autoTimers.get(pid)?.at || null } : null,
     job: jobs.get(pid) || null,
     briefs: briefsOf(pid),
     drift: driftOf(pid, city),
@@ -210,7 +240,7 @@ function clean(m, city) {
 }
 
 // ------------------------------------------------------------------ build
-export function build(pid, city, { update = false } = {}) {
+export function build(pid, city, { update = false, auto = false } = {}) {
   const cur = jobs.get(pid);
   if (cur && cur.state === 'working') return { error: 'busy', job: cur };
   const st = saved(pid);
@@ -218,7 +248,7 @@ export function build(pid, city, { update = false } = {}) {
   const drift = driftOf(pid, city);
   const changed = st && update ? changedSince(city, st.meta) : [];
   if (update && st && !changed.length) return { error: 'nothing changed since the map was built' };
-  const job = { id: rid(), kind: update && st ? 'update' : 'build', state: 'working', started: Date.now(), model: projectModel(pid), cost: 0 };
+  const job = { id: rid(), kind: update && st ? 'update' : 'build', auto, state: 'working', started: Date.now(), model: projectModel(pid), cost: 0 };
   jobs.set(pid, job);
   emit(pid, { job });
   const head = headOf(root);

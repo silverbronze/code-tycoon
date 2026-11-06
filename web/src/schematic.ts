@@ -14,8 +14,9 @@ import { h } from './util';
 //     out, each district is one block listing its main modules; zoomed in, every
 //     module is a card. Nothing overlaps.
 //  4. The overview wires districts, not modules: one connector per pair of
-//     districts and kind of tie, with the count on it, and only the strongest few.
-//     Hovering a district shows all of its connectors.
+//     districts and kind of tie, with the count on it. At rest the map draws no
+//     lines; a picked district (click) shows all of its connectors, a hovered one
+//     previews its own. Lines always answer one question: what does this district touch.
 //  5. Hovering a card previews its own wiring; everything it doesn't touch steps back.
 //  6. Clicking a card floats it out of the map, like a leaf on water, into its own
 //     diagram (an island) below the overview: the module in the middle, what
@@ -108,6 +109,7 @@ export class Schematic {
   private frameRect = { left: 0, top: 0, right: 800, bottom: 600 };
   private show: Record<EdgeType, boolean> = { imp: true, ref: false, work: false }; // overview only: a card shows all its ties
   private hoverFold: FCard | null = null; private hover = -1; private hoverBox = -1; private sel = -1;
+  private pinBox = -1; private pinning = false; // the district picked by a click, and the onPick(null) that picking it sends
   private active = new Map<number, string[]>();
   private pulses: Pulse[] = [];
   private tNow = Infinity;
@@ -132,7 +134,7 @@ export class Schematic {
     this.legend = h('div', { class: 'sch-legend glass' },
       h('div', { class: 'lg-h' }, 'Connections'),
       tog('imp', 'Imports  (→ imported)'), tog('ref', 'Names a system  (→ system)'), tog('work', 'Changed together', true),
-      h('div', { class: 'lg-note' }, 'Lines join districts: hover one for all of its ties and how many there are. Zoom in and click a card to float its connections out below. Scroll to zoom, drag to move.'),
+      h('div', { class: 'lg-note' }, 'Click a district to see all of its ties and how many there are (hover previews one). Zoom in and click a card to float its connections out below. Scroll to zoom, drag to move.'),
       h('div', { class: 'lg-h' }, 'Cards'),
       shape('module'), shape('store'), shape('host'), shape('service'), shape('web'), shape('local')) as HTMLDivElement;
     this.zoomBox = h('div', { class: 'sch-zoom glass' },
@@ -417,6 +419,7 @@ export class Schematic {
   setSelected(r: Ref | null) {
     const i = r ? this.idx(r) : -1, p = this.pending;
     this.hover = this.hoverBox = -1; this.hoverFold = null; this.dirty = true;
+    if (!this.pinning) this.pinBox = -1; // a module picked, or Escape: the district lets go
     if (i < 0) { this.sel = this.activeIs = -1; return; }
     const cur = this.islands.find(x => x.id === this.activeIs);
     if (!p && cur && cur.f.i === i) return;
@@ -592,7 +595,10 @@ export class Schematic {
           else pickFrom(is, null, this.nodes[isl.f.i].ref);
         }
         else if (i >= 0) { const n = this.nodes[i]; pickFrom(-1, [n.x + CW / 2, n.y + CH / 2], n.ref); }
-        else if (bi >= 0 && !this.tier()) this.zoomToBox(bi); // a district block opens into its cards
+        else if (bi >= 0) { // a district is picked: its ties stay drawn until something else is picked
+          this.pinning = true; try { this.host.onPick(null); } finally { this.pinning = false; }
+          this.pinBox = bi; this.dirty = true;
+        }
         else this.host.onPick(null);
       }
       drag = null;
@@ -685,8 +691,8 @@ export class Schematic {
     // shows at any zoom; zoomed out its ties run from its district block. A hovered district shows its own.
     const tier = this.tier(), act = this.activeIs >= 0 ? this.sel : -1;
     // A card hovered when zooming out stays the focus: its block lists it, picked out, and its ties run from the block.
-    const f = this.hover >= 0 && this.hoverIs < 0 ? this.hover : this.hoverBox >= 0 ? -1 : act;
-    const fb = f >= 0 ? -1 : this.hoverBox;
+    const f = this.hover >= 0 && this.hoverIs < 0 ? this.hover : this.hoverBox >= 0 || this.pinBox >= 0 ? -1 : act;
+    const fb = f >= 0 ? -1 : this.hoverBox >= 0 ? this.hoverBox : this.pinBox;
     const soft = f >= 0 && f === act; // the island's module: the rest of the map stays readable around it
     const mine: SEdge[] = [], near = new Set<number>();
     if (f >= 0) {
@@ -698,7 +704,7 @@ export class Schematic {
     const nearBox = new Set<number>();
     if (f >= 0) for (const i of near) nearBox.add(this.nodes[i].box);
     const shownBundles = f >= 0 ? [] : this.bundles.filter(u => this.show[u.type] && this.alive(u.born) && this.alive(this.boxes[u.a].born) && this.alive(this.boxes[u.b].born)
-      && (fb >= 0 ? u.a === fb || u.b === fb : u.top));
+      && fb >= 0 && (u.a === fb || u.b === fb)); // at rest no lines: a sample of the strongest read as the whole wiring (rule 4)
     if (fb >= 0) { nearBox.add(fb); for (const u of shownBundles) { nearBox.add(u.a); nearBox.add(u.b); } }
     const focused = f >= 0 || fb >= 0;
 

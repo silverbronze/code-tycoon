@@ -549,17 +549,17 @@ export class World {
       // ties with a street light it up; the few without one arc over the city
       const me = refKey([sel.tt, sel.ti]);
       const lit: { k: number; color: THREE.Color }[] = [];
+      const air: { to: Ref; col: THREE.Color }[] = [];
       c.links.forEach((l, k) => {
         const ka = refKey(l.a as Ref), kb = refKey(l.b as Ref);
         if (ka !== me && kb !== me) return;
         const col = new THREE.Color(linkColor(l)), other = (ka === me ? l.b : l.a) as Ref;
         this.selNear.push({ tt: other[0], ti: other[1], color: col });
         if (this.roads.hasRoad(k)) { lit.push({ k, color: col }); return; }
-        const p0 = this.center([sel.tt, sel.ti]), p1 = this.center(other);
-        p0.y = 1; p1.y = 1;
-        arc(p0, p1, col, 2);
+        air.push({ to: other, col });
       });
       this.roads.select(lit);
+      this.airTies([sel.tt, sel.ti], air, pts, cols);
     }
     if (!pts.length) return;
     // fat screen-space lines over everything, each on a white casing so it reads on grass, lots and roofs alike
@@ -573,6 +573,55 @@ export class World {
     this.selLines = new THREE.Group();
     this.selLines.add(line(6, false, 20), line(3, true, 21));
     this.group.add(this.selLines);
+  }
+
+  // Ties of a place with no street to carry them, drawn as a tidy sheaf instead of a burst
+  // from one point: each tie leaves from its own port on the side of the place that faces
+  // its other end (ports spread evenly along the side, ordered so neighbours never cross),
+  // rises straight out of that side, and lands square on the middle of the facing side of
+  // the other place. Every arc has the same shape, its height capped, so far ties don't loop.
+  private airTies(from: Ref, ties: { to: Ref; col: THREE.Color }[], pts: number[], cols: number[]) {
+    if (!ties.length) return;
+    const rect = (r: Ref) => {
+      const k = this.plateIdx.get(refKey(r));
+      if (k != null) { const D = this.plateDim; return { x: D[k * 4], z: D[k * 4 + 1], w: D[k * 4 + 2], h: D[k * 4 + 3] }; }
+      const p = this.center(r); return { x: p.x - 0.5, z: p.z - 0.5, w: 1, h: 1 };
+    };
+    type Side = 0 | 1 | 2 | 3; // +x, -x, +z, -z
+    const N: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const side = (R: { x: number; z: number; w: number; h: number }, tx: number, tz: number): Side => {
+      const dx = tx - (R.x + R.w / 2), dz = tz - (R.z + R.h / 2);
+      return Math.abs(dx) / Math.max(R.w, 0.1) >= Math.abs(dz) / Math.max(R.h, 0.1) ? (dx >= 0 ? 0 : 1) : (dz >= 0 ? 2 : 3);
+    };
+    // a point on a side of R, t in 0..1 along it
+    const on = (R: { x: number; z: number; w: number; h: number }, s: Side, t: number) =>
+      s < 2 ? { x: s === 0 ? R.x + R.w : R.x, z: R.z + R.h * t } : { x: R.x + R.w * t, z: s === 2 ? R.z + R.h : R.z };
+    const S = rect(from), sx = S.x + S.w / 2, sz = S.z + S.h / 2;
+    const groups: { T: ReturnType<typeof rect>; col: THREE.Color; tx: number; tz: number }[][] = [[], [], [], []];
+    for (const t of ties) {
+      const T = rect(t.to), tx = T.x + T.w / 2, tz = T.z + T.h / 2;
+      groups[side(S, tx, tz)].push({ T, col: t.col, tx, tz });
+    }
+    const Y = 0.4, up = new THREE.Vector3(0, 1, 0);
+    groups.forEach((g, s) => {
+      // along the side in the order the targets lie, so lines fan out without crossing
+      g.sort((a, b) => s < 2 ? Math.atan2(a.tz - sz, Math.abs(a.tx - sx)) - Math.atan2(b.tz - sz, Math.abs(b.tx - sx))
+        : Math.atan2(a.tx - sx, Math.abs(a.tz - sz)) - Math.atan2(b.tx - sx, Math.abs(b.tz - sz)));
+      g.forEach((u, i) => {
+        const t = g.length === 1 ? 0.5 : 0.2 + 0.6 * i / (g.length - 1);
+        const a = on(S, s as Side, t), p0 = new THREE.Vector3(a.x, Y, a.z);
+        const ts = side(u.T, a.x, a.z), b = on(u.T, ts, 0.5), p1 = new THREE.Vector3(b.x, Y, b.z);
+        const d = Math.hypot(p1.x - p0.x, p1.z - p0.z), hgt = Math.min(1.2 + d * 0.22, 7), reach = Math.min(d * 0.25, 4);
+        const n0 = N[s], n1 = N[ts];
+        const c0 = p0.clone().addScaledVector(up, hgt).add(new THREE.Vector3(n0[0] * reach, 0, n0[1] * reach));
+        const c1 = p1.clone().addScaledVector(up, hgt).add(new THREE.Vector3(n1[0] * reach, 0, n1[1] * reach));
+        const ps = new THREE.CubicBezierCurve3(p0, c0, c1, p1).getPoints(28);
+        for (let j = 0; j < ps.length - 1; j++) {
+          pts.push(ps[j].x, ps[j].y, ps[j].z, ps[j + 1].x, ps[j + 1].y, ps[j + 1].z);
+          cols.push(u.col.r, u.col.g, u.col.b, u.col.r, u.col.g, u.col.b);
+        }
+      });
+    });
   }
 
   // The selection frame follows the selected place (it can be dragged, it rises in a
