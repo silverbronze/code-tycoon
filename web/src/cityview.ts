@@ -209,15 +209,15 @@ export class CityView {
     e.tip = h('div', { class: 'tip' });
     e.toasts = h('div', { class: 'toasts' });
     e.lod = h('span', {}, 'Files');
-    // Google-Maps-style layer switch: the tile shows the other layer; hovering opens the details
+    // Layer switch: the tile shows the current layer; clicking it opens a chooser with every layer and the details
     const check = (label: string, title: string, f: (on: boolean) => void, on0 = true) => {
       const b = h('button', { class: 'ly-check' + (on0 ? ' on' : ''), title, onclick: () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); f(on); } }, h('i', {}), label);
       return b;
     };
     const thumb = (which: Layer) => { const t = h('span', { class: 'ly-thumb' }); t.innerHTML = THUMB[which]; return t; };
-    e.layerTile = h('button', { class: 'ly-tile', title: 'Switch map layer (M)', onclick: () => this.setLayer(this.nextLayer()) });
+    e.layerTile = h('button', { class: 'ly-tile', title: 'Choose map layer (M)', 'aria-haspopup': 'dialog', onclick: () => this.toggleLayerMenu() });
     e.layerTypes = h('div', { class: 'ly-types' }, ...LAYERS.map(w =>
-      h('button', { class: 'ly-type' + (w === this.layer ? ' on' : ''), 'data-layer': w, onclick: () => this.setLayer(w) }, thumb(w), LAYER_NAME[w])));
+      h('button', { class: 'ly-type' + (w === this.layer ? ' on' : ''), 'data-layer': w, onclick: () => { this.setLayer(w); this.toggleLayerMenu(false); } }, thumb(w), LAYER_NAME[w])));
     e.cityOpts = h('div', { class: 'ly-opts' }, h('div', { class: 'ly-h' }, 'City details'),
       check('Roads', 'Streets between places that work together', on => this.world.showRoads(on)),
       check('Traffic', 'Cars drive the street a session just took', on => this.world.showTraffic(on)),
@@ -228,7 +228,7 @@ export class CityView {
       e.resetLayout = h('button', { class: 'ly-reset', title: 'Put every dragged area and building back where the city placed it', disabled: !hasLayout(this.pid),
         onclick: () => { resetLayout(this.pid); (e.resetLayout as HTMLButtonElement).disabled = true; this.reloadCity(); } }, 'Reset layout'));
     e.layers = h('div', { class: 'layers' }, e.layerTile,
-      h('div', { class: 'ly-panel glass' }, h('div', { class: 'ly-h' }, 'Map type'), e.layerTypes, e.cityOpts));
+      h('div', { class: 'ly-panel glass', role: 'dialog', 'aria-label': 'Map layer' }, h('div', { class: 'ly-h' }, 'Map type'), e.layerTypes, e.cityOpts));
     this.paintLayerTile();
     e.changesBtn = h('button', { class: 'chip toggle', title: 'Mark files with uncommitted changes, in the colour of the session that wrote them (red: several sessions)', onclick: () => this.toggleChanges() }, 'Uncommitted ', h('b', {}, '–'));
     e.colorSel = h('select', { class: 'chip sel', title: 'What the building colours show', onchange: (ev: Event) => { this.colorMode = (ev.target as HTMLSelectElement).value as ColorMode; this.applyColorMode(); } },
@@ -411,10 +411,18 @@ export class CityView {
     return { r, x: shown ? at![0] : mx, y: shown ? at![1] : my };
   }
   private paintLayerTile() {
-    const other = this.nextLayer(), t = this.els.layerTile;
-    t.innerHTML = `<span class="ly-thumb">${THUMB[other]}</span><span class="ly-name">${LAYER_NAME[other]}</span>`;
+    const t = this.els.layerTile;
+    t.innerHTML = `<span class="ly-thumb">${THUMB[this.layer]}</span><span class="ly-name">${LAYER_NAME[this.layer]}</span>`;
   }
-  private nextLayer(): Layer { return LAYERS[(LAYERS.indexOf(this.layer) + 1) % LAYERS.length]; }
+  private toggleLayerMenu(open = !this.els.layers.classList.contains('open')) {
+    this.els.layers.classList.toggle('open', open);
+    this.els.layerTile.setAttribute('aria-expanded', String(open));
+    if (open) document.addEventListener('pointerdown', this.onLayerOutside, true);
+    else document.removeEventListener('pointerdown', this.onLayerOutside, true);
+  }
+  private onLayerOutside = (ev: PointerEvent) => {
+    if (!this.els.layers.contains(ev.target as Node)) this.toggleLayerMenu(false);
+  };
   private viewStage() { return this.layer === 'domain' ? this.domain.stage : this.stage; }
   // A file picked on the domain map opens in the Inspect tab.
   private openFile(p: string) {
@@ -430,9 +438,10 @@ export class CityView {
   private onKey = (ev: KeyboardEvent) => {
     if ((ev.target as HTMLElement)?.closest('input,textarea,select')) return;
     if (ev.code === 'Space') { ev.preventDefault(); this.togglePlay(); }
+    if (ev.key === 'Escape' && this.els.layers.classList.contains('open')) { this.toggleLayerMenu(false); return; }
     if (ev.key === 'Escape') { this.select(null); this.focusOn(null); this.toggleDrawer(false); }
     if (ev.key === 'l' || ev.key === 'L') this.goLive();
-    if (ev.key === 'm' || ev.key === 'M') this.setLayer(this.nextLayer());
+    if (ev.key === 'm' || ev.key === 'M') this.toggleLayerMenu();
   };
 
   private tab(which: Tab) {
@@ -1762,6 +1771,7 @@ export class CityView {
   dispose() {
     this.disposed = true;
     window.removeEventListener('keydown', this.onKey);
+    document.removeEventListener('pointerdown', this.onLayerOutside, true);
     for (const t of this.timers) clearInterval(t);
     clearTimeout(this.changesSoon);
     this.offLive?.();

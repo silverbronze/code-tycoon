@@ -446,8 +446,8 @@ export class DomainMap {
     }
     g.traverse(o => { o.userData.isle = i; });
     this.world.add(g);
-    const dot = h('i', { class: 'st st-' + e.status });
-    const label = h('div', { class: 'dm-lb dm-isle' + (e.status === 'missing' ? ' ghost' : '') }, dot, e.name);
+    // status (solid/shaky/...) lives in the tooltip and panel; on the map only a missing isle looks different
+    const label = h('div', { class: 'dm-lb dm-isle' + (e.status === 'missing' ? ' ghost' : '') }, e.name);
     this.labels.append(label);
     return { e, i, x, z, y, r, depth, g, mats, base: mats.map(mt => mt.opacity), strain, flag: null, houses, debris, label, hue, tall };
   }
@@ -1509,12 +1509,13 @@ function landmark(kind: string) {
 // side its landmark is on and its tie down stays short. Then, like the metro maps' rule 10, the
 // busiest isles sit in the middle, isles tied to nothing go to the edges, and isles of a size swap
 // places wherever that makes the lines shorter. Deterministic, so the map keeps its shape between loads.
-const ISLE_GAP = 22, GROUP_GAP = 40; // open sky between neighbouring isles, and between archipelagos
+const ISLE_GAP = 30, GROUP_GAP = 48; // open sky between neighbouring isles, and between archipelagos
 const RING_SPACE = 13, RING_GAP = 26; // ring length between neighbours in a quarter, and between quarters
+const RING_K = 1.18; // the ring's radius over the archipelago's (plus ISLE_Y): room for the signposts, no more
 type WorldThing = DomainModel['world'][number];
 function ringRadius(R: number, world: WorldThing[]) {
   const kindsIn = KINDS.filter(k => world.some(w => w.kind === k)).length;
-  return Math.max(R * 1.3 + ISLE_Y, ((world.length - kindsIn) * RING_SPACE + kindsIn * RING_GAP) / (Math.PI * 2 * 0.9));
+  return Math.max(R * RING_K + ISLE_Y,((world.length - kindsIn) * RING_SPACE + kindsIn * RING_GAP) / (Math.PI * 2 * 0.9));
 }
 // The real world's quarters on a ring of radius ringR: each quarter centred on where its things pull,
 // pushed apart until none overlap; each thing's angle `a` is rewritten to its final place.
@@ -1664,6 +1665,13 @@ function layout(m: DomainModel) {
     placeWorld();
   }
   for (let it = 0; it < 60; it++) repel(0.5);
+  // a ring sized by its many real-world things leaves open sky between it and the archipelago:
+  // spread the isles out to fill it (same shape, same angles), so they are not piled in the middle
+  {
+    const { cx, cz, R } = placeWorld();
+    const s = Math.min(1.8, (ringRadius(0, m.world) - ISLE_Y) / RING_K / R);
+    if (s > 1.02) for (const p of P) { p.x = cx + (p.x - cx) * s; p.z = cz + (p.z - cz) * s; }
+  }
   const { cx, cz } = placeWorld();
   const pos = new Map<string, { x: number; z: number; r: number }>();
   E.forEach((e, i) => pos.set(e.id, { x: P[i].x - cx, z: P[i].z - cz, r: P[i].r }));

@@ -13,6 +13,7 @@ export class Overview {
   private off: (() => void) | null = null;
   private showAll = false;
   private confirmUntrack: string | null = null;
+  private opening = new Set<string>();
   private pulse = new Pulse('big');
   private coach = new CoachPanel();
   private setup: Setup | null = null;
@@ -118,7 +119,18 @@ export class Overview {
     const go = () => { location.hash = '#/p/' + encodeURIComponent(p.id); };
     const indexing = p.indexing;
     const confirming = this.confirmUntrack === p.id;
-    return h('div', { class: 'pcard' + (p.tracked ? ' tracked' : '') + (p.open ? ' live' : ''), onclick: p.tracked ? go : null },
+    // Untracked: the whole card is the "Track & open" button.
+    const trackOpen = async (e: Event) => {
+      e.stopPropagation();
+      if (indexing || this.opening.has(p.id)) return;
+      this.opening.add(p.id);
+      const card = (e.currentTarget as HTMLElement).closest('.pcard');
+      const chip = card?.querySelector('.chip');
+      if (chip) chip.textContent = 'Indexing…';
+      try { await api.track(p.id); go(); } finally { this.opening.delete(p.id); }
+    };
+    return h('div', { class: 'pcard' + (p.tracked ? ' tracked' : ' openable') + (p.open ? ' live' : ''), onclick: p.tracked ? go : trackOpen,
+      title: p.tracked ? null : 'Track & open' },
       h('div', { class: 'row' },
         h('h3', {}, p.name),
         p.open ? h('span', { class: 'pill live' }, h('i'), `${p.open} open`) : null,
@@ -136,7 +148,7 @@ export class Overview {
         h('div', { class: 'nums' }, h('span', {}, bytes(p.bytes), ' of transcripts')),
       p.spark ? spark(p.spark) : null,
       p.tracked ? this.weekRow(p.id) : null,
-      !p.tracked ? h('button', { class: 'chip', disabled: !!indexing, onclick: async (e: Event) => { e.stopPropagation(); (e.target as HTMLButtonElement).textContent = 'Indexing…'; await api.track(p.id); go(); } }, indexing ? `Indexing ${indexing.done}/${indexing.total}` : 'Track & open') : null);
+      !p.tracked ? h('button', { class: 'chip', disabled: !!indexing, onclick: trackOpen }, indexing ? `Indexing ${indexing.done}/${indexing.total}` : 'Track & open') : null);
   }
 
   // This week against last on four numbers: cost per landed task, share landed,
