@@ -1130,13 +1130,15 @@ export class DomainMap {
         btn('Rebuild', 'Read the whole project again and redraw the map from scratch', () => this.run('build'))] : null);
     const meta = st?.meta;
     // the map keeps itself up to date: after sessions go quiet it re-reads what they changed
-    const auto = meta ? h('label', { class: 'dm-auto', title: 'Update the map by itself a few minutes after the project\'s sessions stop working (at most every 20 minutes, only when files changed). Each update is a short run of your model.' },
+    const auto = meta ? h('label', { class: 'dm-auto', title: meta.updateMode === 'patch'
+      ? `Update the map by itself a few minutes after the project's sessions stop working: at most every ${dur((meta.autoGapMin ?? 120) * 60e3)}${meta.autoLeft != null ? ` and ${meta.autoLeft} more times today` : ''}, only when code the map points at (or several code files) changed. Each update is one short ${st?.llm || 'Sonnet'} turn over the diff.`
+      : `Update the map by itself a few minutes after the project's sessions stop working (at most every ${dur((meta.autoGapMin ?? 20) * 60e3)}, only when files changed). Each update is a short run of ${st?.llm || 'your model'}.` },
       h('input', { type: 'checkbox', checked: meta.auto, onchange: (ev: Event) => api.domainStep(this.pid, 'auto', { on: (ev.target as HTMLInputElement).checked }).then(() => this.load(false)) }),
       'Auto-update', meta.auto && meta.autoAt && !working ? h('span', { class: 'dim' }, ` · next ${meta.autoAt > Date.now() ? 'in ' + dur(meta.autoAt - Date.now()) : 'soon'}`) : null) : null;
     fill(this.headInfo,
       working ? h('div', { class: 'dm-working' }, h('span', { class: 'spinner sm' }), `${job!.kind === 'update' ? (job!.auto ? 'Catching up on the latest changes' : 'Updating') : 'Reading the code'} with ${job!.model || 'your model'} · `, since(job!.started))
       : job?.state === 'error' ? h('div', { class: 'dm-err' }, `Last run failed: ${job.error}`)
-      : meta ? h('div', {}, `Built ${ago(meta.builtAt)}${meta.model ? ' · ' + meta.model : ''}${meta.cost ? ' · ' + money(meta.cost) + ' API-equiv.' : ''}${meta.changedCount ? '' : ' · up to date'}`) : null,
+      : meta ? h('div', { title: meta.cost ? `${money(meta.cost)} API-equiv. since the last full build` : '' }, `Built ${ago(meta.builtAt)}${meta.model ? ' · ' + meta.model : ''}${meta.lastCost ? ` · last ${meta.kind === 'update' ? 'update' : 'build'} ${money(meta.lastCost)}` : meta.cost ? ' · ' + money(meta.cost) + ' API-equiv.' : ''}${meta.changedCount ? '' : ' · up to date'}`) : null,
       working ? null : auto);
     this.renderEmpty();
     const shown = m || this.busy() ? '' : 'none';

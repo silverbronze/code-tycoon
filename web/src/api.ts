@@ -178,7 +178,7 @@ export interface Brief { id: string; task: string; state: 'working' | 'done' | '
 export interface DomainState {
   model: DomainModel | null; job: DomainJob | null; briefs: Brief[]; drift: DriftFile[]; llm: string | null;
   meta: { builtAt: number; head: string | null; cost: number; model: string | null; kind: string; changed: string[]; changedCount: number;
-    auto: boolean; autoAt: number | null } | null; // auto: updates itself once sessions go quiet; autoAt: when the next one is due
+    auto: boolean; autoAt: number | null; autoLeft?: number | null; autoGapMin?: number; updateMode?: 'full' | 'patch'; lastCost?: number } | null; // auto: updates itself once sessions go quiet; autoAt: when the next one is due
 }
 
 // hooks: live updates from Claude Code; autostart: null where the platform has none

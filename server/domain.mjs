@@ -12,10 +12,21 @@ import { db, kvGet, kvSet } from './db.mjs';
 import { runCli, projectModel } from './optimize.mjs';
 import { scanDrift } from './drift.mjs';
 
+// The map is built by a mid-size model, not the sessions' own (often the most expensive one):
+// a full build reads the code with tools, an update is one tool-less turn over the diff that
+// returns only what changed (a patch), merged here.
+const MAP_MODEL = process.env.VISUALIZER_DOMAIN_MODEL || 'sonnet';
 const BUILD_USD = process.env.VISUALIZER_DOMAIN_USD || '10';
+// How an update runs: 'full' (the model re-reads with tools and returns the whole map) or 'patch'
+// (one tool-less turn over the diff, returns only what changed: far cheaper). 'patch' also turns on
+// the stricter auto-update rules below.
+const PATCH_MODE = (process.env.VISUALIZER_DOMAIN_UPDATE || 'full') === 'patch';
+const UPDATE_USD = process.env.VISUALIZER_DOMAIN_UPDATE_USD || (PATCH_MODE ? '1.5' : BUILD_USD);
 const BRIEF_USD = process.env.VISUALIZER_BRIEF_USD || '2';
 const FILE_LIST_CHARS = 60e3;
 const DOC_CHARS = 8e3;
+const DIFF_CHARS = 45e3;     // the whole diff an update sees
+const DIFF_FILE_CHARS = 6e3; // one file's share of it
 
 const listeners = [];
 export function onDomain(fn) { listeners.push(fn); }
@@ -30,6 +41,21 @@ const saveBriefs = (pid, list) => kvSet('briefs:' + pid, list.slice(0, 30));
 const rid = () => Math.random().toString(36).slice(2, 10);
 const modelArgs = pid => { const m = projectModel(pid); return m ? ['--model', m] : []; };
 const READ_ONLY = ['--no-session-persistence', '--setting-sources', 'project', '--strict-mcp-config', '--tools', 'Read,Glob,Grep'];
+const NO_TOOLS = ['--no-session-persistence', '--setting-sources', 'project', '--strict-mcp-config', '--tools', ''];
+
+// Changes that never move the domain map: docs, styles, media, lockfiles, build output.
+const NOISE_EXT = /\.(md|mdx|txt|rst|css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|pdf|zip|gz|lock|log|map|snap)$/i;
+const NOISE_DIR = /(^|\/)(docs?|dist|build|out|coverage|node_modules|vendor|\.github|\.vscode|\.idea|\.claude)\//i;
+const NOISE_FILE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|\.gitignore|\.env[^/]*|LICENSE[^/]*)$/i;
+const codeChange = p => !NOISE_EXT.test(p) && !NOISE_DIR.test(p) && !NOISE_FILE.test(p);
+// every file the map points at
+function mapFiles(m) {
+  const s = new Set();
+  for (const e of m.entities) for (const c of e.code) s.add(c.p);
+  for (const f of m.flows) { f.files.forEach(p => s.add(p)); for (const st of f.steps) st.files.forEach(p => s.add(p)); }
+  for (const a of m.assumptions) a.files.forEach(p => s.add(p));
+  return s;
+}
 
 function git(root, args) {
   return execFileSync('git', ['-C', root, '-c', 'core.quotepath=off', ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 << 20 });
@@ -63,11 +89,23 @@ function driftOf(pid, city) {
 
 // ------------------------------------------------------------------ auto update
 // After a session's turn ends the map catches up on its own: once no session of the project has
-// worked for AUTO_QUIET, at most once per AUTO_GAP, and only when files changed. On by default,
-// switchable per project (kv domain-auto:<pid>).
+// worked for AUTO_QUIET, at most once per AUTO_GAP and AUTO_DAILY times a day, and only when code
+// changed that matters: a file the map points at, or AUTO_MIN_FILES other code files (docs,
+// styles and media never count). On by default, switchable per project (kv domain-auto:<pid>).
 const AUTO_QUIET = Number(process.env.VISUALIZER_DOMAIN_QUIET_S || 180) * 1e3;
-const AUTO_GAP = Number(process.env.VISUALIZER_DOMAIN_GAP_MIN || 20) * 60e3;
+// full mode keeps the original rules: every 20 minutes at most, any changed file, no daily cap
+const AUTO_GAP = Number(process.env.VISUALIZER_DOMAIN_GAP_MIN || (PATCH_MODE ? 120 : 20)) * 60e3;
+const AUTO_DAILY = Number(process.env.VISUALIZER_DOMAIN_DAILY || (PATCH_MODE ? 6 : Infinity));
+const AUTO_MIN_FILES = Number(process.env.VISUALIZER_DOMAIN_MIN_FILES || 3);
 const autoTimers = new Map(); // pid -> { timer, at }
+const autoRuns = pid => (kvGet('domain-auto-runs:' + pid) || []).filter(t => Date.now() - t < 864e5);
+function worthUpdating(st, changed) {
+  if (!PATCH_MODE) return changed.length > 0;
+  const code = changed.filter(codeChange);
+  if (!code.length) return false;
+  const known = mapFiles(st.model);
+  return code.some(p => known.has(p)) || code.length >= AUTO_MIN_FILES;
+}
 export const autoOn = pid => kvGet('domain-auto:' + pid) !== false;
 export function setAuto(pid, on) { kvSet('domain-auto:' + pid, !!on); if (!on) { clearTimeout(autoTimers.get(pid)?.timer); autoTimers.delete(pid); } emit(pid, {}); return { ok: true, auto: !!on }; }
 // getCity() and busy() come from the server: the city to diff against, and whether a session is at work
@@ -77,14 +115,17 @@ export function scheduleAuto(pid, getCity, busy, delay = AUTO_QUIET) {
   // an automatic run that failed is not retried on every turn: the next try waits out the gap
   const last = jobs.get(pid);
   if (last?.auto && last.state === 'error' && Date.now() - last.ended < AUTO_GAP) return;
+  const runs = autoRuns(pid);
+  if (runs.length >= AUTO_DAILY) return; // the day's quota is spent; manual updates still work
   clearTimeout(autoTimers.get(pid)?.timer);
   const wait = Math.max(delay, st.meta.builtAt + AUTO_GAP - Date.now());
   const timer = setTimeout(() => {
     autoTimers.delete(pid);
     if (!autoOn(pid) || jobs.get(pid)?.state === 'working') return;
     if (busy()) return scheduleAuto(pid, getCity, busy, 60e3); // still at work: look again in a minute
-    const city = getCity();
-    if (city && changedSince(city, saved(pid).meta).length) build(pid, city, { update: true, auto: true });
+    const city = getCity(), cur = saved(pid);
+    if (!city || !cur || !worthUpdating(cur, changedSince(city, cur.meta))) return;
+    if (build(pid, city, { update: true, auto: true }).job) kvSet('domain-auto-runs:' + pid, [...autoRuns(pid), Date.now()]);
   }, wait);
   timer.unref?.();
   autoTimers.set(pid, { timer, at: Date.now() + wait });
@@ -96,11 +137,12 @@ export function domainView(pid, city) {
   const changed = st ? changedSince(city, st.meta) : [];
   return {
     model: st?.model || null,
-    meta: st ? { ...st.meta, changed: changed.slice(0, 60), changedCount: changed.length, auto: autoOn(pid), autoAt: autoTimers.get(pid)?.at || null } : null,
+    meta: st ? { ...st.meta, changed: changed.slice(0, 60), changedCount: changed.length, auto: autoOn(pid), autoAt: autoTimers.get(pid)?.at || null,
+      autoLeft: Number.isFinite(AUTO_DAILY) ? Math.max(0, AUTO_DAILY - autoRuns(pid).length) : null, autoGapMin: AUTO_GAP / 60e3, updateMode: PATCH_MODE ? 'patch' : 'full' } : null,
     job: jobs.get(pid) || null,
     briefs: briefsOf(pid),
     drift: driftOf(pid, city),
-    llm: projectModel(pid),
+    llm: MAP_MODEL,
   };
 }
 
@@ -154,6 +196,80 @@ Files by folder (k = KB, imp = files importing it, c = commits that changed it):
 ${tree}${cut ? `…and ${cut} more files not listed\n` : ''}
 ${tasks ? `\nRecent work (task titles, newest first):\n${tasks}\n` : ''}
 ${dr ? `\nDrift candidates found by a local scan (comments saying legacy/workaround/fallback..., pinned flags, old twins, old files still reworked):\n${dr}\n` : ''}`;
+}
+
+// What an update sees instead of reading the code itself: the diff of each changed code file
+// since the map was built (a new file in full, clipped), files the map points at first.
+function diffOf(city, meta, files, known) {
+  const root = city.project.root;
+  const git_ = meta.head && city.project.isGit;
+  const order = [...files].sort((a, b) => (known.has(b) ? 1 : 0) - (known.has(a) ? 1 : 0));
+  let out = '';
+  const skipped = [];
+  for (const p of order) {
+    if (out.length >= DIFF_CHARS) { skipped.push(p); continue; }
+    let d = '';
+    if (git_) { try { d = git(root, ['diff', '-U2', '-w', '--no-color', meta.head, '--', p]); } catch {} }
+    if (!d) {
+      let t = null;
+      try { t = fs.readFileSync(path.join(root, p), 'utf8'); } catch {}
+      d = t == null ? '(deleted)' : `(new or changed file, full text)\n${t}`;
+    }
+    const room = Math.min(DIFF_FILE_CHARS, DIFF_CHARS - out.length);
+    out += `\n=== ${p}${known.has(p) ? ' (on the map)' : ''}\n${d.length > room ? d.slice(0, room) + '\n…[truncated]' : d}\n`;
+  }
+  return { text: out, skipped };
+}
+
+// The parts of the map the changed files touch go to the model in full; the rest as a one-line index.
+function mapSlice(m, files) {
+  const hit = list => list.some(p => files.has(p));
+  const ents = m.entities.filter(e => hit(e.code.map(c => c.p)));
+  const flows = m.flows.filter(f => hit(f.files) || f.steps.some(s => hit(s.files)));
+  const asm = m.assumptions.filter(a => hit(a.files));
+  const eIn = new Set(ents.map(e => e.id)); // entities on a touched flow's path stay in the index
+  const touched = { entities: m.entities.filter(e => eIn.has(e.id)), flows, assumptions: asm,
+    relations: m.relations.filter(r => eIn.has(r.a) || eIn.has(r.b)) };
+  const fIn = new Set(flows.map(f => f.id)), aIn = new Set(asm.map(a => a.id));
+  const index = [
+    ...m.entities.filter(e => !eIn.has(e.id)).map(e => `entity ${e.id} [${e.group}] ${e.name}: ${e.what} (${e.status}; ${e.code.slice(0, 3).map(c => c.p).join(', ')})`),
+    ...m.flows.filter(f => !fIn.has(f.id)).map(f => `flow ${f.id} ${f.name} (${f.status}): ${f.steps.map(s => s.e).join(' > ')}`),
+    ...m.assumptions.filter(a => !aIn.has(a.id)).map(a => `assumption ${a.id}${a.holds ? ' (holds)' : ''}: ${a.text}`),
+  ].join('\n');
+  return { touched, index, count: touched.entities.length + flows.length + asm.length };
+}
+
+const PATCH = `{
+ "summary": "the new summary, only if it should change; otherwise omit",
+ "groups": [new or changed groups, full objects as in the map],
+ "world": [new or changed world items, full objects],
+ "entities": [new or changed entities, full objects with every field],
+ "flows": [new or changed flows, full objects],
+ "assumptions": [new or changed assumptions, full objects],
+ "relations": {"add": [{"a": "entity id", "verb": "...", "b": "entity id", "card": "1-1|1-n|n-n"}], "remove": [{"a": "entity id", "b": "entity id"}]},
+ "remove": {"entities": ["ids gone"], "flows": [], "assumptions": [], "world": [], "groups": []}
+}`;
+
+// Lay a patch over the map: items with a known id are merged field by field, new ones added,
+// removed ones dropped (with the relations to them), then cleaned like a fresh build.
+function applyPatch(m, p, city) {
+  const rm = p.remove || {};
+  const merge = (list, add, gone) => {
+    const out = new Map(list.map(x => [x.id, x]));
+    for (const id of arr(gone)) out.delete(slug(id));
+    for (const x of arr(add)) { const id = slug(x?.id || x?.name); if (id) out.set(id, { ...(out.get(id) || {}), ...x, id }); }
+    return [...out.values()];
+  };
+  const entities = merge(m.entities, p.entities, rm.entities);
+  const key = r => slug(r.a) + '>' + slug(r.b);
+  const dropRel = new Set(arr(p.relations?.remove).map(key));
+  const rel = new Map(m.relations.filter(r => !dropRel.has(key(r))).map(r => [key(r) + r.verb, r]));
+  for (const r of arr(p.relations?.add)) rel.set(key(r) + r.verb, r);
+  return clean({
+    summary: p.summary || m.summary,
+    groups: merge(m.groups, p.groups, rm.groups), world: merge(m.world, p.world, rm.world), entities,
+    relations: [...rel.values()], flows: merge(m.flows, p.flows, rm.flows), assumptions: merge(m.assumptions, p.assumptions, rm.assumptions),
+  }, city);
 }
 
 const SCHEMA = `{
@@ -248,12 +364,14 @@ export function build(pid, city, { update = false, auto = false } = {}) {
   const drift = driftOf(pid, city);
   const changed = st && update ? changedSince(city, st.meta) : [];
   if (update && st && !changed.length) return { error: 'nothing changed since the map was built' };
-  const job = { id: rid(), kind: update && st ? 'update' : 'build', auto, state: 'working', started: Date.now(), model: projectModel(pid), cost: 0 };
+  const job = { id: rid(), kind: update && st ? 'update' : 'build', auto, state: 'working', started: Date.now(), model: MAP_MODEL, cost: 0 };
   jobs.set(pid, job);
   emit(pid, { job });
   const head = headOf(root);
-  const prompt = job.kind === 'update'
-    ? `You keep a project's DOMAIN MAP up to date. Below is the map as it was built on ${new Date(st.meta.builtAt).toISOString().slice(0, 16)}, and the files that changed since. The working directory is the project root; Read, Glob and Grep what you need, starting with the changed files; about 25 reads is plenty.
+  let prompt;
+  const isUpdate = job.kind === 'update', patch = isUpdate && PATCH_MODE;
+  if (isUpdate && !PATCH_MODE) {
+    prompt = `You keep a project's DOMAIN MAP up to date. Below is the map as it was built on ${new Date(st.meta.builtAt).toISOString().slice(0, 16)}, and the files that changed since. The working directory is the project root; Read, Glob and Grep what you need, starting with the changed files; about 25 reads is plenty.
 
 Update the map: keep the ids of entities, flows and assumptions that still exist, change code paths, statuses, flows and assumptions where the changes touch them, add what is new, drop what is gone. Return the FULL updated map.
 
@@ -268,8 +386,39 @@ ${changed.slice(0, 300).join('\n')}
 The current map:
 ${JSON.stringify(st.model)}
 
-${context(pid, city, drift)}`
-    : `You map a software project for the person who builds it. It has grown too big to hold in one's head, so they need a DOMAIN MAP: the things the project is about (entities), how those relate to each other and to the real world, the main flows through them, and where code built for an earlier setup now drags (drift). The technical structure (folders, modules) is shown elsewhere; here, translate it into the concepts a product owner talks about, each tied back to the code that implements it.
+${context(pid, city, drift)}`;
+  } else if (patch) {
+    // one turn, no tools: the diff of the changed code, the touched slice of the map in full, the rest as an index
+    const code = changed.filter(codeChange);
+    const known = mapFiles(st.model);
+    const { text: diff, skipped } = diffOf(city, st.meta, code.length ? code : changed, known);
+    const slice = mapSlice(st.model, new Set(changed));
+    prompt = `You keep a project's DOMAIN MAP up to date. It was built on ${new Date(st.meta.builtAt).toISOString().slice(0, 16)}; below are the code changes since, the parts of the map those files touch (in full), and an index of the rest of the map. You have no tools: work from what is here.
+
+Return a PATCH, not the whole map: only the items the changes add, alter or remove. Keep existing ids. A changed item is sent as a full object with every field (it replaces the old one). Update code paths, statuses, flows and assumptions the changes touch; add entities, flows or assumptions the changes introduce; remove what the changes delete. Leave out everything the changes do not touch. If nothing on the map changes, return {}.
+
+${RULES}
+
+Return ONLY JSON matching:
+${PATCH}
+where the object shapes are those of the full map:
+${SCHEMA}
+
+Groups: ${JSON.stringify(st.model.groups)}
+World: ${JSON.stringify(st.model.world)}
+
+Map items the changed files touch (${slice.count}):
+${JSON.stringify(slice.touched)}
+
+The rest of the map (index):
+${slice.index || '(none)'}
+
+Changed files (${changed.length}${code.length < changed.length ? `, of which ${changed.length - code.length} docs/styles/assets not shown` : ''}):
+${changed.slice(0, 200).join('\n')}
+
+Diffs since the map was built${skipped.length ? ` (${skipped.length} more changed files not shown: ${skipped.slice(0, 40).join(', ')})` : ''}:
+${diff}`;
+  } else prompt = `You map a software project for the person who builds it. It has grown too big to hold in one's head, so they need a DOMAIN MAP: the things the project is about (entities), how those relate to each other and to the real world, the main flows through them, and where code built for an earlier setup now drags (drift). The technical structure (folders, modules) is shown elsewhere; here, translate it into the concepts a product owner talks about, each tied back to the code that implements it.
 
 The working directory is the project root. You may Read, Glob and Grep. Spend reads on what defines the entities (data models, schemas, migrations, types, API routes, state stores, main screens) and on the drift candidates listed below. Do not read everything: after about 40 reads, stop exploring and write the map from what you know.
 
@@ -279,12 +428,13 @@ Return ONLY JSON matching:
 ${SCHEMA}
 
 ${context(pid, city, drift)}`;
-  runCli([...modelArgs(pid), ...READ_ONLY, '--max-budget-usd', BUILD_USD],
-    { cwd: root, env: { VISUALIZER_INTERNAL: '1' }, prompt, timeoutMs: 25 * 60e3, onSpawn: p => procs.set(job.id, p) })
-    .then(({ res, cost }) => {
-      const model = clean(res, city);
+  runCli(['--model', MAP_MODEL, ...(patch ? NO_TOOLS : READ_ONLY), '--max-budget-usd', isUpdate ? UPDATE_USD : BUILD_USD],
+    { cwd: root, env: { VISUALIZER_INTERNAL: '1' }, prompt, timeoutMs: (patch ? 8 : 25) * 60e3, onSpawn: p => procs.set(job.id, p) })
+    .then(({ res, cost, text }) => {
+      if (patch && !/\{[\s\S]*\}/.test(text)) throw new Error('the model returned no patch');
+      const model = patch ? applyPatch(st.model, res, city) : clean(res, city);
       if (!model.entities.length) throw new Error('the model returned no entities');
-      kvSet('domain:' + pid, { model, meta: { builtAt: job.started, head, cost: (job.kind === 'update' ? (st?.meta.cost || 0) : 0) + cost, model: job.model, kind: job.kind } });
+      kvSet('domain:' + pid, { model, meta: { builtAt: job.started, head, cost: (isUpdate ? (st?.meta.cost || 0) : 0) + cost, lastCost: cost, model: job.model, kind: job.kind } });
       Object.assign(job, { state: 'done', ended: Date.now(), cost });
     })
     .catch(e => Object.assign(job, { state: 'error', ended: Date.now(), error: e.message }))
@@ -385,3 +535,6 @@ export function settleInterrupted() {
     if (list.some(b => b.state === 'working')) kvSet(r.k, list.map(b => b.state === 'working' ? { ...b, state: 'error', error: 'interrupted by a restart' } : b));
   }
 }
+
+// for scripts/tests: the pieces an update is made of
+export const _internals = { applyPatch, mapSlice, diffOf, mapFiles, worthUpdating, codeChange, changedSince };
