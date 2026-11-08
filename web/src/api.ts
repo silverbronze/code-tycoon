@@ -176,7 +176,7 @@ export interface BriefResult {
 }
 export interface Brief { id: string; task: string; state: 'working' | 'done' | 'error'; started: number; ended?: number; model: string | null; cost: number; error?: string; result: BriefResult | null }
 export interface DomainState {
-  model: DomainModel | null; job: DomainJob | null; briefs: Brief[]; drift: DriftFile[]; llm: string | null;
+  model: DomainModel | null; job: DomainJob | null; briefs: Brief[]; drift: DriftFile[]; llm: string | null; cli?: string;
   meta: { builtAt: number; head: string | null; cost: number; model: string | null; kind: string; changed: string[]; changedCount: number;
     // auto: updates itself on commits that change the domain; git: the map follows commits; behind: commits since the map;
     // waiting: HEAD moved but its diff changes no entity, so the map waits for a commit that does

@@ -9,13 +9,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { db, kvGet, kvSet } from './db.mjs';
-import { runCli, projectModel } from './optimize.mjs';
+import { projectModel } from './optimize.mjs';
+import { runAgent, modelFor, modelLabel, provider, codexBlocked } from './llm.mjs';
 import { scanDrift } from './drift.mjs';
 
 // The map is built by a mid-size model, not the sessions' own (often the most expensive one):
 // a full build reads the code with tools, an update is one tool-less turn over the diff that
 // returns only what changed (a patch), merged here.
-const MAP_MODEL = process.env.VISUALIZER_DOMAIN_MODEL || 'sonnet';
 const BUILD_USD = process.env.VISUALIZER_DOMAIN_USD || '10';
 // How an update runs: 'full' (the model re-reads with tools and returns the whole map) or 'patch'
 // (one tool-less turn over the diff, returns only what changed: far cheaper).
@@ -38,9 +38,6 @@ const saved = pid => kvGet('domain:' + pid) || null;
 const briefsOf = pid => kvGet('briefs:' + pid) || [];
 const saveBriefs = (pid, list) => kvSet('briefs:' + pid, list.slice(0, 30));
 const rid = () => Math.random().toString(36).slice(2, 10);
-const modelArgs = pid => { const m = projectModel(pid); return m ? ['--model', m] : []; };
-const READ_ONLY = ['--no-session-persistence', '--setting-sources', 'project', '--strict-mcp-config', '--tools', 'Read,Glob,Grep'];
-const NO_TOOLS = ['--no-session-persistence', '--setting-sources', 'project', '--strict-mcp-config', '--tools', ''];
 
 // Changes that never move the domain map: docs, styles, media, lockfiles, build output.
 const NOISE_EXT = /\.(md|mdx|txt|rst|css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|pdf|zip|gz|lock|log|map|snap)$/i;
@@ -187,11 +184,11 @@ export function domainView(pid, city) {
   return {
     model: st?.model || null,
     meta: st ? { ...st.meta, changed: changed.slice(0, 60), changedCount: changed.length, auto: autoOn(pid), git: git_, behind,
-      waiting: seen && seen.head !== st.meta.head && !seen.why ? true : false, updateMode: PATCH_MODE ? 'patch' : 'full' } : null,
+      waiting: seen && seen.head !== st.meta.head && !seen.why ? true : false, updateMode: PATCH_MODE || codexBlocked('read') ? 'patch' : 'full' } : null,
     job: jobs.get(pid) || null,
     briefs: briefsOf(pid),
     drift: driftOf(pid, city),
-    llm: MAP_MODEL,
+    llm: modelLabel('map'), cli: provider() === 'codex' ? 'Codex' : 'Claude Code',
   };
 }
 
@@ -414,12 +411,13 @@ export function build(pid, city, { update = false, auto = false, why = null } = 
   const changed = st && update ? changedSince(city, st.meta) : [];
   if (update && st && !changed.length) return { error: 'nothing changed since the map was built' };
   const head = headOf(root);
-  const job = { id: rid(), kind: update && st ? 'update' : 'build', auto, why, head, state: 'working', started: Date.now(), model: MAP_MODEL, cost: 0 };
+  const job = { id: rid(), kind: update && st ? 'update' : 'build', auto, why, head, state: 'working', started: Date.now(), model: modelFor('map'), cost: 0 };
   jobs.set(pid, job);
   emit(pid, { job });
   let prompt;
-  const isUpdate = job.kind === 'update', patch = isUpdate && PATCH_MODE;
-  if (isUpdate && !PATCH_MODE) {
+  // Codex on Windows cannot read files in its sandbox: updates then work from the diff alone
+  const isUpdate = job.kind === 'update', patch = isUpdate && (PATCH_MODE || !!codexBlocked('read'));
+  if (isUpdate && !patch) {
     prompt = `You keep a project's DOMAIN MAP up to date. Below is the map as it was built on ${new Date(st.meta.builtAt).toISOString().slice(0, 16)}, and the files that changed since. The working directory is the project root; Read, Glob and Grep what you need, starting with the changed files; about 25 reads is plenty.
 
 Update the map: keep the ids of entities, flows and assumptions that still exist, change code paths, statuses, flows and assumptions where the changes touch them, add what is new, drop what is gone. Return the FULL updated map.
@@ -477,8 +475,7 @@ Return ONLY JSON matching:
 ${SCHEMA}
 
 ${context(pid, city, drift)}`;
-  runCli(['--model', MAP_MODEL, ...(patch ? NO_TOOLS : READ_ONLY), '--max-budget-usd', isUpdate ? UPDATE_USD : BUILD_USD],
-    { cwd: root, env: { VISUALIZER_INTERNAL: '1' }, prompt, timeoutMs: (patch ? 8 : 25) * 60e3, onSpawn: p => procs.set(job.id, p) })
+  runAgent({ want: 'map', tools: patch ? 'none' : 'read', budgetUsd: isUpdate ? UPDATE_USD : BUILD_USD, cwd: root, prompt, timeoutMs: (patch ? 8 : 25) * 60e3, onSpawn: p => procs.set(job.id, p) })
     .then(({ res, cost, text }) => {
       if (patch && !/\{[\s\S]*\}/.test(text)) throw new Error('the model returned no patch');
       const model = patch ? applyPatch(st.model, res, city) : clean(res, city);
@@ -519,7 +516,7 @@ export function brief(pid, city, task) {
   if (!task) return { error: 'describe the task' };
   const root = city.project.root;
   const drift = driftOf(pid, city).slice(0, 25).map(d => `${d.p} (strain ${d.score}): ${d.markers.slice(0, 2).map(m => `L${m.line} ${m.text}`).join(' | ')}`);
-  const b = { id: rid(), task, state: 'working', started: Date.now(), model: projectModel(pid), cost: 0, result: null };
+  const b = { id: rid(), task, state: 'working', started: Date.now(), model: modelFor(projectModel(pid)), cost: 0, result: null };
   saveBriefs(pid, [b, ...briefsOf(pid)]);
   emit(pid, { brief: b });
   const prompt = `You prepare the next task in a software project for its builder, who cannot hold the whole project in their head. Give them exactly the slice of the project this task touches, so they (and the Claude Code session they will hand it to) can start without re-learning everything.
@@ -548,8 +545,7 @@ ${JSON.stringify(compact(st.model))}
 
 Drift candidates from a local scan:
 ${drift.join('\n') || '(none)'}`;
-  runCli([...modelArgs(pid), ...READ_ONLY, '--max-budget-usd', BRIEF_USD],
-    { cwd: root, env: { VISUALIZER_INTERNAL: '1' }, prompt, timeoutMs: 12 * 60e3, onSpawn: p => procs.set(b.id, p) })
+  runAgent({ want: projectModel(pid), tools: 'read', budgetUsd: BRIEF_USD, cwd: root, prompt, timeoutMs: 12 * 60e3, onSpawn: p => procs.set(b.id, p) })
     .then(({ res, cost }) => {
       const fix = pathFixer(city), eIds = new Set(st.model.entities.map(e => e.id)), fIds = new Set(st.model.flows.map(f => f.id)), aIds = new Set(st.model.assumptions.map(a => a.id));
       const ref = x => aIds.has(slug(x)) ? slug(x) : null;

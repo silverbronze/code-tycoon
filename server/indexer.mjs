@@ -155,6 +155,23 @@ export async function backfillCoach(pid, discovered) {
   kvSet('coach-v1:' + pid, true);
 }
 
+// Usage rows stored at $0 because their model had no price yet (Codex sessions before
+// OpenAI prices were added): priced again from their token counts. Returns rows changed.
+export function repriceUsage() {
+  const rows = db.prepare(`SELECT rowid id, model, tin, tout, tcr, tcw, tcw1h FROM usage WHERE cost = 0 AND model IS NOT NULL
+    AND model NOT LIKE 'claude%' AND (tin + tout + tcr + tcw) > 0`).all();
+  const up = db.prepare('UPDATE usage SET cost=? WHERE rowid=?');
+  let n = 0;
+  tx(() => {
+    for (const r of rows) {
+      const c = costOf(r.model, { input_tokens: r.tin, output_tokens: r.tout, cache_read_input_tokens: r.tcr, cache_creation_input_tokens: r.tcw,
+        cache_creation: { ephemeral_1h_input_tokens: r.tcw1h || 0 } });
+      if (c > 0) { up.run(c, r.id); n++; }
+    }
+  });
+  return n;
+}
+
 // Token usage for transcripts indexed before usage was recorded: one extra pass
 // over assistant records only, once per project.
 export function backfillUsage(pid, discovered) {

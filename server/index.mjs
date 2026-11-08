@@ -8,7 +8,7 @@ import { db } from './db.mjs';
 import { PORT, PROJECTS_DIR, rel } from './paths.mjs';
 import { CODEX_DIR, isCodexFile, codexCwd, codexSlug } from './codex.mjs';
 import crypto from 'node:crypto';
-import { discover, indexFile, indexProject, listProjects, setTracked, trackedSet, refreshProjectAgg, backfillUsage, backfillResults, backfillCoach } from './indexer.mjs';
+import { discover, indexFile, indexProject, listProjects, setTracked, trackedSet, refreshProjectAgg, backfillUsage, backfillResults, backfillCoach, repriceUsage } from './indexer.mjs';
 import { buildCity, invalidateScan, KIND_INDEX, KINDS } from './citymap.mjs';
 import { onHook, onTranscriptItems, onLive, openSessions, trackPlace, syncFromDb, sessions, listAlerts, dismissAlerts, alertOnce, decorateSessions, touchSession } from './live.mjs';
 import { sessionHealth, checkSession, review, insights, look, cosmetics, setCosmetic, taskFlags, weekly, fileHistory } from './analytics.mjs';
@@ -21,6 +21,7 @@ import { scanIdle, idleSummary, stopIdle } from './idle.mjs';
 import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
 import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize } from './optimize.mjs';
 import { hooksInstalled, setHooks } from './hooks-install.mjs';
+import { modelFor } from './llm.mjs';
 import { onDomain, domainView, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted, watchCommits, checkCommits, setAuto } from './domain.mjs';
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
 
@@ -411,7 +412,7 @@ const server = http.createServer(async (req, res) => {
         }
         // optimize a block (key m:<module key>) or district (d:<id>) with the project's model
         if (parts[3] === 'optimize') {
-          if (req.method !== 'POST') { const key = String(u.searchParams.get('key') || ''); return send(res, 200, { model: projectModel(pid), job: getJob(pid, key) }, req); }
+          if (req.method !== 'POST') { const key = String(u.searchParams.get('key') || ''); return send(res, 200, { model: modelFor(projectModel(pid)), job: getJob(pid, key) }, req); }
           if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
           const b = JSON.parse(await readBody(req) || '{}'), key = String(b.key || '');
           getJob(pid, key); // loads a saved plan, so it can be applied after a restart
@@ -480,6 +481,7 @@ server.listen(PORT, '127.0.0.1', () => {
     }
     schedulePump();
     for (const pid of trackedSet()) setImmediate(() => { try { backfillUsage(pid, discovered); } catch (e) { console.warn('[usage]', e.message); } });
+    try { const n = repriceUsage(); if (n) { console.log('[usage] priced ' + n + ' Codex API calls'); resetCoach(); } } catch (e) { console.warn('[usage]', e.message); }
     (async () => {
       for (const pid of trackedSet()) await backfillResults(pid, discovered).catch(e => console.warn('[results]', e.message));
       for (const pid of trackedSet()) await backfillCoach(pid, discovered).catch(e => console.warn('[coach]', e.message));

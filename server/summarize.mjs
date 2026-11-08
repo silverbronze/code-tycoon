@@ -1,10 +1,10 @@
 // Task titles and subsystem descriptions through the user's own Claude Code CLI
-// (`claude -p`, Haiku). Runs from an empty folder with project-only settings and
-// no session persistence, so these calls fire no hooks and leave no transcripts:
-// Visualizer never draws its own summarizer.
-import { spawn } from 'node:child_process';
+// (`claude -p`, Haiku) or Codex CLI (a small model), see llm.mjs. Runs from an empty
+// folder with no user settings and no session persistence, so these calls fire no hooks
+// and leave no transcripts: Visualizer never draws its own summarizer.
 import { db, kvGet, kvSet } from './db.mjs';
-import { SUMMARIZER_CWD, findClaudeCli, rel } from './paths.mjs';
+import { SUMMARIZER_CWD, rel } from './paths.mjs';
+import { runAgent } from './llm.mjs';
 import { BASE_ROLES, STYLES } from './roles.mjs';
 
 const BATCH = 20;
@@ -14,29 +14,8 @@ let failures = 0;
 const listeners = [];
 export function onSummaries(fn) { listeners.push(fn); }
 
-function runClaude(prompt, timeoutMs = 120e3) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(findClaudeCli(), ['-p', '--model', 'haiku', '--no-session-persistence', '--setting-sources', 'project',
-      '--tools', '', '--output-format', 'json'], { cwd: SUMMARIZER_CWD, windowsHide: true,
-      env: { ...process.env, VISUALIZER_INTERNAL: '1' } });
-    let out = '', err = '';
-    const timer = setTimeout(() => { p.kill(); reject(new Error('timeout')); }, timeoutMs);
-    p.stdout.on('data', d => out += d);
-    p.stderr.on('data', d => err += d);
-    p.on('error', e => { clearTimeout(timer); reject(e); });
-    p.on('close', code => {
-      clearTimeout(timer);
-      try {
-        const j = JSON.parse(out);
-        if (j.is_error) return reject(new Error(String(j.result).slice(0, 200)));
-        const text = String(j.result || '');
-        const m = text.match(/\{[\s\S]*\}/);
-        resolve(m ? JSON.parse(m[0]) : {});
-      } catch (e) { reject(new Error(`claude exited ${code}: ${(err || out).slice(0, 300)}`)); }
-    });
-    p.stdin.end(prompt);
-  });
-}
+// tool-less, from an empty folder, no transcript: Haiku on Claude Code, a small model on Codex
+const runModel = (prompt, timeoutMs = 120e3) => runAgent({ want: 'small', tools: 'none', cwd: SUMMARIZER_CWD, prompt, timeoutMs }).then(r => r.res);
 
 function describeTask(t, root) {
   const ev = db.prepare(`SELECT kind, path, target, COUNT(*) n FROM events WHERE task_id=? AND kind IN ('write','read','remote','spawn')
@@ -54,7 +33,7 @@ async function titleBatch(pid) {
 Return ONLY a JSON object mapping each id to its title.
 
 ${JSON.stringify(items)}`;
-  const res = await runClaude(prompt);
+  const res = await runModel(prompt);
   const up = db.prepare('UPDATE tasks SET title=? WHERE id=?');
   const titled = [];
   for (const t of tasks) {
@@ -86,7 +65,7 @@ async function nameModules(pid, modules) {
   const subsys = kvGet('subsys:' + pid) || {};
   const needM = modules.filter(m => !subsys[m.id]);
   if (!needM.length) return false;
-  const res = await runClaude(`You name the parts of one software project for an architecture map.
+  const res = await runModel(`You name the parts of one software project for an architecture map.
 "modules": folders with sample file names (an id ending in /* stands for several look-alike folders). For each id give "name": a 1-3 word plain-English name for what it is (e.g. "Payment API", "Crawler jobs"), and "desc": one sentence on its role.
 Return ONLY JSON: {"modules": {"<id>": {"name": "...", "desc": "..."}}}.
 
@@ -103,7 +82,7 @@ async function assignRoles(pid, modules, places) {
   const subsys = kvGet('subsys:' + pid) || {};
   const saved = kvGet('roles:' + pid) || { districts: null, modules: {}, places: {} };
   if (!saved.districts) {
-    const res = await runClaude(`You zone one software project like a city planner: every district is one job the code does, e.g. "Storefront", "Database", "Security", "Payments & orders". A district cuts across folders: a login helper inside a storefront folder still belongs to Security.
+    const res = await runModel(`You zone one software project like a city planner: every district is one job the code does, e.g. "Storefront", "Database", "Security", "Payments & orders". A district cuts across folders: a login helper inside a storefront folder still belongs to Security.
 Starting vocabulary (keep an id when its meaning fits; drop ones the project does not need; add project-specific districts with short kebab-case ids):
 ${JSON.stringify(BASE_ROLES)}
 Pick 6-12 districts for this project. Always keep "security" and "database" if the project has any auth or data-access code, and keep "workspace" for leftovers.
@@ -125,7 +104,7 @@ ${JSON.stringify({
   const unstyled = saved.districts.filter(d => !d.style && !BASE_ROLES.some(b => b.id === d.id));
   if (unstyled.length && !saved.styled) {
     saved.styled = true; // asked once; keyword rules cover whatever comes back empty
-    const res = await runClaude(`Pick the look of each city district's buildings. Districts are jobs code does in one software project.
+    const res = await runModel(`Pick the look of each city district's buildings. Districts are jobs code does in one software project.
 Looks: ${JSON.stringify(STYLES.map(x => ({ id: x.id, look: x.desc })))}
 Return ONLY JSON: {"<district id>": "<look id>"}
 
@@ -148,7 +127,7 @@ ${JSON.stringify(unstyled.map(d => ({ id: d.id, name: d.name, desc: d.desc })))}
   if (cur.length || needP.length) batches.push(cur);
   for (const [bi, batch] of batches.entries()) {
     const askP = bi === 0 ? needP : [];
-    const res = await runClaude(`Assign the files of one software project to its districts (the job the code does, not the folder it sits in).
+    const res = await runModel(`Assign the files of one software project to its districts (the job the code does, not the folder it sits in).
 Districts: ${JSON.stringify(saved.districts)}
 For each module give "d": the district most of its files belong to, and "x": only the files whose district differs from "d", as {"<path>": "<district id>"}. Judge each file by its full path and name: auth, login, sessions, passwords, rate limits, bot rules and firewall config are Security; SQL, migrations, schemas and DB access helpers are Database; tests go to a testing district if there is one. When a module lists "more", the unlisted files follow "d".
 For each place (data stores and outside systems) give the district it serves.
@@ -181,7 +160,7 @@ export async function summarizeDay(d, sessionTitles) {
     commits: d.commits.map(c => c.s),
     new_connections: d.ties.map(t => `${t.an} → ${t.bn} (${t.why})`),
   };
-  const res = await runClaude(`You write a daily recap of work done in one software project by several Claude Code sessions.
+  const res = await runModel(`You write a daily recap of work done in one software project by several Claude Code sessions.
 Write 3-5 short sentences in plain words: what got done, which areas changed most, anything worth checking (files edited by several sessions, new connections between parts). No headings, no lists, no praise.
 Return ONLY JSON: {"text": "..."}
 

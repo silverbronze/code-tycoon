@@ -1440,9 +1440,9 @@ export class CityView {
       h('div', { class: 'sect' }, h('h3', {}, 'Recap'),
         d.summary ? h('div', { class: 'ptext recap' }, d.summary)
           : !d.tasks.length ? h('div', { class: 'empty' }, 'Nothing happened this day.')
-          : d.summarizing ? h('div', { class: 'loading-sm' }, 'Haiku is writing the recap…')
+          : d.summarizing ? h('div', { class: 'loading-sm' }, 'Writing the recap…')
           : h('div', {}, error ? h('div', { class: 'empty' }, 'Could not write the recap: ' + error) : null,
-            h('button', { class: 'chip', onclick: () => this.loadDigest(true) }, '✎ Write a recap (Haiku)'))),
+            h('button', { class: 'chip', onclick: () => this.loadDigest(true) }, '✎ Write a recap'))),
       d.modules.length ? h('div', { class: 'sect' }, h('h3', {}, 'Busiest modules'), ...d.modules.map(m => h('div', { class: 'frow link', onclick: () => this.select({ tt: 1, ti: m.i }, true) }, h('span', { class: 'fp ltr' }, m.name), h('span', { class: 'n' }, `✎ ${m.n}`)))) : null,
       d.shared.length ? h('div', { class: 'sect' }, h('h3', { class: 'warn' }, `Edited by several sessions (${d.shared.length})`),
         ...d.shared.map(x => h('div', { class: 'frow link', onclick: () => this.select({ tt: 0, ti: x.i }, true) }, h('span', { class: 'fp' }, x.p), h('span', { class: 'n' }, `${x.sessions.length} sessions`)))) : null,

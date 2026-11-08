@@ -6,10 +6,11 @@
 // snapshotted before the edit, so one click puts them back.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { db, kvGet, kvSet } from './db.mjs';
-import { findClaudeCli, rel } from './paths.mjs';
+import { rel } from './paths.mjs';
 import { openSessions } from './live.mjs';
+import { runAgent, modelFor } from './llm.mjs';
 
 const KINDS = new Set(['code', 'style', 'markup']);
 const INLINE_CHARS = 90e3; // file text put straight into the survey prompt
@@ -66,30 +67,6 @@ function scope(c, key) {
   return { label, kind, desc, files };
 }
 
-export function runCli(args, { cwd, env, prompt, timeoutMs, onSpawn }) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(findClaudeCli(), ['-p', '--output-format', 'json', ...args], { cwd, windowsHide: true, env: { ...process.env, ...env } });
-    onSpawn?.(p);
-    let out = '', err = '';
-    const timer = setTimeout(() => { p.kill(); reject(new Error('timed out')); }, timeoutMs);
-    p.stdout.on('data', d => out += d);
-    p.stderr.on('data', d => err += d);
-    p.on('error', e => { clearTimeout(timer); reject(e); });
-    p.on('close', code => {
-      clearTimeout(timer);
-      if (p.stopped) return reject(new Error('stopped'));
-      let j;
-      try { j = JSON.parse(out); } catch { return reject(new Error(`claude exited ${code}: ${(err || out).slice(0, 300)}`)); }
-      if (j.is_error) return reject(new Error(String(j.result || j.subtype || 'failed').slice(0, 300)));
-      const m = String(j.result || '').match(/\{[\s\S]*\}/);
-      let res = {};
-      try { res = m ? JSON.parse(m[0]) : {}; } catch {}
-      resolve({ res, cost: j.total_cost_usd || 0, sid: j.session_id || null, text: String(j.result || '') });
-    });
-    p.stdin.end(prompt);
-  });
-}
-const modelArgs = pid => { const m = projectModel(pid); return m ? ['--model', m] : []; };
 
 // The last run for a place; one cut short by a server restart reads as an error.
 export function getJob(pid, key) {
@@ -118,7 +95,7 @@ export function survey(pid, c, key) {
     inline.push({ f, text }); used += text.length;
   }
   const rest = sc.files.slice(inline.length, inline.length + 150);
-  const job = { id: Math.random().toString(36).slice(2, 10), pid, key, label: sc.label, kind: sc.kind, model: projectModel(pid),
+  const job = { id: Math.random().toString(36).slice(2, 10), pid, key, label: sc.label, kind: sc.kind, model: modelFor(projectModel(pid)),
     state: 'surveying', started: Date.now(), files: sc.files.length, read: inline.length, plan: null, cost: 0 };
   publish(job);
   const sig = f => `${f.p} (${f.by} importers, ${f.churn} commits, ${f.w} AI edits, ${(f.size / 1024).toFixed(1)} KB)`;
@@ -135,8 +112,7 @@ At most 8 items, best impact-for-risk first.
 Files, busiest first (importers = files that import it):
 ${inline.map(({ f, text }) => `\n=== ${sig(f)}\n${text}`).join('\n')}
 ${rest.length ? `\nOther files in this ${sc.kind} (not shown; Read them if a finding leads there):\n${rest.map(sig).join('\n')}` : ''}${sc.files.length > inline.length + rest.length ? `\n…and ${sc.files.length - inline.length - rest.length} more` : ''}`;
-  runCli([...modelArgs(pid), '--no-session-persistence', '--setting-sources', 'project', '--strict-mcp-config', '--tools', 'Read,Glob,Grep',
-    '--max-budget-usd', SURVEY_BUDGET], { cwd: root, env: { VISUALIZER_INTERNAL: '1' }, prompt, timeoutMs: 8 * 60e3, onSpawn: p => procs.set(job.id, p) })
+  runAgent({ want: projectModel(pid), tools: 'read', budgetUsd: SURVEY_BUDGET, cwd: root, prompt, timeoutMs: 8 * 60e3, onSpawn: p => procs.set(job.id, p) })
     .then(({ res, cost }) => {
       const files = new Set(sc.files.map(f => f.p.toLowerCase()));
       const items = (Array.isArray(res.items) ? res.items : []).filter(x => x && x.title).slice(0, 8).map((x, i) => ({
@@ -178,8 +154,8 @@ ${JSON.stringify(items.map(({ id, title, files, why, change }) => ({ id, title, 
 
 Rules: keep behavior and public interfaces exactly the same. Edit only the files named in the items, unless a change needs a caller updated; then keep that edit minimal. No new dependencies. Smallest diff that does the job, in the style of the surrounding code. Read the code before you change it; if an item turns out wrong or unsafe, skip it and say why. Do not run commands.
 When done, reply with ONLY JSON: {"done": [{"id": "o1", "note": "what changed, one sentence"}], "skipped": [{"id": "o2", "why": "..."}]}`;
-  runCli([...modelArgs(pid), '-n', `Optimize ${job.label}`, '--permission-mode', 'acceptEdits', '--strict-mcp-config', '--tools', 'Read,Edit,Write,Glob,Grep',
-    '--max-budget-usd', APPLY_BUDGET], { cwd: root, prompt, timeoutMs: 25 * 60e3, onSpawn: p => procs.set(job.id, p) })
+  runAgent({ want: projectModel(pid), tools: 'edit', persist: true, name: `Optimize ${job.label}`, budgetUsd: APPLY_BUDGET,
+    cwd: root, prompt, timeoutMs: 25 * 60e3, onSpawn: p => procs.set(job.id, p) })
     .then(({ res, cost, sid, text }) => {
       Object.assign(job, { state: 'applied', cost: job.cost + cost, session: sid,
         result: { done: Array.isArray(res.done) ? res.done.slice(0, 8) : [], skipped: Array.isArray(res.skipped) ? res.skipped.slice(0, 8) : [], note: res.done ? null : text.slice(0, 400) } });

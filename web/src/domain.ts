@@ -1337,7 +1337,7 @@ export class DomainMap {
     }
     fill(this.empty, h('div', { class: 'dm-e-h' }, 'Map what this project is about'),
       h('p', {}, 'The city shows the code. The domain map shows what the code is for: the things the project deals with (orders, users, sessions…), how they relate to each other and to the real world, the flows through them, and the parts built for an older setup that now drag.'),
-      h('p', { class: 'dim' }, `Uses ${st?.llm || 'Sonnet'} through your own Claude Code, with read-only tools, from the project folder. Capped at $10 API-equivalent; later updates only re-read what changed.`),
+      h('p', { class: 'dim' }, `Uses ${st?.llm || 'Sonnet'} through your own ${st?.cli || 'Claude Code'}, with read-only tools, from the project folder. ${st?.cli === 'Codex' ? 'Codex has no spending cap: the cost shows when the run ends.' : 'Capped at $10 API-equivalent.'} Later updates only re-read what changed.`),
       job?.state === 'error' ? h('div', { class: 'dm-err' }, 'Last run failed: ' + job.error) : null,
       h('button', { class: 'chip go', onclick: () => this.run('build') }, 'Build the domain map'));
   }

@@ -59,7 +59,7 @@ The isles show how healthy each part is: cracks and falling rocks where the code
 - **Next task**: describe what you want to build next and get a brief of exactly the slice of the project it touches, ready to hand to a Claude Code session.
 - **Live**: each session at work hovers over the isle it is touching, in its colour.
 
-The map is built once by Claude Sonnet, through your own Claude Code, with read-only tools (Read, Glob, Grep), from the project folder. It is capped at $10 API-equivalent; the map in these screenshots cost $0.33. After that it **follows your commits**: it updates only when a commit adds, deletes or renames a code file or declares or drops a type, class, table, schema or route. Uncommitted work never triggers it.
+The map is built once by Claude Sonnet, through your own Claude Code, with read-only tools (Read, Glob, Grep), from the project folder. It is capped at $10 API-equivalent; the map in these screenshots cost $0.33. Without Claude Code it is built by GPT-6.1 Terra through Codex instead ([see below](#with-codex-instead-of-claude-code)); the same map cost $0.08 there. After that it **follows your commits**: it updates only when a commit adds, deletes or renames a code file or declares or drops a type, class, table, schema or route. Uncommitted work never triggers it.
 
 ## The city: how the code is built
 
@@ -97,7 +97,7 @@ Nothing changes until you tick items and press **Apply**. A real Claude Code ses
 
 ## Analytics: spend less, work better with Claude
 
-Every API call in a transcript carries its token usage: what was sent, written to the prompt cache, read from it, and which model answered. Code Tycoon prices each call and works out where the money went and which of your habits wasted it. Amounts are at API list prices. On a Pro or Max plan you are not billed per token, but the same tokens count against your usage limits, so the same habits make you hit them sooner.
+Every API call in a transcript carries its token usage: what was sent, written to the prompt cache, read from it, and which model answered. Code Tycoon prices each call and works out where the money went and which of your habits wasted it. Amounts are at API list prices, Anthropic's for Claude Code sessions and OpenAI's for Codex sessions. On a Pro or Max plan you are not billed per token, but the same tokens count against your usage limits, so the same habits make you hit them sooner.
 
 ![Working with Claude, scoped to Code Tycoon's own repo over 30 days: $170 spent in 56 sessions, 97% cache hit rate, $19.88 that could have been saved; the habit "Pricier model than needed" is open, with each session where it happened, the problem, the cheaper way and its price](docs/media/coach.png)
 
@@ -159,10 +159,19 @@ The page then offers to turn on live updates and start at login, one click each.
 ### Requirements
 
 - Node 22.13 or newer (uses the built-in `node:sqlite`)
-- Claude Code, with some sessions already run (transcripts in `~/.claude/projects`). OpenAI Codex CLI sessions (`~/.codex/sessions`, or `$CODEX_HOME/sessions`) are picked up too and tagged "Codex"; they update from the session file a second or two behind, and their cost shows as $0 since only Claude prices are known.
+- Claude Code, with some sessions already run (transcripts in `~/.claude/projects`). OpenAI Codex CLI sessions (`~/.codex/sessions`, or `$CODEX_HOME/sessions`) are picked up too and tagged "Codex"; they update from the session file a second or two behind, and are priced at OpenAI's API list prices.
 - `git` on PATH for commits, churn, uncommitted-file markers and domain map updates
-- The `claude` CLI for the domain map, task briefs, AI task titles and recaps. It is found on PATH or inside the VS Code extension; set `VISUALIZER_CLAUDE` to point at it otherwise. Everything else works without it.
+- The `claude` CLI, or the `codex` CLI, for the domain map, task briefs, Optimize, AI task titles and recaps. `claude` is found on PATH or inside the VS Code extension (`VISUALIZER_CLAUDE` points at it otherwise), `codex` on PATH or in npm's global folder (`VISUALIZER_CODEX`). Everything else works without either.
 - Windows, macOS or Linux (autostart on Linux needs a systemd user session).
+
+### With Codex instead of Claude Code
+
+Code Tycoon's own AI work (task titles, recaps, the domain map, briefs, Optimize) runs through Claude Code when it is installed and through the Codex CLI when it is not. `VISUALIZER_LLM=codex` picks Codex even when both are installed.
+
+- **Models**: titles and recaps on `gpt-6-luna`, the domain map on `gpt-6.1-terra`, briefs and Optimize on the model your latest Codex session in that project used, otherwise `gpt-6.1-sol` (`VISUALIZER_CODEX_SMALL_MODEL`, `VISUALIZER_CODEX_MAP_MODEL`, `VISUALIZER_CODEX_MODEL`).
+- **Background jobs** run with `--ephemeral --ignore-user-config`: no session file, none of your MCP servers or hooks. Optimize's edits run as a normal Codex session, so you watch it work in the city.
+- **No spending cap.** Codex has no budget flag, so a run is stopped only by its time limit. Its cost shows when it ends.
+- **Windows**: Codex's sandbox there blocks every command, reads included, even in `workspace-write`. Jobs that read or edit the project (the map build, briefs, Optimize) therefore refuse to run unless you set `VISUALIZER_CODEX_UNSANDBOXED=1`. Read jobs then run without a sandbox in a throwaway copy of the project, deleted afterwards; Optimize's apply edits the project itself, with its usual undo. Titles, recaps and map updates need no files and stay sandboxed (on Windows, map updates then work from the diff alone). On macOS and Linux Codex's own read-only and workspace-write sandboxes are used.
 
 ### Commands
 
@@ -193,7 +202,7 @@ npm run hooks:install
 
 Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`) and `~/.codex/sessions/**/rollout-*.jsonl`, parsed incrementally into `~/.visualizer/visualizer.db`. There is no Code Tycoon server and no account.
 
-The only things that leave the machine go through your own `claude` CLI, to the Anthropic API you already use with Claude Code, with no session saved and no hooks fired:
+The only things that leave the machine go through your own `claude` CLI, to the Anthropic API you already use with Claude Code (or your own `codex` CLI, to OpenAI, when Claude Code is not installed), with no session saved and no hooks fired. The spending caps below apply to Claude Code; Codex has none:
 
 - **Task titles and recaps**: batched prompts to Haiku, no tools. Key-shaped strings in prompts are masked before they are stored or sent. `VISUALIZER_NO_LLM=1` turns this off.
 - **The domain map and task briefs**, only when you click build or ask for a brief: Sonnet for the map, and for briefs the model your latest session in that project used, reads the project folder with read-only tools, under a spending cap ($10 per build, $2 per brief; `VISUALIZER_DOMAIN_USD`, `VISUALIZER_BRIEF_USD`). Auto-update can be switched off per project.
