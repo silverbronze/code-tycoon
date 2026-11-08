@@ -1,3 +1,4 @@
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/logo-dark.svg">
@@ -11,7 +12,7 @@
   <code>npx code-tycoon</code> · runs on your machine · free and open source
 </p>
 
-![The domain map of an open-source Next.js app: every entity is an isle, the people and systems it serves stand on the ground below](docs/media/domain.png)
+[![The domain map of an open-source Next.js app: every entity is an isle, the people and systems it serves stand on the ground below](docs/media/domain.png)](https://github.com/user-attachments/assets/2ae065a3-c7e6-4c9e-a862-c2c394d2a57d)
 
 <p align="center">▶ <a href="docs/media/demo-github.mp4"><b>Watch the tour</b></a> (1:40)</p>
 
