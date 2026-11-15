@@ -17,12 +17,12 @@ import { changes, commitDetail, digest, saveDigestSummary } from './insights.mjs
 import { health } from './health.mjs';
 import { VIS_DIR } from './paths.mjs';
 import { systemLoad, processBreakdown } from './system.mjs';
-import { scanIdle, idleSummary, stopIdle } from './idle.mjs';
+import { scanIdle, idleSummary, stopIdle, sessionOfPid } from './idle.mjs';
 import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
-import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize } from './optimize.mjs';
+import { onOptimize, getJob, projectModel, survey, apply, stop as stopOptimize, undo as undoOptimize, solveDrift, driftPrompt } from './optimize.mjs';
 import { hooksInstalled, setHooks } from './hooks-install.mjs';
 import { modelFor } from './llm.mjs';
-import { onDomain, domainView, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted, watchCommits, checkCommits, setAuto } from './domain.mjs';
+import { onDomain, domainView, domainModel, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted, watchCommits, checkCommits, setAuto } from './domain.mjs';
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
@@ -304,6 +304,8 @@ const server = http.createServer(async (req, res) => {
         }
         if (k === 'node' || k === 'claude') {
           const [d, idle] = await Promise.all([processBreakdown(k), scanIdle()]);
+          // name the session each process belongs to: a CLI by its own pid, a helper by the CLI that started it
+          for (const g of d.groups) for (const i of g.items) i.session = sessionOfPid(i.pid) || (i.owner && sessionOfPid(i.owner)) || null;
           return send(res, 200, { ...d, idle }, req);
         }
         if (k === 'cpu' || k === 'ram') return send(res, 200, await processBreakdown(k), req);
@@ -410,13 +412,19 @@ const server = http.createServer(async (req, res) => {
           }
           return send(res, 200, d, req);
         }
-        // optimize a block (key m:<module key>) or district (d:<id>) with the project's model
+        // optimize a block (key m:<module key>) or district (d:<id>) with the project's model;
+        // a drift item of the domain map (key a:<assumption id>) is solved in one step
         if (parts[3] === 'optimize') {
-          if (req.method !== 'POST') { const key = String(u.searchParams.get('key') || ''); return send(res, 200, { model: modelFor(projectModel(pid)), job: getJob(pid, key) }, req); }
+          if (req.method !== 'POST') {
+            const key = String(u.searchParams.get('key') || '');
+            const a = key.startsWith('a:') ? domainModel(pid)?.assumptions.find(x => x.id === key.slice(2)) : null;
+            return send(res, 200, { model: modelFor(projectModel(pid)), job: getJob(pid, key), prompt: a ? driftPrompt(domainModel(pid), a, false) : undefined }, req);
+          }
           if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
           const b = JSON.parse(await readBody(req) || '{}'), key = String(b.key || '');
           getJob(pid, key); // loads a saved plan, so it can be applied after a restart
-          const r = parts[4] === 'survey' ? survey(pid, city(pid), key)
+          const r = parts[4] === 'solve' ? (key.startsWith('a:') ? solveDrift(pid, city(pid), domainModel(pid), key.slice(2), !!b.force) : { error: 'not a drift item' })
+            : parts[4] === 'survey' ? survey(pid, city(pid), key)
             : parts[4] === 'apply' ? apply(pid, city(pid), key, Array.isArray(b.items) ? b.items.map(String) : [], !!b.force)
             : parts[4] === 'stop' ? stopOptimize(pid, key)
             : parts[4] === 'undo' ? undoOptimize(pid, city(pid), key) : { error: 'unknown step' };

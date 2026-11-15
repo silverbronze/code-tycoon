@@ -33,7 +33,7 @@ Code Tycoon reads what is already on your disk (your code, its git history, and 
 | The pain | What Code Tycoon shows |
 |---|---|
 | Don't know what the project is about anymore | **Domain map**: the things the code deals with (users, posts, subscriptions), how they connect, and the people and systems they serve |
-| Old code dragging the new design | **Drift**: each assumption the code was built on that no longer holds, with the evidence, what it costs today and the fix |
+| Old code dragging the new design | **Drift**: each assumption the code was built on that no longer holds, with the evidence, what it costs today and the fix. **Solve** hands it to a session you can watch and undo, or copy the fix as a prompt |
 | Don't know if a feature really works end to end | **Flows**: walk a user journey isle by isle and file by file, marked works, partial or broken |
 | Lost among terminals | **Sessions panel and dashboard**: needs you, stuck, working, your turn, in every project |
 | Sessions colliding | **Alerts** the moment two sessions edit the same file or work in the same module |
@@ -207,7 +207,7 @@ The only things that leave the machine go through your own `claude` CLI, to the 
 
 - **Task titles and recaps**: batched prompts to Haiku, no tools. Key-shaped strings in prompts are masked before they are stored or sent. `VISUALIZER_NO_LLM=1` turns this off.
 - **The domain map and task briefs**, only when you click build or ask for a brief: Sonnet for the map, and for briefs the model your latest session in that project used, reads the project folder with read-only tools, under a spending cap ($10 per build, $2 per brief; `VISUALIZER_DOMAIN_USD`, `VISUALIZER_BRIEF_USD`). Auto-update can be switched off per project.
-- **Optimize**, only when you press survey or apply: the model your latest session in that project used (`VISUALIZER_OPTIMIZE_MODEL` overrides it). The survey reads with read-only tools under a $2 cap, and applying edits only files in the project folder, runs no commands and stops at $8 (`VISUALIZER_OPTIMIZE_SURVEY_USD`, `VISUALIZER_OPTIMIZE_APPLY_USD`).
+- **Optimize**, only when you press survey or apply: the model your latest session in that project used (`VISUALIZER_OPTIMIZE_MODEL` overrides it). The survey reads with read-only tools under a $2 cap, and applying edits only files in the project folder, runs no commands and stops at $8 (`VISUALIZER_OPTIMIZE_SURVEY_USD`, `VISUALIZER_OPTIMIZE_APPLY_USD`). **Solve** on a drift item runs the same way, with the same $8 cap and undo.
 
 The server only answers requests from this machine's own pages (Host and Origin are checked), and `/hook` needs the token in `~/.visualizer/token`, so another website open in the browser cannot read your prompts or post fake activity.
 

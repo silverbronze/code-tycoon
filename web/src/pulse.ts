@@ -168,7 +168,10 @@ export class Pulse {
             h('span', { class: 'mono' }, `pid ${i.pid}`),
             h('span', {}, i.born ? `started ${dur(now - i.born)} ago` : ''),
             i.kids != null ? h('span', { class: 'dim' }, `${i.kids} child process${i.kids === 1 ? '' : 'es'}`) : h('span', {}),
-            h('span', { class: 'pp-n' }, mb(i.mem), h('span', { class: 'dim' }, ` · ${mb(i.priv)} · ${i.cpu}%`))))));
+            h('span', { class: 'pp-n' }, mb(i.mem), h('span', { class: 'dim' }, ` · ${mb(i.priv)} · ${i.cpu}%`)),
+            machine ? null : h('span', { class: 'pp-ses', title: i.session ? `${i.session.project ? i.session.project + ' · ' : ''}${i.session.title || i.session.id}` : '' },
+              i.session ? [i.session.project ? h('span', { class: 'dim' }, i.session.project + ' · ') : null, i.session.title || h('span', { class: 'dim' }, i.session.id.slice(0, 8))]
+                : h('span', { class: 'dim' }, i.owner || d.kind === 'claude' ? 'session not identified' : 'not started by a Claude Code session'))))));
       }));
   }
 

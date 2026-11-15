@@ -4,7 +4,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Stage } from './city/scene';
 import { ink } from './city/env';
-import { api, live, type City, type DomainState, type DomainModel, type DEntity, type DFlow, type DAssumption, type Brief, type DriftFile, type EStatus } from './api';
+import { api, live, type City, type DomainState, type DomainModel, type DEntity, type DFlow, type DAssumption, type Brief, type DriftFile, type EStatus, type OptJob } from './api';
 import { h, put, ago, dur, money } from './util';
 import './domain.css';
 
@@ -102,6 +102,7 @@ export class DomainMap {
   private fileIsles = new Map<string, Isle[]>();  // lowercased path -> isles whose code holds it
   private moduleIsles = new Map<number, Isle[]>(); // city module -> isles with files in it
   private driftBy = new Map<string, DriftFile>();
+  private solve: { key: string; box: HTMLElement; job: OptJob | null; model: string | null; prompt: string; busy: { id: string; title: string | null }[] | null; err: string | null } | null = null;
   private flowFx: FlowFx | null = null;
   private drones = new Map<string, Drone>();
   private sel: Sel = null; private hover: Isle | null = null; private hoverLand: Land | null = null;
@@ -139,7 +140,11 @@ export class DomainMap {
     c.addEventListener('stage-click', (e: any) => this.onClick(e.detail.x, e.detail.y));
     c.addEventListener('pointermove', this.onMove);
     c.addEventListener('pointerleave', () => { this.tip.style.opacity = '0'; this.setHover(null, null); });
-    this.offLive = live.on(m => { if (m.type === 'domain' && m.pid === this.pid) this.load(!!m.changed); });
+    this.offLive = live.on(m => {
+      if (m.type === 'domain' && m.pid === this.pid) this.load(!!m.changed);
+      const s = this.solve;
+      if (m.type === 'optimize' && m.pid === this.pid && s && m.key === s.key && s.box.isConnected) { s.job = m.job; this.renderSolve(); }
+    });
     // only the running clocks tick; a full re-render would take the caret out of the task box
     this.timer = window.setInterval(() => { for (const el of this.el.querySelectorAll<HTMLElement>('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since)); }, 1000);
     this.setVisible(false);
@@ -1532,6 +1537,7 @@ export class DomainMap {
       const a = m.assumptions.find(x => x.id === s.id); if (!a) return back;
       const kv = (k: string, v: string) => v ? h('div', { class: 'dm-kv' }, h('b', {}, k), h('div', {}, v)) : null;
       return [back, h('div', { class: 'dm-kicker' }, a.holds ? 'Rule to keep' : `Drift · ${a.severity}`), h('h2', { class: 'sm' }, a.text),
+        a.holds ? null : this.solveBox(a),
         kv('Built for', a.was), kv('Now', a.now), kv('Evidence', a.evidence), kv('Costs today', a.cost), kv(a.holds ? 'Keep it by' : 'Fix', a.fix),
         this.sect('Isles', h('div', { class: 'dm-chips' }, a.entities.map(id => this.chipE(id)))),
         this.sect('Files', a.files.map(p => this.fileRow(p)))];
@@ -1561,6 +1567,53 @@ export class DomainMap {
       h('div', { class: 'dim note' }, `${b.model || ''}${b.cost ? ' · ' + money(b.cost) + ' API-equiv.' : ''} · ${ago(b.ended || b.started)}`),
     ];
   }
+  // Solve a drift item: a visible session of the project's model edits the code (server
+  // optimize.mjs solveDrift), with undo; or copy the same fix as a prompt to run yourself.
+  private solveBox(a: DAssumption) {
+    const box = h('div', { class: 'dm-sect dm-solve' }, h('div', { class: 'dim' }, '…'));
+    const s: NonNullable<DomainMap['solve']> = { key: 'a:' + a.id, box, job: null, model: null, prompt: '', busy: null, err: null };
+    this.solve = s;
+    api.optimize(this.pid, s.key).then(r => { if (this.solve !== s) return; s.job = r.job; s.model = r.model; s.prompt = r.prompt || ''; this.renderSolve(); })
+      .catch(e => { s.err = e.message; this.renderSolve(); });
+    return box;
+  }
+
+  private renderSolve() {
+    const s = this.solve; if (!s) return;
+    const j = s.job, model = (j?.model || s.model || '').replace(/^claude-/, '') || 'the project\'s model';
+    const step = async (st: 'solve' | 'stop' | 'undo', force = false) => {
+      s.err = null; s.busy = null;
+      const r = await api.optimizeStep(this.pid, st, s.key, st === 'solve' ? { force } : {});
+      if (r.busy) s.busy = r.busy; else if (r.error) s.err = r.error === 'busy' ? 'Already solving.' : r.error;
+      if (r.job) s.job = r.job;
+      if (st === 'undo' && r.kept?.length) s.err = `Left ${r.kept.length} file(s) alone: edited again after the run.`;
+      this.renderSolve();
+    };
+    const copy = h('button', { class: 'chip mini', disabled: !s.prompt, title: 'Run the fix yourself in a Claude Code session', onclick: async () => {
+      await navigator.clipboard.writeText(s.prompt); copy.textContent = 'Copied'; setTimeout(() => copy.textContent = 'Copy fix prompt', 1500); } }, 'Copy fix prompt');
+    const solveB = (label: string) => h('button', { class: 'chip go', title: `A ${model} session edits the code to fix this; you can undo it`, onclick: () => step('solve') }, label);
+    const changed = [...(j?.changed || []), ...(j?.created || [])];
+    const body = !j || j.state === 'planned' || j.state === 'undone' ? [
+        j?.state === 'undone' ? h('div', { class: 'dim note' }, 'The last fix was undone.') : null,
+        h('div', { class: 'dm-actions' }, solveB('Solve'), copy)]
+      : j.state === 'applying' ? [h('div', { class: 'dm-working' }, h('span', { class: 'spinner sm' }), `A ${model} session is fixing it · `, since(j.applyStarted || j.started)),
+        h('div', { class: 'dm-actions' }, h('button', { class: 'chip mini', onclick: () => step('stop') }, 'Stop'))]
+      : j.state === 'applied' ? [
+        j.error ? h('div', { class: 'dm-err' }, 'Stopped · ' + j.error) : null,
+        ...(j.result?.done || []).map(x => h('div', { class: 'dm-li' }, h('b', {}, '✓ Fixed '), x.note)),
+        ...(j.result?.skipped || []).map(x => h('div', { class: 'dm-li' }, h('b', {}, '– Not changed '), x.why)),
+        j.result?.note ? h('div', { class: 'dim note' }, j.result.note) : null,
+        changed.length ? changed.map(p => this.fileRow(p, null, 'Changed')) : h('div', { class: 'dim note' }, 'No file was changed.'),
+        h('div', { class: 'dm-actions' }, j.undo ? h('button', { class: 'chip mini', onclick: () => step('undo') }, '↶ Undo') : null, solveB('Solve again'), copy),
+        h('div', { class: 'dim note' }, `${model}${j.cost ? ' · ' + money(j.cost) + ' API-equiv.' : ''} · ${ago(j.ended || j.started)} · the map updates at the next commit`)]
+      : [h('div', { class: 'dm-err' }, 'Failed · ' + (j.error || 'unknown error')), h('div', { class: 'dm-actions' }, solveB('Try again'), copy)];
+    s.box.replaceChildren();
+    put(s.box, ...body,
+      s.busy ? h('div', { class: 'dm-warn' }, `${s.busy.map(x => x.title || x.id.slice(0, 8)).join(', ')} is editing these files right now. `,
+        h('button', { class: 'chip mini', onclick: () => step('solve', true) }, 'Solve anyway')) : null,
+      s.err ? h('div', { class: 'dm-err' }, s.err) : null);
+  }
+
   private async dropBrief(b: Brief) {
     await api.dropBrief(this.pid, b.id);
     this.sel = null;

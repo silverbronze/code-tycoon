@@ -85,7 +85,8 @@ export interface IdleScan { at: number; n: number; mem: number; items: IdleProc[
 export interface StopResult { stopped: number[]; failed: number[]; skipped: number[]; freed: number; idle: IdleScan }
 export interface ProcGroupD {
   label: string; n: number; mem: number; priv: number; cpu: number; owners: number;
-  items: { pid: number; mem: number; priv: number; cpu: number; born: number; owner: number | null; kids?: number }[];
+  items: { pid: number; mem: number; priv: number; cpu: number; born: number; owner: number | null; kids?: number;
+    session?: { id: string; title: string | null; project: string | null } | null }[];
 }
 export interface ProcBreakdown { kind: 'node' | 'claude' | 'cpu' | 'ram'; n: number; mem: number; priv: number; cpu: number; groups: ProcGroupD[]; memTotal?: number; memUsed?: number; idle?: IdleScan }
 export type PulseDetail = ProcBreakdown
@@ -141,7 +142,7 @@ export interface Digest {
 export interface OptItem { id: string; title: string; gain: string; impact: 'high' | 'medium' | 'low'; risk: 'high' | 'medium' | 'low'; files: string[]; why: string; change: string }
 export interface OptJob {
   id: string; key: string; label: string; kind: string; model: string | null; state: 'surveying' | 'planned' | 'applying' | 'applied' | 'undone' | 'error';
-  started: number; ended?: number; files: number; read: number; cost: number; error?: string;
+  started: number; applyStarted?: number; ended?: number; files: number; read: number; cost: number; error?: string;
   plan: { summary: string; items: OptItem[] } | null; picked?: string[];
   result?: { done: { id: string; note: string }[]; skipped: { id: string; why: string }[]; note: string | null } | null;
   changed?: string[]; created?: string[]; kept?: string[]; undo: boolean;
@@ -225,8 +226,8 @@ export const api = {
   timeline: (id: string, since = 0) => get<Timeline>(`/api/projects/${enc(id)}/timeline${since ? '?since=' + since : ''}`),
   live: (id: string) => get<{ sessions: LiveSession[] }>(`/api/projects/${enc(id)}/live`),
   task: (id: string, task: string) => get<TaskT & { tokens: { in: number; out: number }; events: { ts: number; kind: string; tool: string; path: string | null; target: string | null; detail: string | null; agent_id: string | null; inferred: number }[] }>(`/api/projects/${enc(id)}/task/${enc(task)}`),
-  optimize: (id: string, key: string) => get<{ model: string | null; job: OptJob | null }>(`/api/projects/${enc(id)}/optimize?key=${enc(key)}`),
-  optimizeStep: async (id: string, step: 'survey' | 'apply' | 'stop' | 'undo', key: string, extra: { items?: string[]; force?: boolean } = {}) => {
+  optimize: (id: string, key: string) => get<{ model: string | null; job: OptJob | null; prompt?: string }>(`/api/projects/${enc(id)}/optimize?key=${enc(key)}`),
+  optimizeStep: async (id: string, step: 'survey' | 'apply' | 'solve' | 'stop' | 'undo', key: string, extra: { items?: string[]; force?: boolean } = {}) => {
     const r = await post(`/api/projects/${enc(id)}/optimize/${step}`, { key, ...extra });
     return { status: r.status, ...(await r.json()) } as { status: number; job?: OptJob; error?: string; busy?: { id: string; title: string | null }[]; restored?: string[]; kept?: string[] };
   },

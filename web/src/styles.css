@@ -338,7 +338,8 @@ div.pp-grp > .pp-row { padding-left: 24px; }
 .pp-track { height: 4px; margin-top: 4px; border-radius: 2px; background: rgba(0, 0, 0, 0.05); }
 .pp-bar { display: block; height: 100%; border-radius: 2px; background: var(--cyan); opacity: 0.7; }
 .pp-items { margin: 0 0 6px 34px; border-left: 1px solid var(--line); }
-.pp-item { display: grid; grid-template-columns: 82px 1fr 1fr auto; gap: 10px; padding: 3px 10px; font-size: 11.5px; color: var(--muted); }
+.pp-item { display: grid; grid-template-columns: 82px 1fr 1fr auto; gap: 0 10px; padding: 3px 10px; font-size: 11.5px; color: var(--muted); }
+.pp-item .pp-ses { grid-column: 2 / -1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pulse-pop .dim { color: var(--dim); }
 .big.notif { cursor: pointer; text-align: left; color: inherit; font: inherit; }
 .big.notif b { color: var(--muted); } .big.notif.on b { color: var(--cyan); }

@@ -87,6 +87,12 @@ function matchSessions(clis) {
   return cur;
 }
 
+const titleOf = s => (s?.title || s?.last_prompt || (s?.file && firstPrompt(s.file)) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+
+// pid -> { id, title, project } for every Claude Code CLI the last scan matched, idle or not
+let cliSessions = new Map();
+export const sessionOfPid = pid => cliSessions.get(pid) || null;
+
 let last = null, scanning = null;
 // { at, items: [...], n, mem } where items are the idle trees that can be stopped
 export function scanIdle() {
@@ -106,6 +112,7 @@ export function scanIdle() {
 
       const clis = rows.filter(isCli);
       const match = matchSessions(clis);
+      cliSessions = new Map([...match].map(([pid, s]) => [pid, { id: s.id, title: titleOf(s) || null, project: s.project || null }]));
       const items = [];
       for (const p of clis) {
         const t = tree(p), s = match.get(p.pid);
@@ -114,7 +121,7 @@ export function scanIdle() {
         const seen = Math.max(p.born, s?.last_ts || 0, (s && live.get(s.id)?.lastSeen) || 0);
         if (cpu >= BUSY_CPU || now - seen < IDLE_AFTER) continue;
         const ver = p.cmd.match(/anthropic\.claude-code-([\d.]+)/)?.[1] || null;
-        const title = (s?.title || s?.last_prompt || (s?.file && firstPrompt(s.file)) || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+        const title = cliSessions.get(p.pid)?.title || '';
         const helpers = t.slice(1).filter(r => r.name !== 'conhost'); // every console app gets one; not worth naming
         items.push({ pid: p.pid, kind: 'session', reason: !s ? 'unseen' : s.last_stop === 'ended' ? 'ended' : 'idle',
           session: s ? { id: s.id, title: title || null, project: s.project } : null,

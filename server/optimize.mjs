@@ -129,7 +129,38 @@ ${rest.length ? `\nOther files in this ${sc.kind} (not shown; Read them if a fin
 const gitNew = root => { try { return new Set(execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean)); } catch { return null; } };
 const readOr = p => { try { return fs.readFileSync(p); } catch { return null; } };
 
-export function apply(pid, c, key, ids, force) {
+// The fix for one drift item of the domain map (an assumption that no longer holds),
+// as a prompt for a Claude Code session. `json` asks for the reply Solve reads back.
+export function driftPrompt(m, a, json) {
+  const name = id => m.entities.find(e => e.id === id)?.name || id;
+  const ents = new Set(a.entities);
+  const rules = m.assumptions.filter(r => r.holds && (r.entities.some(e => ents.has(e)) || r.files.some(p => a.files.includes(p))));
+  return `Fix this drift in the project: code built for an older setup that newer code now works around.
+
+Drift: ${a.text}
+${a.was ? `Built for: ${a.was}\n` : ''}${a.now ? `Now: ${a.now}\n` : ''}${a.evidence ? `Evidence: ${a.evidence}\n` : ''}${a.cost ? `What it costs today: ${a.cost}\n` : ''}${a.fix ? `Fix: ${a.fix}\n` : ''}${a.entities.length ? `Parts of the project: ${a.entities.map(name).join(', ')}\n` : ''}${a.files.length ? `Files: ${a.files.join(', ')}\n` : ''}${rules.length ? `\nRules any change must keep:\n${rules.map(r => '- ' + r.text).join('\n')}\n` : ''}
+Read the files first and confirm the drift is real. Then move the code to the current setup: remove the old path, workaround or fallback, and update the callers that relied on it. Keep what users see the same, keep the rules above, add no dependencies, and write the smallest diff in the style of the surrounding code. If the fix turns out wrong or unsafe, change nothing and say why.${json ? `
+Do not run commands. When done, reply with ONLY JSON: {"done": [{"id": "d1", "note": "what changed, two sentences at most"}], "skipped": [{"id": "d1", "why": "..."}]}` : ''}`;
+}
+
+// Solve one drift item (key a:<assumption id>): the assumption is the plan, so there is
+// no survey; it runs, shows in the city, snapshots and undoes like an optimization.
+export function solveDrift(pid, c, m, aid, force) {
+  const a = m?.assumptions.find(x => x.id === aid);
+  if (!a || a.holds) return { error: 'unknown drift item' };
+  const key = 'a:' + a.id, cur = jobs.get(jobKey(pid, key));
+  if (cur?.state === 'applying') return { error: 'busy', job: view(cur) };
+  const root = c.project.root;
+  const files = a.files.filter(p => fs.existsSync(path.join(root, p)));
+  // the isles' code too, so callers the fix touches are covered by undo
+  const near = m.entities.filter(e => a.entities.includes(e.id)).flatMap(e => e.code.map(x => x.p)).filter(p => fs.existsSync(path.join(root, p)));
+  jobs.set(jobKey(pid, key), { id: Math.random().toString(36).slice(2, 10), pid, key, label: a.text.slice(0, 80), kind: 'drift', model: modelFor(projectModel(pid)),
+    state: 'planned', started: Date.now(), files: files.length, read: 0, cost: 0,
+    plan: { summary: '', items: [{ id: 'd1', title: a.text.slice(0, 80), gain: 'simpler', impact: a.severity, risk: 'medium', files, why: a.evidence, change: a.fix }] } });
+  return apply(pid, c, key, ['d1'], force, { prompt: driftPrompt(m, a, true), scope: near, name: 'Solve drift: ' + a.text.slice(0, 50) });
+}
+
+export function apply(pid, c, key, ids, force, over = {}) {
   const job = jobs.get(jobKey(pid, key));
   if (!job?.plan || job.state === 'surveying' || job.state === 'applying') return { error: 'survey first' };
   if (applying.has(pid)) return { error: 'another optimization is editing this project; wait for it to finish' };
@@ -137,7 +168,7 @@ export function apply(pid, c, key, ids, force) {
   if (!items.length) return { error: 'pick at least one item' };
   const sc = scope(c, key);
   const root = c.project.root;
-  const inScope = new Map([...(sc?.files || []).map(f => f.p), ...items.flatMap(x => x.files)].map(p => [p.toLowerCase(), p]));
+  const inScope = new Map([...(sc?.files || []).map(f => f.p), ...(over.scope || []), ...items.flatMap(x => x.files)].map(p => [p.toLowerCase(), p]));
   if (!force) {
     const busy = openSessions(pid).filter(s => s.state === 'working' && s.action?.path && inScope.has(String(rel(root, s.action.path) || '').toLowerCase()));
     if (busy.length) return { busy: busy.map(s => ({ id: s.id, title: s.title })) };
@@ -149,12 +180,12 @@ export function apply(pid, c, key, ids, force) {
   Object.assign(job, { state: 'applying', applyStarted: Date.now(), picked: items.map(x => x.id), result: null, error: undefined });
   applying.add(pid);
   publish(job);
-  const prompt = `Apply these optimizations to the ${job.kind} "${job.label}" of this project. They come from a review of its code:
+  const prompt = over.prompt || `Apply these optimizations to the ${job.kind} "${job.label}" of this project. They come from a review of its code:
 ${JSON.stringify(items.map(({ id, title, files, why, change }) => ({ id, title, files, why, change })), null, 1)}
 
 Rules: keep behavior and public interfaces exactly the same. Edit only the files named in the items, unless a change needs a caller updated; then keep that edit minimal. No new dependencies. Smallest diff that does the job, in the style of the surrounding code. Read the code before you change it; if an item turns out wrong or unsafe, skip it and say why. Do not run commands.
 When done, reply with ONLY JSON: {"done": [{"id": "o1", "note": "what changed, one sentence"}], "skipped": [{"id": "o2", "why": "..."}]}`;
-  runAgent({ want: projectModel(pid), tools: 'edit', persist: true, name: `Optimize ${job.label}`, budgetUsd: APPLY_BUDGET,
+  runAgent({ want: projectModel(pid), tools: 'edit', persist: true, name: over.name || `Optimize ${job.label}`, budgetUsd: APPLY_BUDGET,
     cwd: root, prompt, timeoutMs: 25 * 60e3, onSpawn: p => procs.set(job.id, p) })
     .then(({ res, cost, sid, text }) => {
       Object.assign(job, { state: 'applied', cost: job.cost + cost, session: sid,

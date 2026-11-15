@@ -174,6 +174,8 @@ export function checkCommits(pid) {
   else emit(pid, {});
 }
 
+export const domainModel = pid => saved(pid)?.model || null;
+
 export function domainView(pid, city) {
   const st = saved(pid);
   const changed = st ? changedSince(city, st.meta) : [];
