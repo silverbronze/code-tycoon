@@ -2,6 +2,7 @@ import './styles.css';
 import './notify';
 import { Overview } from './overview';
 import { CityView } from './cityview';
+import { Voice } from './voice';
 
 const app = document.getElementById('app')!;
 let view: { dispose(): void } | null = null;
@@ -19,3 +20,4 @@ function route() {
 }
 window.addEventListener('hashchange', route);
 route();
+new Voice(() => view);

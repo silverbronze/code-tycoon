@@ -1,0 +1,93 @@
+/* The task board on the overview (board.ts). Black and white; red only for what waits on you. */
+.board { margin-bottom: 8px; }
+.bd-compose { border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-solid); padding: 10px 12px; }
+.bd-text { width: 100%; border: 0; outline: 0; resize: vertical; min-height: 44px; background: none; font: 14px/1.45 var(--ui); color: var(--text); }
+.bd-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.bd-sel { height: 30px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); padding: 0 8px; font-size: 12.5px; max-width: 240px; }
+.bd-auto { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.bd-hint { margin-left: auto; font: 11px var(--mono); color: var(--dim); }
+.bd-err { color: var(--red); font-size: 12.5px; margin-top: 4px; }
+.bd-err:empty { display: none; }
+.board .chip { cursor: pointer; }
+.board .chip:disabled { opacity: 0.5; cursor: default; }
+
+/* your to-do */
+.bd-todo { margin-top: 14px; }
+.bd-todo:empty { display: none; }
+.bd-todo-h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.bd-todo-h b { font-size: 15px; }
+.bd-todo-h span { font: 600 11px/1 var(--ui); color: #fff; background: var(--red); border-radius: 999px; padding: 4px 8px; }
+.bd-todo-h em { font-style: normal; color: var(--muted); font-size: 12.5px; }
+.bd-item { border: 1px solid var(--line-2); border-left: 3px solid var(--red); border-radius: 12px; padding: 10px 14px; margin-bottom: 8px; background: var(--panel-solid); }
+.bd-ihead { display: flex; align-items: center; gap: 10px; font-size: 12px; min-width: 0; }
+.bd-tag { font: 600 10.5px/1 var(--ui); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 7px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--line-2); white-space: nowrap; }
+.bd-tag.alarm { color: #fff; background: var(--red); box-shadow: none; }
+.bd-proj { color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-ihead .bd-proj { flex-shrink: 0; max-width: 45%; }
+.bd-task { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bd-q { font-weight: 600; margin-top: 8px; }
+.bd-why { color: var(--muted); font-size: 12.5px; font-weight: 400; }
+.bd-cmd { font: 12px/1.45 var(--mono); background: rgba(0, 0, 0, 0.04); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; }
+.bd-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.bd-answer { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; }
+.bd-ans { flex: 1; min-width: 160px; min-height: 30px; border: 1px solid var(--line); border-radius: 9px; padding: 6px 9px; font: 13px/1.4 var(--ui); resize: vertical; background: var(--bg); outline: 0; }
+.bd-ans:focus, .bd-text:focus-visible { border-color: var(--line-2); }
+
+/* the tasks */
+.bd-list { margin-top: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgba(0, 0, 0, 0.02); padding: 6px; }
+.bd-empty { color: var(--muted); font-size: 13px; padding: 10px; }
+.bd-task-row { border-radius: 9px; }
+.bd-task-row.open { background: rgba(0, 0, 0, 0.035); }
+.bd-main { display: grid; grid-template-columns: 112px 120px minmax(0, 1fr) 90px auto; gap: 12px; align-items: center; padding: 8px 10px; cursor: pointer; border-radius: 9px; }
+.bd-main:hover { background: rgba(0, 0, 0, 0.04); }
+.bd-state { justify-self: start; font: 600 11px/1 var(--ui); padding: 4px 8px; border-radius: 999px; white-space: nowrap; box-shadow: inset 0 0 0 1px var(--line-2); }
+.bd-state.running { color: #fff; background: var(--text); box-shadow: none; }
+.bd-state.needs-you, .bd-state.unrouted { color: #fff; background: var(--red); box-shadow: none; }
+.bd-state.failed { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+.bd-state.done, .bd-state.routing, .bd-state.queued { color: var(--muted); background: rgba(0, 0, 0, 0.06); box-shadow: none; }
+.bd-body { min-width: 0; }
+.bd-text-1 { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-line { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-task-row.failed .bd-line { color: var(--red); }
+.bd-meta { font: 12px var(--mono); color: var(--dim); text-align: right; display: flex; flex-direction: column; }
+.bd-meta i { font-style: normal; font-size: 11px; }
+.bd-acts { display: flex; gap: 6px; justify-content: flex-end; }
+.bd-detail { padding: 2px 10px 12px 134px; }
+.bd-full { white-space: pre-wrap; font-size: 13px; margin-bottom: 6px; }
+.bd-part { font: 600 10.5px/1 var(--mono); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-2); border-radius: 5px; padding: 2px 5px; margin-right: 7px; vertical-align: 1px; white-space: nowrap; flex-shrink: 0; }
+.bd-split { margin-top: 8px; display: grid; gap: 6px; justify-items: start; }
+.bd-src { white-space: pre-wrap; font-size: 12.5px; color: var(--muted); border-left: 2px solid var(--line-2); padding-left: 10px; max-height: 160px; overflow: auto; }
+.bd-runs { margin-top: 6px; display: grid; gap: 6px; }
+.bd-run { font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); }
+.bd-run b { color: var(--text); }
+.bd-sum { flex-basis: 100%; color: var(--text); white-space: pre-wrap; }
+.bd-qa { margin-top: 8px; font-size: 12.5px; display: grid; gap: 3px; }
+.bd-state.paused { color: var(--text); box-shadow: inset 0 0 0 1.5px var(--text); }
+.bd-dots { letter-spacing: 2px; color: var(--text); }
+.bd-steps { margin: 8px 0 4px; display: grid; gap: 5px; font-size: 12.5px; }
+.bd-step { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 6px; }
+.bd-step .bd-sum { color: var(--muted); }
+.bd-mark { font: 600 12px/1.45 var(--mono); text-align: center; }
+.bd-step.todo { color: var(--muted); }
+.bd-step.needs-you .bd-mark, .bd-step.failed .bd-mark { color: var(--red); }
+.bd-more { border: 0; background: none; color: var(--muted); font-size: 12px; padding: 8px 10px; cursor: pointer; }
+.bd-more:hover { color: var(--text); }
+
+@media (max-width: 760px) {
+  .bd-main { grid-template-columns: auto minmax(0, 1fr); }
+  .bd-main .bd-proj { grid-column: 2; }
+  .bd-body, .bd-meta, .bd-acts { grid-column: 1 / -1; }
+  .bd-meta { flex-direction: row; gap: 8px; text-align: left; }
+  .bd-acts { justify-content: flex-start; }
+  .bd-detail { padding-left: 10px; }
+  .bd-hint { display: none; }
+}
+
+/* a finished task in the to-do: no alarm, just the one-liner */
+.bd-item.done { border-left-color: var(--line-2); }
+.bd-item.done .bd-q { font-weight: 500; }
+/* the session's full reply (showOutput), over the page */
+.bd-out-wrap { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.25); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.bd-out { width: min(760px, 100%); max-height: 85vh; display: flex; flex-direction: column; background: var(--panel-solid); border: 1px solid var(--line-2); border-radius: 14px; padding: 14px 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18); }
+.bd-out-text { margin-top: 10px; overflow: auto; white-space: pre-wrap; font: 13px/1.5 var(--ui); color: var(--text); border-top: 1px solid var(--line); padding-top: 10px; }
+.bd-out-text code { font: 12px var(--mono); background: rgba(0, 0, 0, 0.05); border-radius: 4px; padding: 1px 4px; }

@@ -15,7 +15,7 @@ import { sessionHealth, checkSession, review, insights, look, cosmetics, setCosm
 import { pump, describeModules, onSummaries, summarizerStatus, summarizeDay } from './summarize.mjs';
 import { changes, commitDetail, digest, saveDigestSummary } from './insights.mjs';
 import { health } from './health.mjs';
-import { VIS_DIR } from './paths.mjs';
+import { DATA_DIR, OWN_DIR_RE } from './paths.mjs';
 import { systemLoad, processBreakdown } from './system.mjs';
 import { scanIdle, idleSummary, stopIdle, sessionOfPid } from './idle.mjs';
 import { coach, sessionCoach, onPrompt, checkCoach, resetCoach } from './coach.mjs';
@@ -24,9 +24,11 @@ import { hooksInstalled, setHooks } from './hooks-install.mjs';
 import { modelFor } from './llm.mjs';
 import { onDomain, domainView, domainModel, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted, watchCommits, checkCommits, setAuto } from './domain.mjs';
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
+import { onBoard, listBoard, create as createTask, boardAction, taskOutput } from './board.mjs';
+import { voiceStatus, voiceCommand } from './voice.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
-const TOKEN_FILE = path.join(VIS_DIR, 'token');
+const TOKEN_FILE = path.join(DATA_DIR, 'token');
 let TOKEN = '';
 try { TOKEN = fs.readFileSync(TOKEN_FILE, 'utf8').trim(); } catch {}
 if (!TOKEN) { TOKEN = crypto.randomBytes(24).toString('hex'); fs.writeFileSync(TOKEN_FILE, TOKEN); }
@@ -88,6 +90,7 @@ onSummaries(msg => {
 onOptimize(msg => broadcast(msg, msg.pid));
 settleInterrupted();
 onDomain(msg => broadcast(msg, msg.pid));
+onBoard(msg => broadcast(msg)); // the task board is on every page
 
 // Live items -> city places -> clients
 function fanOut(pid, items) {
@@ -251,6 +254,10 @@ function readBody(req) {
   return new Promise(r => { let b = ''; req.on('data', d => { b += d; if (b.length > 5e6) req.destroy(); }); req.on('end', () => r(b)); });
 }
 
+function readBytes(req, max = 10e6) {
+  return new Promise((r, j) => { const c = []; let n = 0; req.on('data', d => { n += d.length; if (n > max) { req.destroy(); j(new Error('recording too long')); } else c.push(d); }); req.on('end', () => r(Buffer.concat(c))); });
+}
+
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2', '.json': 'application/json' };
 
 const server = http.createServer(async (req, res) => {
@@ -259,11 +266,12 @@ const server = http.createServer(async (req, res) => {
   const parts = u.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   try {
     if (req.method === 'POST' && u.pathname === '/hook') {
-      if (req.headers['x-visualizer-token'] !== TOKEN) { res.writeHead(403).end(); return; }
+      // x-visualizer-token: hooks installed before the rename
+      if ((req.headers['x-codetycoon-token'] || req.headers['x-visualizer-token']) !== TOKEN) { res.writeHead(403).end(); return; }
       const body = await readBody(req);
       res.writeHead(204).end();
       let h; try { h = JSON.parse(body); } catch { return; }
-      if (h.cwd && /[\\/]\.visualizer[\\/]summarizer/i.test(h.cwd)) return;
+      if (h.cwd && OWN_DIR_RE.test(h.cwd) && /[\\/]summarizer/i.test(h.cwd)) return;
       const items = onHook(h);
       const pid = sessions.get(h.session_id)?.pid;
       // a prompt on a big context whose cache has expired: say so while it is being written again
@@ -340,6 +348,28 @@ const server = http.createServer(async (req, res) => {
         if (parts[2] === 'session' && parts[3]) return send(res, 200, sessionCoach(parts[3]) || { error: 'not found' }, req);
         const days = Math.min(90, Math.max(1, Number(u.searchParams.get('days')) || 7));
         return send(res, 200, coach({ pid: u.searchParams.get('pid') || null, days }), req);
+      }
+      // the task board (server/board.mjs): GET the tasks, POST a new one, POST /<id>/<action>
+      if (parts[1] === 'board') {
+        if (req.method !== 'POST' && parts[2] && parts[3] === 'output') { const r = taskOutput(parts[2]); return send(res, r.error ? 404 : 200, r, req); }
+        if (req.method !== 'POST') return send(res, 200, listBoard(), req);
+        if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+        const b = JSON.parse(await readBody(req) || '{}');
+        const r = parts[2] ? boardAction(parts[2], parts[3], b) : createTask(b);
+        return send(res, r.error === 'busy' ? 409 : r.error ? 400 : 200, r, req);
+      }
+      // voice control (server/voice.mjs): POST a recording (audio/*) or {text} as JSON; the page and
+      // the board defaults come in the query (lang, pid, layer, mode, auto, pause)
+      if (parts[1] === 'voice') {
+        if (req.method !== 'POST') return send(res, 200, voiceStatus(), req);
+        const ct = req.headers['content-type'] || '';
+        if (!/^(audio|video)\/|^application\/json/.test(ct)) return send(res, 415, { error: 'audio or json only' }, req);
+        const q = u.searchParams, json = /^application\/json/.test(ct);
+        const body = json ? JSON.parse(await readBody(req) || '{}') : null;
+        try {
+          return send(res, 200, await voiceCommand({ audio: json ? null : await readBytes(req), type: ct, text: json ? String(body.text || '') : null, lang: q.get('lang') || 'auto',
+            page: { pid: q.get('pid') || null, layer: q.get('layer') || null }, prefs: { mode: q.get('mode') === 'ask' ? 'ask' : 'full', autoRun: q.get('auto') !== '0', pause: q.get('pause') === '1' } }), req);
+        } catch (e) { return send(res, 502, { error: e.message }, req); }
       }
       if (parts[1] === 'alerts') {
         if (req.method === 'POST' && parts[2] === 'dismiss') {

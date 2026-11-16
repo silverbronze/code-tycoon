@@ -1,0 +1,26 @@
+/* voice control: a mic and a language picker in the bottom-right corner of every page */
+.vc { position: fixed; right: 16px; bottom: 16px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; font-family: var(--ui); pointer-events: none; }
+.vc > * { pointer-events: auto; }
+.vc-bar { display: flex; align-items: center; gap: 6px; padding: 4px; border-radius: 24px; background: var(--panel-solid); border: 1px solid var(--line-2); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); }
+.vc-lang { height: 30px; border: 0; background: transparent; color: var(--muted); font: 600 11.5px/1 var(--ui); padding: 0 4px 0 8px; cursor: pointer; outline: none; }
+.vc-btn { position: relative; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--panel-solid); color: var(--text); display: grid; place-items: center; cursor: pointer; }
+.vc-btn:hover { background: rgba(0, 0, 0, 0.06); }
+.vc.listening .vc-btn, .vc.docked.listening .vc-btn { background: var(--red); border-color: var(--red); color: #fff; box-shadow: 0 0 0 calc(3px + var(--lvl, 0) * 10px) rgba(210, 35, 42, 0.22); transition: box-shadow 80ms linear; }
+.vc.thinking .vc-btn { animation: vc-spin 1s linear infinite; border-top-color: var(--text); border-width: 2px; }
+@keyframes vc-spin { to { transform: rotate(360deg); } }
+.vc.thinking .vc-btn svg { animation: vc-spin 1s linear infinite reverse; }
+.vc-panel { position: fixed; z-index: 60; display: none; max-width: min(380px, calc(100vw - 32px)); padding: 10px 13px; border-radius: 12px; background: var(--panel-solid); border: 1px solid var(--line-2);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18); font-size: 13px; line-height: 1.45; color: var(--text); }
+.vc-panel.open { display: flex; flex-direction: column; gap: 5px; }
+.vc-heard { color: var(--muted); font-style: italic; }
+.vc-say { font-weight: 500; }
+.vc-did { font-size: 12px; color: var(--muted); }
+.vc-dim { color: var(--muted); }
+.vc-err { color: var(--red); }
+/* docked in the project header: the bar sits inline, replies drop down below the header */
+.vc-slot { display: contents; }
+.vc.docked { position: relative; right: auto; bottom: auto; z-index: 30; flex-direction: row; }
+.vc.docked .vc-bar { padding: 0; gap: 2px; border: 0; box-shadow: none; background: transparent; }
+.vc.docked .vc-btn { width: 30px; height: 30px; border-radius: 9px; border-color: var(--line); background: rgba(0, 0, 0, 0.03); }
+.vc.docked .vc-btn svg { width: 16px; height: 16px; }
+.vc-speak { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11.5px; color: var(--dim); cursor: pointer; }

@@ -3,6 +3,7 @@ import { h, put, ago, bytes, dur, tail, money } from './util';
 import { notify } from './notify';
 import { Pulse } from './pulse';
 import { CoachPanel } from './coach';
+import { BoardPanel } from './board';
 
 const VERB: Record<string, string> = { write: 'Editing', read: 'Reading', search: 'Searching', touch: 'Touching', cmd: 'Running', remote: 'Calling', skill: 'Using skill', spawn: 'Spawning agent', ask: 'Asking you', other: 'Using' };
 const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Working'], ['waiting', 'Your turn'], ['idle', 'Idle']];
@@ -16,6 +17,7 @@ export class Overview {
   private opening = new Set<string>();
   private pulse = new Pulse('big');
   private coach = new CoachPanel();
+  private board = new BoardPanel();
   private setup: Setup | null = null;
   private setupBusy = false;
   private setupError = '';
@@ -36,6 +38,7 @@ export class Overview {
     const ps = res.projects as (Project & { spark: number[] | null })[];
     const tracked = ps.filter(p => p.tracked), other = ps.filter(p => !p.tracked);
     const scroll = this.root.scrollTop;
+    const focus = this.board.saveFocus(); // re-adding the board below would drop the caret mid-typing
     const others = [
       h('div', { class: 'ov-h2row' }, h('h2', { class: 'ov-h' }, 'Other projects with Claude Code history'),
         h('label', { class: 'showall' }, h('input', { type: 'checkbox', checked: this.showAll, onchange: (e: Event) => { this.showAll = (e.target as HTMLInputElement).checked; this.render(); } }), 'include temp & headless folders')),
@@ -52,6 +55,8 @@ export class Overview {
           this.setupToggle('hooks', 'live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
           this.setupToggle('autostart', 'start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
       this.setupBanner(),
+      // Tasks for any project, and the to-do of what their sessions need from you
+      this.board.el,
       // Projects first, tracked and untracked together, so the ones still to open are
       // on screen without scrolling past sessions and coaching.
       tracked.length ? [h('h2', { class: 'ov-h' }, 'Tracked'), h('div', { class: 'grid' }, ...tracked.map(p => this.card(p)))] : null,
@@ -60,6 +65,7 @@ export class Overview {
       tracked.length ? this.coach.el : null,
     );
     this.root.scrollTop = scroll;
+    this.board.restoreFocus(focus);
   }
 
   private async changeSetup(change: Partial<Record<'hooks' | 'autostart', boolean>>) {
@@ -175,7 +181,7 @@ export class Overview {
       cell('wait', w.waitMedian ? dur(w.waitMedian) : '–', w.waitMedian, p.waitMedian, 'down', 'Median time a finished turn waited for your next prompt'));
   }
 
-  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.root.remove(); }
+  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.root.remove(); }
 }
 
 function spark(v: number[]) {

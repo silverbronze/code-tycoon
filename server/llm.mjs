@@ -1,6 +1,6 @@
 // One way to run a model for Code Tycoon's own work (task titles, district names, recaps,
 // the domain map, briefs, Optimize): the user's Claude Code CLI, or the OpenAI Codex CLI
-// when Claude Code is missing or VISUALIZER_LLM=codex.
+// when Claude Code is missing or CODETYCOON_LLM=codex.
 //
 // runAgent({ want, tools, cwd, prompt, budgetUsd, timeoutMs, persist, name, onSpawn })
 //   want:  'small' (titles, recaps), 'map' (the domain map), or a model id (the project's own)
@@ -30,7 +30,7 @@ function claudeFound() {
 // Codex ships as an npm package; on Windows its launcher is a .cmd that Node will not spawn
 // without a shell, so run its codex.js with this Node instead. [command, ...leading args] or null.
 export function findCodexCli() {
-  const env = process.env.VISUALIZER_CODEX;
+  const env = process.env.CODETYCOON_CODEX;
   const viaNode = p => /\.[cm]?js$/i.test(p) ? [process.execPath, p] : [p];
   if (env) return viaNode(env);
   const pkg = dir => path.join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
@@ -46,7 +46,7 @@ export function findCodexCli() {
 
 let chosen = null; // { at, v }
 export function provider() {
-  const want = (process.env.VISUALIZER_LLM || 'auto').toLowerCase();
+  const want = (process.env.CODETYCOON_LLM || 'auto').toLowerCase();
   if (want === 'claude' || want === 'codex') return want;
   if (chosen && Date.now() - chosen.at < 60e3) return chosen.v;
   const v = claudeFound() ? 'claude' : findCodexCli() ? 'codex' : 'claude';
@@ -56,11 +56,11 @@ export function provider() {
 
 // ------------------------------------------------------------------ models
 const CODEX = {
-  small: process.env.VISUALIZER_CODEX_SMALL_MODEL || 'gpt-6-luna',
-  map: process.env.VISUALIZER_CODEX_MAP_MODEL || 'gpt-6.1-terra',
-  def: process.env.VISUALIZER_CODEX_MODEL || 'gpt-6.1-sol',
+  small: process.env.CODETYCOON_CODEX_SMALL_MODEL || 'gpt-6-luna',
+  map: process.env.CODETYCOON_CODEX_MAP_MODEL || 'gpt-6.1-terra',
+  def: process.env.CODETYCOON_CODEX_MODEL || 'gpt-6.1-sol',
 };
-const CLAUDE = { small: 'haiku', map: process.env.VISUALIZER_DOMAIN_MODEL || 'sonnet', def: null };
+const CLAUDE = { small: 'haiku', map: process.env.CODETYCOON_DOMAIN_MODEL || 'sonnet', def: null };
 
 // The model for a job on this provider. A model id that belongs to the other provider
 // (the project's latest session ran on Codex, the CLI is Claude Code) falls back to the default.
@@ -84,21 +84,30 @@ export function runAgent(o) {
   return provider() === 'codex' ? runCodex(o) : runClaude(o);
 }
 
-function runClaude({ want, tools = 'none', cwd, prompt, budgetUsd, timeoutMs = 120e3, persist = false, name, onSpawn, env }) {
+// tools 'task' (the task board): every tool and the user's MCP servers, edits accepted; commands
+// need a rule in `allow` (or the user's settings) unless perm is 'full'. Blocked calls come back
+// as `denials`. `resume` continues an earlier session by id.
+function runClaude({ want, tools = 'none', cwd, prompt, budgetUsd, timeoutMs = 120e3, persist = false, name, onSpawn, env, perm = 'ask', allow = [], resume = null, dirs = [] }) {
   const model = modelFor(want, 'claude');
-  const args = ['-p', '--output-format', 'json', ...(model ? ['--model', model] : []), '--strict-mcp-config',
-    ...(persist ? (name ? ['-n', name] : []) : ['--no-session-persistence', '--setting-sources', 'project']),
-    ...(tools === 'edit' ? ['--permission-mode', 'acceptEdits', '--tools', 'Read,Edit,Write,Glob,Grep'] : ['--tools', tools === 'read' ? 'Read,Glob,Grep' : '']),
-    ...(budgetUsd ? ['--max-budget-usd', String(budgetUsd)] : [])];
+  const task = tools === 'task';
+  // dirs: more folders the session may read and edit (variadic, so a flag must follow)
+  const args = ['-p', ...(dirs.length ? ['--add-dir', ...dirs] : []), '--output-format', 'json', ...(model ? ['--model', model] : []), ...(task ? [] : ['--strict-mcp-config']),
+    ...(resume ? ['--resume', resume] : []),
+    ...(persist ? (name && !resume ? ['-n', name] : []) : ['--no-session-persistence', '--setting-sources', 'project']),
+    ...(task ? (perm === 'full' ? ['--dangerously-skip-permissions'] : ['--permission-mode', 'acceptEdits'])
+      : tools === 'edit' ? ['--permission-mode', 'acceptEdits', '--tools', 'Read,Edit,Write,Glob,Grep'] : ['--tools', tools === 'read' ? 'Read,Glob,Grep' : '']),
+    ...(budgetUsd ? ['--max-budget-usd', String(budgetUsd)] : []),
+    // variadic: keep it last (the prompt goes on stdin)
+    ...(task && perm !== 'full' && allow.length ? ['--allowedTools', ...allow] : [])];
   return new Promise((resolve, reject) => {
-    const p = spawn(findClaudeCli(), args, { cwd, windowsHide: true, env: { ...process.env, VISUALIZER_INTERNAL: persist ? '' : '1', ...env } });
+    const p = spawn(findClaudeCli(), args, { cwd, windowsHide: true, env: { ...process.env, CODETYCOON_INTERNAL: persist ? '' : '1', VISUALIZER_INTERNAL: persist ? '' : '1', ...env } });
     onSpawn?.(p);
     let out = '', err = '';
     const timer = setTimeout(() => { p.kill(); reject(new Error('timed out')); }, timeoutMs);
     p.stdout.on('data', d => out += d);
     p.stderr.on('data', d => err += d);
     // Windows reports a missing cwd as ENOENT too
-    p.on('error', e => { clearTimeout(timer); reject(e.code !== 'ENOENT' ? e : !fs.existsSync(cwd) ? new Error('folder not found: ' + cwd) : new Error('Claude Code CLI not found (set VISUALIZER_CLAUDE, or install Codex)')); });
+    p.on('error', e => { clearTimeout(timer); reject(e.code !== 'ENOENT' ? e : !fs.existsSync(cwd) ? new Error('folder not found: ' + cwd) : new Error('Claude Code CLI not found (set CODETYCOON_CLAUDE, or install Codex)')); });
     p.on('close', code => {
       clearTimeout(timer);
       if (p.stopped) return reject(new Error('stopped'));
@@ -106,7 +115,7 @@ function runClaude({ want, tools = 'none', cwd, prompt, budgetUsd, timeoutMs = 1
       try { j = JSON.parse(out); } catch { return reject(new Error(`claude exited ${code}: ${(err || out).slice(0, 300)}`)); }
       if (j.is_error) return reject(new Error(String(j.result || j.subtype || 'failed').slice(0, 300)));
       const text = String(j.result || '');
-      resolve({ res: firstJson(text), text, cost: j.total_cost_usd || 0, sid: j.session_id || null, model });
+      resolve({ res: firstJson(text), text, cost: j.total_cost_usd || 0, sid: j.session_id || null, model, denials: j.permission_denials || [] });
     });
     p.stdin.end(prompt);
   });
@@ -115,18 +124,19 @@ function runClaude({ want, tools = 'none', cwd, prompt, budgetUsd, timeoutMs = 1
 // Codex's sandbox on Windows blocks every command, reads included, even in workspace-write,
 // so jobs that read or edit the project can only run there without it, and only when the
 // user says so. A read job then runs in a throwaway copy of the project.
-const UNSANDBOXED = process.env.VISUALIZER_CODEX_UNSANDBOXED === '1';
+const UNSANDBOXED = process.env.CODETYCOON_CODEX_UNSANDBOXED === '1';
 export function codexBlocked(tools) {
   if (!isWin || tools === 'none' || UNSANDBOXED || provider() !== 'codex') return null;
-  return 'Codex cannot read or edit files in its sandbox on Windows yet. Set VISUALIZER_CODEX_UNSANDBOXED=1 to let it run without one (reads go to a throwaway copy of the project), or install Claude Code.';
+  return 'Codex cannot read or edit files in its sandbox on Windows yet. Set CODETYCOON_CODEX_UNSANDBOXED=1 to let it run without one (reads go to a throwaway copy of the project), or install Claude Code.';
 }
 
 async function runCodex({ want, tools = 'none', cwd, prompt, timeoutMs = 120e3, persist = false, onSpawn, env }) {
   const blocked = codexBlocked(tools);
   if (blocked) throw new Error(blocked);
   const cli = findCodexCli();
-  if (!cli) throw new Error('Codex CLI not found (set VISUALIZER_CODEX, or install Claude Code)');
+  if (!cli) throw new Error('Codex CLI not found (set CODETYCOON_CODEX, or install Claude Code)');
   const model = modelFor(want, 'codex');
+  if (tools === 'task') tools = 'edit'; // no per-command rules or resume here; the board re-sends the history
   const loose = isWin && tools !== 'none';
   const dir = loose && tools === 'read' ? snapshot(cwd) : cwd;
   const sandbox = loose ? ['--dangerously-bypass-approvals-and-sandbox'] : ['-s', tools === 'edit' ? 'workspace-write' : 'read-only'];
@@ -136,7 +146,7 @@ async function runCodex({ want, tools = 'none', cwd, prompt, timeoutMs = 120e3, 
     ...(persist ? [] : ['--ephemeral', '--ignore-user-config']), '-'];
   try {
     return await new Promise((resolve, reject) => {
-      const p = spawn(cli[0], args, { cwd: dir, windowsHide: true, env: { ...process.env, VISUALIZER_INTERNAL: persist ? '' : '1', ...env } });
+      const p = spawn(cli[0], args, { cwd: dir, windowsHide: true, env: { ...process.env, CODETYCOON_INTERNAL: persist ? '' : '1', VISUALIZER_INTERNAL: persist ? '' : '1', ...env } });
       onSpawn?.(p);
       let buf = '', err = '', text = '', sid = null, failed = null;
       const use = { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0 };

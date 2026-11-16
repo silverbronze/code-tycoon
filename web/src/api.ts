@@ -187,6 +187,30 @@ export interface DomainState {
 // hooks: live updates from Claude Code; autostart: null where the platform has none
 export interface Setup { hooks: boolean; autostart: boolean | null }
 
+// The task board (server/board.mjs): tasks for any project, routed and run by real sessions.
+// asks: what a run left for the user (the to-do); permission asks are commands it was not allowed to run.
+export type BoardState = 'routing' | 'unrouted' | 'ready' | 'queued' | 'running' | 'needs-you' | 'done' | 'failed' | 'stopped' | 'paused';
+export interface BoardAsk {
+  id: string; run: number; kind: 'decision' | 'secret' | 'action' | 'info' | 'approval' | 'permission'; question: string; why: string; options: string[];
+  step?: number | null; tool?: string; cmd?: string | null; detail?: string | null; answer: string | null; answeredAt?: number;
+}
+export interface BoardStep { n: number; title: string; after: number[]; state: 'todo' | 'running' | 'done' | 'needs-you' | 'failed' | 'stopped'; summary: string | null; cost: number; runs: number[] }
+export interface BoardRun { n: number; step?: number | null; started: number; ended: number | null; sid: string | null; cost: number; status: string; summary: string | null; error: string | null }
+export interface BoardTask {
+  id: string; text: string; created: number; updated: number; pid: string | null; project: string | null; root: string | null;
+  route: { how: 'named' | 'model' | 'you' | 'none' | 'error'; why: string; conf?: number; picks: { pid: string; name: string; why: string }[] } | null;
+  mode: 'ask' | 'full'; autoRun: boolean; state: BoardState; runs: BoardRun[]; sid: string | null; cost: number;
+  asks: BoardAsk[]; summary: string | null; error: string | null; open: number;
+  // tldr: one line on what was done; seen: false while a finished task's TL;DR waits in the to-do
+  tldr?: string | null; seen?: boolean;
+  // group: the text it was split from (i of n); after/wait: the task it waits for, while that one isn't done
+  group: { id: string; i: number; n: number; source: string } | null; after: string | null;
+  wait: { id: string; text: string; project: string | null } | null;
+  // steps: the plan the first run wrote (empty for one-piece tasks); pause: stop after each step
+  steps: BoardStep[]; pause: boolean;
+}
+export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean }[] }
+
 const enc = encodeURIComponent;
 const post = (url: string, body?: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
 async function get<T>(url: string): Promise<T> {
@@ -204,6 +228,18 @@ export const api = {
     const r = await post('/api/setup', change), d = await r.json();
     if (!r.ok) throw new Error(d.error || String(r.status));
     return d as Setup;
+  },
+  board: () => get<Board>('/api/board'),
+  addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean }) => {
+    const r = await post('/api/board', b), d = await r.json();
+    if (!r.ok) throw new Error(d.error || String(r.status));
+    return d as { task: BoardTask };
+  },
+  taskOutput: (id: string) => get<{ sid: string; pid: string | null; project: string | null; tldr: string | null; summary: string | null; text: string | null }>(`/api/board/${enc(id)}/output`),
+  taskAction: async (id: string, action: 'route' | 'run' | 'again' | 'answer' | 'stop' | 'mode' | 'close' | 'delete' | 'join' | 'pause' | 'seen', b: Record<string, unknown> = {}) => {
+    const r = await post(`/api/board/${enc(id)}/${action}`, b), d = await r.json();
+    if (!r.ok) throw new Error(d.error || String(r.status));
+    return d as { task?: BoardTask; ok?: boolean };
   },
   track: (id: string) => post(`/api/projects/${enc(id)}/track`),
   untrack: (id: string) => post(`/api/projects/${enc(id)}/untrack`),

@@ -250,6 +250,7 @@ export class CityView {
         c.project.isGit ? h('span', { class: 'chip wide' }, h('b', {}, c.commits.length), ' commits') : null,
         totalCost ? h('span', { class: 'chip', title: 'All sessions at API list prices. A subscription is not billed per token; this shows relative spend.' }, h('b', {}, money(totalCost)), ' API-equiv.') : null),
       h('div', { class: 'spacer' }),
+      h('span', { class: 'vc-slot' }), // the voice mic docks here (voice.ts)
       e.modeBadge,
       e.bell,
       c.project.isGit ? e.changesBtn : null,
