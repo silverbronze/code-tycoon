@@ -1,3 +1,4 @@
+import './env.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -5,11 +6,23 @@ import fs from 'node:fs';
 export const HOME = os.homedir();
 export const CLAUDE_DIR = path.join(HOME, '.claude');
 export const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
-export const VIS_DIR = path.join(HOME, '.visualizer');
-export const SUMMARIZER_CWD = path.join(VIS_DIR, 'summarizer');
-export const PORT = Number(process.env.VISUALIZER_PORT || 4400);
 
-fs.mkdirSync(VIS_DIR, { recursive: true });
+// Data lived in ~/.visualizer before the rename; it is moved on the first start.
+// While something still holds it open (an old server, its log), the old folder
+// stays in use and the move is tried again next start.
+const OLD_DIR = path.join(HOME, '.visualizer');
+const NEW_DIR = path.join(HOME, '.codetycoon');
+function dataDir() {
+  if (fs.existsSync(NEW_DIR) || !fs.existsSync(OLD_DIR)) return NEW_DIR;
+  try { fs.renameSync(OLD_DIR, NEW_DIR); return NEW_DIR; } catch { return OLD_DIR; }
+}
+export const DATA_DIR = dataDir();
+export const SUMMARIZER_CWD = path.join(DATA_DIR, 'summarizer');
+export const PORT = Number(process.env.CODETYCOON_PORT || 4400);
+// cwd of our own summarizer runs, under either folder name
+export const OWN_DIR_RE = /[\\/]\.(codetycoon|visualizer)[\\/]/i;
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(SUMMARIZER_CWD, { recursive: true });
 
 // One canonical spelling per file. Windows hands us c:\x, C:\x, /c/x and C:/x
@@ -57,7 +70,7 @@ export function isTempPath(p) {
 // Newest claude.exe bundled with the VS Code extension; the folder name carries
 // the version and changes on every update, so it is resolved at call time.
 export function findClaudeCli() {
-  if (process.env.VISUALIZER_CLAUDE) return process.env.VISUALIZER_CLAUDE;
+  if (process.env.CODETYCOON_CLAUDE) return process.env.CODETYCOON_CLAUDE;
   const extDir = path.join(HOME, '.vscode', 'extensions');
   try {
     const dirs = fs.readdirSync(extDir).filter(d => d.startsWith('anthropic.claude-code-'));

@@ -16,12 +16,12 @@ import { scanDrift } from './drift.mjs';
 // The map is built by a mid-size model, not the sessions' own (often the most expensive one):
 // a full build reads the code with tools, an update is one tool-less turn over the diff that
 // returns only what changed (a patch), merged here.
-const BUILD_USD = process.env.VISUALIZER_DOMAIN_USD || '10';
+const BUILD_USD = process.env.CODETYCOON_DOMAIN_USD || '10';
 // How an update runs: 'full' (the model re-reads with tools and returns the whole map) or 'patch'
 // (one tool-less turn over the diff, returns only what changed: far cheaper).
-const PATCH_MODE = (process.env.VISUALIZER_DOMAIN_UPDATE || 'full') === 'patch';
-const UPDATE_USD = process.env.VISUALIZER_DOMAIN_UPDATE_USD || (PATCH_MODE ? '1.5' : BUILD_USD);
-const BRIEF_USD = process.env.VISUALIZER_BRIEF_USD || '2';
+const PATCH_MODE = (process.env.CODETYCOON_DOMAIN_UPDATE || 'full') === 'patch';
+const UPDATE_USD = process.env.CODETYCOON_DOMAIN_UPDATE_USD || (PATCH_MODE ? '1.5' : BUILD_USD);
+const BRIEF_USD = process.env.CODETYCOON_BRIEF_USD || '2';
 const FILE_LIST_CHARS = 60e3;
 const DOC_CHARS = 8e3;
 const DIFF_CHARS = 45e3;     // the whole diff an update sees
@@ -84,7 +84,7 @@ function driftOf(pid, city) {
 // (a type, class, table, column, schema, route). Edits inside bodies don't start a run; the next
 // update sees them with the rest of the diff. A burst of commits settles into one run.
 // On by default, switchable per project (kv domain-auto:<pid>).
-const SETTLE = Number(process.env.VISUALIZER_DOMAIN_SETTLE_S || 60) * 1e3;
+const SETTLE = Number(process.env.CODETYCOON_DOMAIN_SETTLE_S || 60) * 1e3;
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec|e2e|fixtures?|mocks?)\/|\.(test|spec)\.[a-z]+$/i;
 const DECL = [
   /^\s*(export\s+)?(default\s+)?(declare\s+)?(abstract\s+|sealed\s+|data\s+|pub(\([^)]*\))?\s+)?(class|interface|enum|struct|trait|protocol|record|union)\s+[A-Za-z_]/,

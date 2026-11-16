@@ -1,5 +1,5 @@
 // End-to-end live check: two real Claude Code sessions edit the same file in a
-// demo repo; Visualizer must show both and raise a collision alert.
+// demo repo; Code Tycoon must show both and raise a collision alert.
 // usage: node scripts/live-test.mjs <demoRepoPath>
 import { spawn } from 'node:child_process';
 import WebSocket from 'ws';
@@ -7,7 +7,7 @@ import { findClaudeCli, projectId } from '../server/paths.mjs';
 
 const demo = process.argv[2];
 const pid = projectId(demo);
-const base = 'http://127.0.0.1:' + (process.env.VISUALIZER_PORT || 4400);
+const base = 'http://127.0.0.1:' + (process.env.CODETYCOON_PORT || process.env.VISUALIZER_PORT || 4400);
 const enc = encodeURIComponent(pid);
 const t0 = Date.now();
 const at = () => ((Date.now() - t0) / 1000).toFixed(2) + 's';

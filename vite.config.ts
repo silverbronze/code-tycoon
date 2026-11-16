@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 
-const api = 'http://127.0.0.1:' + (process.env.VISUALIZER_PORT || 4400);
+const api = 'http://127.0.0.1:' + (process.env.CODETYCOON_PORT || process.env.VISUALIZER_PORT || 4400);
 
 export default defineConfig({
   root: 'web',

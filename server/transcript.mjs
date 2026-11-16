@@ -1,4 +1,4 @@
-// Turns Claude Code transcript records into Visualizer items.
+// Turns Claude Code transcript records into Code Tycoon items.
 // The transcript format is undocumented and changes between versions, so every
 // accessor is defensive and unknown record types are ignored rather than fatal.
 import fs from 'node:fs';

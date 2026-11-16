@@ -147,7 +147,7 @@ export function trackPlace(pid, sid, kind, pathKey, moduleKey, label) {
 function isOpen(sid) { const s = sessions.get(sid); return !s || (s.state !== 'ended' && Date.now() - s.lastSeen < OPEN_WINDOW); }
 
 // --- inputs -------------------------------------------------------------
-// Hook payloads (see hooks/visualizer-hook.mjs). Returns live items to animate.
+// Hook payloads (see server/hook.mjs). Returns live items to animate.
 export function onHook(h) {
   const sid = h.session_id; if (!sid) return [];
   const pid = projectFor(h.transcript_path, h.cwd);

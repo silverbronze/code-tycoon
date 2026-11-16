@@ -1,8 +1,19 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
-import { VIS_DIR } from './paths.mjs';
+import fs from 'node:fs';
+import { DATA_DIR } from './paths.mjs';
 
-export const db = new DatabaseSync(process.env.VISUALIZER_DB || path.join(VIS_DIR, 'visualizer.db'));
+// visualizer.db (before the rename) becomes codetycoon.db, WAL files with it
+function dbFile() {
+  const now = path.join(DATA_DIR, 'codetycoon.db'), old = path.join(DATA_DIR, 'visualizer.db');
+  if (fs.existsSync(now) || !fs.existsSync(old)) return now;
+  try {
+    fs.renameSync(old, now);
+    for (const x of ['-wal', '-shm']) if (fs.existsSync(old + x)) fs.renameSync(old + x, now + x);
+    return now;
+  } catch { return old; }
+}
+export const db = new DatabaseSync(process.env.CODETYCOON_DB || dbFile());
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;

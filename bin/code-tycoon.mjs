@@ -11,7 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const server = f => path.join(here, '..', 'server', f);
 const args = process.argv.slice(2);
 const cmd = args.includes('--help') || args.includes('-h') ? 'help' : args.find(a => !a.startsWith('-')) || 'start';
-const port = Number(process.env.VISUALIZER_PORT || 4400);
+const port = Number(process.env.CODETYCOON_PORT || process.env.VISUALIZER_PORT || 4400);
 const url = `http://127.0.0.1:${port}`;
 
 const [major, minor] = process.versions.node.split('.').map(Number);

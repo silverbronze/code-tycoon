@@ -162,30 +162,30 @@ The page then offers to turn on live updates and start at login, one click each.
 - Node 22.13 or newer (uses the built-in `node:sqlite`)
 - Claude Code, with some sessions already run (transcripts in `~/.claude/projects`). OpenAI Codex CLI sessions (`~/.codex/sessions`, or `$CODEX_HOME/sessions`) are picked up too and tagged "Codex"; they update from the session file a second or two behind, and are priced at OpenAI's API list prices.
 - `git` on PATH for commits, churn, uncommitted-file markers and domain map updates
-- The `claude` CLI, or the `codex` CLI, for the domain map, task briefs, Optimize, AI task titles and recaps. `claude` is found on PATH or inside the VS Code extension (`VISUALIZER_CLAUDE` points at it otherwise), `codex` on PATH or in npm's global folder (`VISUALIZER_CODEX`). Everything else works without either.
+- The `claude` CLI, or the `codex` CLI, for the domain map, task briefs, Optimize, AI task titles and recaps. `claude` is found on PATH or inside the VS Code extension (`CODETYCOON_CLAUDE` points at it otherwise), `codex` on PATH or in npm's global folder (`CODETYCOON_CODEX`). Everything else works without either.
 - Windows, macOS or Linux (autostart on Linux needs a systemd user session).
 
 ### With Codex instead of Claude Code
 
-Code Tycoon's own AI work (task titles, recaps, the domain map, briefs, Optimize) runs through Claude Code when it is installed and through the Codex CLI when it is not. `VISUALIZER_LLM=codex` picks Codex even when both are installed.
+Code Tycoon's own AI work (task titles, recaps, the domain map, briefs, Optimize) runs through Claude Code when it is installed and through the Codex CLI when it is not. `CODETYCOON_LLM=codex` picks Codex even when both are installed.
 
-- **Models**: titles and recaps on `gpt-6-luna`, the domain map on `gpt-6.1-terra`, briefs and Optimize on the model your latest Codex session in that project used, otherwise `gpt-6.1-sol` (`VISUALIZER_CODEX_SMALL_MODEL`, `VISUALIZER_CODEX_MAP_MODEL`, `VISUALIZER_CODEX_MODEL`).
+- **Models**: titles and recaps on `gpt-6-luna`, the domain map on `gpt-6.1-terra`, briefs and Optimize on the model your latest Codex session in that project used, otherwise `gpt-6.1-sol` (`CODETYCOON_CODEX_SMALL_MODEL`, `CODETYCOON_CODEX_MAP_MODEL`, `CODETYCOON_CODEX_MODEL`).
 - **Background jobs** run with `--ephemeral --ignore-user-config`: no session file, none of your MCP servers or hooks. Optimize's edits run as a normal Codex session, so you watch it work in the city.
 - **No spending cap.** Codex has no budget flag, so a run is stopped only by its time limit. Its cost shows when it ends.
-- **Windows**: Codex's sandbox there blocks every command, reads included, even in `workspace-write`. Jobs that read or edit the project (the map build, briefs, Optimize) therefore refuse to run unless you set `VISUALIZER_CODEX_UNSANDBOXED=1`. Read jobs then run without a sandbox in a throwaway copy of the project, deleted afterwards; Optimize's apply edits the project itself, with its usual undo. Titles, recaps and map updates need no files and stay sandboxed (on Windows, map updates then work from the diff alone). On macOS and Linux Codex's own read-only and workspace-write sandboxes are used.
+- **Windows**: Codex's sandbox there blocks every command, reads included, even in `workspace-write`. Jobs that read or edit the project (the map build, briefs, Optimize) therefore refuse to run unless you set `CODETYCOON_CODEX_UNSANDBOXED=1`. Read jobs then run without a sandbox in a throwaway copy of the project, deleted afterwards; Optimize's apply edits the project itself, with its usual undo. Titles, recaps and map updates need no files and stay sandboxed (on Windows, map updates then work from the diff alone). On macOS and Linux Codex's own read-only and workspace-write sandboxes are used.
 
 ### Commands
 
 ```
 npx code-tycoon                      # http://127.0.0.1:4400, opens the browser
 npx code-tycoon hooks install        # instant live updates; backs up ~/.claude/settings.json first
-                                     # (an HTTP hook with a token header; VISUALIZER_HOOK=command for the old node hook)
+                                     # (an HTTP hook with a token header; CODETYCOON_HOOK=command for the old node hook)
 npx code-tycoon hooks uninstall      # removes them again
-npx code-tycoon autostart install    # start hidden at every login (copies the app to ~/.visualizer/app)
+npx code-tycoon autostart install    # start hidden at every login (copies the app to ~/.codetycoon/app)
 npx code-tycoon autostart uninstall
 ```
 
-Hooks and autostart are also the "live updates" and "start at login" switches on the dashboard. Without hooks the live view still works from transcript tailing, a second or two behind. A second copy started while one is running exits quietly. `VISUALIZER_PORT` changes the port.
+Hooks and autostart are also the "live updates" and "start at login" switches on the dashboard. Without hooks the live view still works from transcript tailing, a second or two behind. A second copy started while one is running exits quietly. `CODETYCOON_PORT` changes the port. Settings named `VISUALIZER_*` and data in `~/.visualizer` (from before v0.4) still work; the folder is moved on the first start.
 
 ### From source
 
@@ -197,19 +197,19 @@ npm run hooks:install
 ```
 
 `npm run dev` runs the API and Vite with hot reload (http://127.0.0.1:5173).
-`npm run autostart:install` starts the server hidden at every login from this checkout (logs to `~/.visualizer/server.log`): a Startup-folder launcher on Windows, a LaunchAgent on macOS, a systemd user service on Linux. `npm run autostart:uninstall` removes it. Run through npx, autostart copies the app to `~/.visualizer/app` instead, since npm may clear its cache, and a newer `npx code-tycoon` refreshes that copy.
+`npm run autostart:install` starts the server hidden at every login from this checkout (logs to `~/.codetycoon/server.log`): a Startup-folder launcher on Windows, a LaunchAgent on macOS, a systemd user service on Linux. `npm run autostart:uninstall` removes it. Run through npx, autostart copies the app to `~/.codetycoon/app` instead, since npm may clear its cache, and a newer `npx code-tycoon` refreshes that copy.
 
 ## Privacy and how it works
 
-Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`) and `~/.codex/sessions/**/rollout-*.jsonl`, parsed incrementally into `~/.visualizer/visualizer.db`. There is no Code Tycoon server and no account.
+Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`) and `~/.codex/sessions/**/rollout-*.jsonl`, parsed incrementally into `~/.codetycoon/codetycoon.db`. There is no Code Tycoon server and no account.
 
 The only things that leave the machine go through your own `claude` CLI, to the Anthropic API you already use with Claude Code (or your own `codex` CLI, to OpenAI, when Claude Code is not installed), with no session saved and no hooks fired. The spending caps below apply to Claude Code; Codex has none:
 
-- **Task titles and recaps**: batched prompts to Haiku, no tools. Key-shaped strings in prompts are masked before they are stored or sent. `VISUALIZER_NO_LLM=1` turns this off.
-- **The domain map and task briefs**, only when you click build or ask for a brief: Sonnet for the map, and for briefs the model your latest session in that project used, reads the project folder with read-only tools, under a spending cap ($10 per build, $2 per brief; `VISUALIZER_DOMAIN_USD`, `VISUALIZER_BRIEF_USD`). Auto-update can be switched off per project.
-- **Optimize**, only when you press survey or apply: the model your latest session in that project used (`VISUALIZER_OPTIMIZE_MODEL` overrides it). The survey reads with read-only tools under a $2 cap, and applying edits only files in the project folder, runs no commands and stops at $8 (`VISUALIZER_OPTIMIZE_SURVEY_USD`, `VISUALIZER_OPTIMIZE_APPLY_USD`). **Solve** on a drift item runs the same way, with the same $8 cap and undo.
+- **Task titles and recaps**: batched prompts to Haiku, no tools. Key-shaped strings in prompts are masked before they are stored or sent. `CODETYCOON_NO_LLM=1` turns this off.
+- **The domain map and task briefs**, only when you click build or ask for a brief: Sonnet for the map, and for briefs the model your latest session in that project used, reads the project folder with read-only tools, under a spending cap ($10 per build, $2 per brief; `CODETYCOON_DOMAIN_USD`, `CODETYCOON_BRIEF_USD`). Auto-update can be switched off per project.
+- **Optimize**, only when you press survey or apply: the model your latest session in that project used (`CODETYCOON_OPTIMIZE_MODEL` overrides it). The survey reads with read-only tools under a $2 cap, and applying edits only files in the project folder, runs no commands and stops at $8 (`CODETYCOON_OPTIMIZE_SURVEY_USD`, `CODETYCOON_OPTIMIZE_APPLY_USD`). **Solve** on a drift item runs the same way, with the same $8 cap and undo.
 
-The server only answers requests from this machine's own pages (Host and Origin are checked), and `/hook` needs the token in `~/.visualizer/token`, so another website open in the browser cannot read your prompts or post fake activity.
+The server only answers requests from this machine's own pages (Host and Origin are checked), and `/hook` needs the token in `~/.codetycoon/token`, so another website open in the browser cannot read your prompts or post fake activity.
 
 The hook installer also sets `cleanupPeriodDays` to 3650 so Claude Code stops deleting transcripts after 30 days; the database keeps everything it has already indexed either way.
 

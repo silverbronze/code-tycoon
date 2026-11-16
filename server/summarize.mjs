@@ -1,7 +1,7 @@
 // Task titles and subsystem descriptions through the user's own Claude Code CLI
 // (`claude -p`, Haiku) or Codex CLI (a small model), see llm.mjs. Runs from an empty
 // folder with no user settings and no session persistence, so these calls fire no hooks
-// and leave no transcripts: Visualizer never draws its own summarizer.
+// and leave no transcripts: Code Tycoon never draws its own summarizer.
 import { db, kvGet, kvSet } from './db.mjs';
 import { SUMMARIZER_CWD, rel } from './paths.mjs';
 import { runAgent } from './llm.mjs';
@@ -9,7 +9,7 @@ import { BASE_ROLES, STYLES } from './roles.mjs';
 
 const BATCH = 20;
 let running = false;
-let disabled = process.env.VISUALIZER_NO_LLM === '1';
+let disabled = process.env.CODETYCOON_NO_LLM === '1';
 let failures = 0;
 const listeners = [];
 export function onSummaries(fn) { listeners.push(fn); }

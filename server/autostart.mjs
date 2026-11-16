@@ -1,21 +1,22 @@
 // npm run autostart:install / autostart:uninstall, or the setup buttons on the overview
-// Starts the server at login, logging to ~/.visualizer/server.log:
+// Starts the server at login, logging to ~/.codetycoon/server.log:
 //   Windows: a hidden launcher in the user's Startup folder
 //   macOS:   a LaunchAgent in ~/Library/LaunchAgents
 //   Linux:   a systemd user service in ~/.config/systemd/user
 // Run through npx, the package sits in npm's cache, which npm may clear, so the
-// app is copied to ~/.visualizer/app and the launcher points there.
+// app is copied to ~/.codetycoon/app and the launcher points there.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from './paths.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const home = os.homedir();
-const APP = path.join(home, '.visualizer', 'app');
-const log = path.join(home, '.visualizer', 'server.log');
+const APP = path.join(DATA_DIR, 'app');
+const log = path.join(DATA_DIR, 'server.log');
 // launchd and systemd start with a bare PATH, so node is named by its full path
 const node = process.execPath;
 const fromNpx = /[\\/]_npx[\\/]/.test(ROOT);
@@ -28,7 +29,7 @@ const vbs = s => '"' + s.replace(/"/g, '""') + '"';
 
 const targets = {
   win32: {
-    file: path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Visualizer.vbs'),
+    file: path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'CodeTycoon.vbs'),
     // window style 0 = hidden; False = do not wait
     body: root => [
       'Set sh = CreateObject("WScript.Shell")',
@@ -38,12 +39,12 @@ const targets = {
     ].join('\r\n'),
   },
   darwin: {
-    file: path.join(home, 'Library', 'LaunchAgents', 'dev.visualizer.server.plist'),
+    file: path.join(home, 'Library', 'LaunchAgents', 'dev.codetycoon.server.plist'),
     body: root => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>dev.visualizer.server</string>
+  <key>Label</key><string>dev.codetycoon.server</string>
   <key>ProgramArguments</key>
   <array><string>${xml(node)}</string><string>--no-warnings</string><string>server/index.mjs</string></array>
   <key>WorkingDirectory</key><string>${xml(root)}</string>
@@ -55,9 +56,9 @@ const targets = {
 `,
   },
   linux: {
-    file: path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'systemd', 'user', 'visualizer.service'),
+    file: path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'systemd', 'user', 'codetycoon.service'),
     body: root => `[Unit]
-Description=Code Tycoon (Visualizer) server
+Description=Code Tycoon server
 
 [Service]
 WorkingDirectory=${unitArg(root)}
@@ -69,7 +70,20 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 `,
-    after: on => systemctl(on ? ['enable', 'visualizer.service'] : ['disable', 'visualizer.service']),
+    after: on => systemctl(on ? ['enable', 'codetycoon.service'] : ['disable', 'codetycoon.service']),
+  },
+};
+
+// Launchers written before the rename (Visualizer). Removed on install and
+// uninstall, or the old one would start a second server at login.
+const legacy = {
+  win32: () => fs.rmSync(path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Visualizer.vbs'), { force: true }),
+  darwin: () => fs.rmSync(path.join(home, 'Library', 'LaunchAgents', 'dev.visualizer.server.plist'), { force: true }),
+  linux: () => {
+    const f = path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'systemd', 'user', 'visualizer.service');
+    if (!fs.existsSync(f)) return;
+    try { execFileSync('systemctl', ['--user', 'disable', 'visualizer.service'], { stdio: 'ignore' }); } catch {}
+    fs.rmSync(f, { force: true });
   },
 };
 
@@ -94,6 +108,7 @@ export function setAutostart(mode) {
   if (mode !== 'install' && mode !== 'uninstall') throw new Error('usage: autostart.mjs install|uninstall');
   const t = target();
   if (!t) throw new Error(`autostart is not set up for ${process.platform}`);
+  legacy[process.platform]?.();
   if (mode === 'uninstall') {
     if (fs.existsSync(t.file)) t.after?.(false);
     fs.rmSync(t.file, { force: true });

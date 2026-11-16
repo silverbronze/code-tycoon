@@ -16,8 +16,8 @@ const KINDS = new Set(['code', 'style', 'markup']);
 const INLINE_CHARS = 90e3; // file text put straight into the survey prompt
 const PER_FILE = 20e3;
 const MAX_SIZE = 400e3;    // bigger files are bundles or generated, not worth a survey
-const SURVEY_BUDGET = process.env.VISUALIZER_OPTIMIZE_SURVEY_USD || '2';
-const APPLY_BUDGET = process.env.VISUALIZER_OPTIMIZE_APPLY_USD || '8';
+const SURVEY_BUDGET = process.env.CODETYCOON_OPTIMIZE_SURVEY_USD || '2';
+const APPLY_BUDGET = process.env.CODETYCOON_OPTIMIZE_APPLY_USD || '8';
 
 const listeners = [];
 export function onOptimize(fn) { listeners.push(fn); }
@@ -38,7 +38,7 @@ const view = job => job && { ...job, undo: job.state === 'applied' && snapshots.
 
 // The model the project's sessions use now; the user's default if none is known.
 export function projectModel(pid) {
-  return process.env.VISUALIZER_OPTIMIZE_MODEL
+  return process.env.CODETYCOON_OPTIMIZE_MODEL
     || db.prepare('SELECT model FROM sessions WHERE project_id=? AND model IS NOT NULL ORDER BY last_ts DESC LIMIT 1').get(pid)?.model || null;
 }
 

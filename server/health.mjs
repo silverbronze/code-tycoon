@@ -1,4 +1,4 @@
-// City health: one 0-100 score per project from what Visualizer already records,
+// City health: one 0-100 score per project from what Code Tycoon already records,
 // plus commit streaks and milestones. It rewards work that lands (committed,
 // cheap per landed task, few collisions), never raw activity.
 import fs from 'node:fs';
