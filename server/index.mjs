@@ -509,7 +509,9 @@ server.on('error', e => {
   if (e.code === 'EADDRINUSE') { console.log(`Code Tycoon is already running on port ${PORT}`); process.exit(0); }
   throw e;
 });
-server.listen(PORT, '127.0.0.1', () => {
+// CODETYCOON_HOST=0.0.0.0 inside a container, so a published port reaches it; requests must
+// still carry a localhost Host header (a reverse proxy in front sets it)
+server.listen(PORT, process.env.CODETYCOON_HOST || '127.0.0.1', () => {
   console.log(`Code Tycoon on http://127.0.0.1:${PORT}`);
   // catch up tracked projects that changed while we were down
   setImmediate(() => {
