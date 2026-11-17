@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Tycoon: your Claude Code, on your own server</title>
+<meta name="description" content="Code Tycoon moves your local Claude Code setup (skills, CLAUDE.md, MCP servers, settings) to your own dedicated server. Run your agents from any device, hand them tasks, get reports back, and watch every session on a live map of your code.">
+<meta name="theme-color" content="#f4f5f6">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Code Tycoon">
+<meta property="og:title" content="Code Tycoon: your Claude Code, on your own server">
+<meta property="og:description" content="Your skills and setup on a dedicated server. Run agents from anywhere, get reports back, answer only when they need you.">
+<meta property="og:image" content="https://codetycoon.dev/media/sessions.webp">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preload" as="image" href="media/sessions.webp" fetchpriority="high">
+<style>
+:root{
+  --canvas:#f4f5f6; --bg:#ffffff; --card:#fafafa; --hover:#f0f0f2;
+  --border:#e7e7ea; --border-raised:#d4d4d8;
+  --text:#18181b; --text-2:#52525b; --muted:#696973; --soft:#3f3f46;
+  --ink:#0b0f1a; --gold:#f2b23e; --accent:#8a5a00; --accent-wash:#fdf6e7;
+  --signal:#c8102e; --signal-wash:#fdf0f2; --ok:#1e7a51;
+  --r-sm:4px; --r-md:8px; --r-lg:12px; --r-full:9999px;
+  --shadow-card:0 1px 2px rgba(0,0,0,.04),0 1px 3px rgba(0,0,0,.03);
+  --shadow-md:0 1px 2px rgba(0,0,0,.06),0 8px 24px rgba(0,0,0,.1);
+  --shadow-lg:0 10px 28px -14px rgba(0,0,0,.16),0 2px 8px -4px rgba(0,0,0,.08);
+  --font:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-h:"Space Grotesk","Geist",system-ui,sans-serif;
+  --font-mono:"Geist Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --nav-h:56px; --gutter:20px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:var(--canvas);color:var(--text);font-family:var(--font);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+img,video{display:block;max-width:100%;height:auto}
+a{color:inherit}
+code{font-family:var(--font-mono);font-size:.9em}
+button{font:inherit;cursor:pointer;color:inherit}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:4px}
+@media (min-width:768px){:root{--gutter:48px}}
+[id]{scroll-margin-top:calc(var(--nav-h) + 16px)}
+
+.page{max-width:1408px;margin:0 auto;background:var(--bg);border-inline:1px solid var(--border);overflow-x:clip;min-height:100vh}
+
+/* nav */
+.nav{position:sticky;top:0;z-index:20;height:var(--nav-h);background:rgba(255,255,255,.92);backdrop-filter:saturate(1.4) blur(8px);border-bottom:1px solid var(--border)}
+.nav__in{max-width:1168px;height:100%;margin:0 auto;padding:0 var(--gutter);display:flex;align-items:center;justify-content:space-between;gap:16px}
+.nav__logo img{height:22px;width:auto}
+.nav__right{display:flex;align-items:center;gap:4px}
+.nav__link{display:none;align-items:center;gap:6px;min-height:44px;padding:0 10px;font-size:.875rem;color:var(--text-2);text-decoration:none}
+.nav__link:hover{color:var(--text)}
+.nav__link svg{width:16px;height:16px}
+@media (min-width:720px){.nav__link{display:inline-flex}}
+.btn-dark{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px;border-radius:var(--r-full);background:var(--ink);color:#fff;font-size:.875rem;font-weight:600;text-decoration:none;border:0;margin-left:6px;white-space:nowrap}
+.btn-dark:hover{background:#262b38}
+
+/* shared */
+.section{max-width:1168px;margin:0 auto;padding:88px var(--gutter) 0}
+@media (min-width:768px){.section{padding-top:128px}}
+.eyebrow{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
+.eyebrow--center{text-align:center}
+.h2{font-family:var(--font-h);font-size:clamp(2rem,4.2vw,3rem);font-weight:600;line-height:1.1;letter-spacing:-.02em;margin-bottom:20px;text-wrap:balance}
+.h2--center{text-align:center}
+.h3{font-family:var(--font-h);font-size:1.25rem;font-weight:600;letter-spacing:-.01em;line-height:1.25}
+.lead{font-size:1.125rem;line-height:1.6;color:var(--text-2);max-width:62ch}
+.lead--center{text-align:center;margin:0 auto;max-width:58ch}
+.card{display:flex;flex-direction:column;gap:12px;padding:28px;background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-card)}
+
+/* pill CTA */
+.start{display:inline-flex;align-items:center;gap:24px;min-height:56px;padding:0 8px 0 24px;border-radius:var(--r-full);border:1px solid rgba(24,24,27,.08);background:linear-gradient(180deg,#fff,#f4f4f5);box-shadow:var(--shadow-lg),inset 0 1px #fff;color:var(--text);font-weight:600;text-decoration:none;transition:box-shadow .2s ease}
+.start:hover{box-shadow:var(--shadow-md)}
+.start__arrow{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:var(--ink);color:#fff;transition:transform .2s ease}
+.start:hover .start__arrow{transform:translateX(3px)}
+.link{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-weight:600;color:var(--text);text-decoration:underline;text-underline-offset:4px;background:none;border:0}
+.ctas{display:flex;flex-wrap:wrap;align-items:center;gap:16px 28px;margin-top:32px}
+.micro{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:20px;font-size:.875rem;color:var(--text-2)}
+.micro span{display:inline-flex;align-items:center;gap:6px}
+.micro svg{width:15px;height:15px;color:var(--accent);flex-shrink:0}
+
+/* hero */
+.hero{max-width:1168px;margin:0 auto;padding:40px var(--gutter) 0;display:grid;gap:40px;align-items:center}
+@media (min-width:960px){.hero{grid-template-columns:1.05fr 1fr;gap:56px;padding-top:80px;min-height:min(700px,calc(100svh - var(--nav-h)))}}
+.hero__title{font-family:var(--font-h);font-size:clamp(2.25rem,5vw,3.75rem);font-weight:600;line-height:1.06;letter-spacing:-.03em;max-width:17ch;text-wrap:balance}
+.hero__sub{margin-top:24px;font-size:1.125rem;line-height:1.6;color:var(--text-2);max-width:54ch}
+.hero__art{min-width:0;position:relative}
+.hero__shot{position:relative;aspect-ratio:4/3.2;overflow:hidden;background:#e9eee4}
+.hero__shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:52% 46%;transform:scale(1.55);transform-origin:52% 46%}
+.tag{position:absolute;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:var(--r-full);background:#fff;border:1px solid var(--border);box-shadow:var(--shadow-md);font-size:.75rem;font-weight:500;white-space:nowrap}
+.tag .dot{width:8px;height:8px;border-radius:50%}
+.tag--a{left:12px;top:14px}
+.phone{position:absolute;right:-8px;bottom:-28px;width:min(250px,58%);padding:10px;border-radius:26px;background:var(--ink);box-shadow:0 24px 48px -16px rgba(11,15,26,.45)}
+.phone__screen{border-radius:18px;background:#fff;padding:14px 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:.75rem}
+.phone__top{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:.6875rem;color:var(--muted)}
+.ask{border:1px solid #f3c6cf;background:var(--signal-wash);border-radius:10px;padding:10px}
+.ask b{display:block;font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--signal);margin-bottom:4px}
+.ask p{color:var(--text);line-height:1.4}
+.chips{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;padding:4px 10px;border-radius:var(--r-full);border:1px solid var(--border-raised);background:#fff;font-size:.6875rem;font-weight:500}
+.chip--go{background:var(--ink);color:#fff;border-color:var(--ink)}
+.done{border:1px solid var(--border);border-radius:10px;padding:10px;color:var(--text-2);line-height:1.4}
+.done b{color:var(--ok);font-weight:600}
+@media (max-width:959px){.phone{right:8px;bottom:-24px;width:min(230px,62%)}.hero__art{margin-bottom:28px}}
+
+/* command boxes */
+.cmds{display:flex;flex-direction:column;gap:8px}
+.cmd{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 8px;padding:8px 8px 8px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--bg)}
+.cmd__code{min-width:0;font-family:var(--font-mono);font-size:.875rem;overflow-wrap:anywhere}
+.cmd__code::before{content:"$ ";color:var(--muted)}
+.copy{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:0;border-radius:var(--r-md);background:none;color:var(--text-2);position:relative}
+.copy:hover{background:var(--hover);color:var(--text)}
+.copy svg{width:16px;height:16px}
+.copy[data-done]::after{content:"Copied";position:absolute;right:48px;font-size:.75rem;font-family:var(--font);color:var(--text);background:var(--hover);padding:2px 8px;border-radius:var(--r-sm)}
+
+/* window mockup */
+.window{border:1px solid var(--border);border-radius:var(--r-lg);background:var(--bg);box-shadow:var(--shadow-lg);overflow:hidden}
+.window__bar{display:flex;align-items:center;gap:6px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.wdot{width:10px;height:10px;border-radius:50%;background:#d4d4d8;flex-shrink:0}
+.window__title{margin-left:10px;min-width:0;font-family:var(--font-mono);font-size:.75rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.window img{width:100%}
+
+/* stats */
+.proof{max-width:1168px;margin:0 auto;padding:88px var(--gutter) 0}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+@media (min-width:900px){.stats{grid-template-columns:repeat(4,1fr)}}
+.stat{padding:22px 24px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);margin:0 -1px -1px 0}
+.stat b{display:block;font-family:var(--font-h);font-size:1.375rem;font-weight:600;letter-spacing:-.02em;line-height:1.2;margin-bottom:4px}
+.stat span{font-size:.875rem;color:var(--text-2)}
+
+/* quotes */
+.quotes{display:grid;gap:16px;margin-top:48px}
+@media (min-width:760px){.quotes{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:1040px){.quotes{grid-template-columns:repeat(3,1fr)}}
+.quote{display:flex;flex-direction:column;gap:16px;padding:24px;background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-card)}
+.quote blockquote{font-size:1.0625rem;line-height:1.55;color:var(--text)}
+.quote blockquote::before{content:"\201C";display:block;font-family:var(--font-h);font-size:2.5rem;line-height:.6;color:var(--gold);margin-bottom:8px}
+.quote__who{display:flex;align-items:center;gap:10px;font-size:.8125rem;color:var(--muted)}
+.avatar{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--hover);color:var(--muted);flex-shrink:0}
+.avatar svg{width:14px;height:14px}
+.quote__fix{margin-top:auto;padding-top:14px;border-top:1px solid var(--border);font-size:.875rem;line-height:1.55;color:var(--text-2)}
+.quote__fix b{color:var(--text);font-weight:600}
+.fineprint{margin-top:20px;font-size:.8125rem;color:var(--muted);text-align:center}
+
+/* flow diagram */
+.flow{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:48px}
+@media (min-width:860px){.flow{flex-direction:row;justify-content:center;gap:12px}}
+.node{display:flex;flex-direction:column;align-items:center;gap:8px;width:240px;padding:22px 16px;border:1px solid var(--border);border-radius:var(--r-lg);background:var(--card);box-shadow:var(--shadow-card);font-weight:600;font-size:.9375rem;text-align:center}
+.node--hub{background:var(--bg);box-shadow:var(--shadow-lg);border-color:var(--border-raised)}
+.node > svg,.node > img{width:26px;height:26px}
+.node small{font-family:var(--font-mono);font-size:.75rem;font-weight:400;color:var(--muted);line-height:1.6}
+.node--hub small{color:var(--accent)}
+.pills{display:flex;flex-wrap:wrap;justify-content:center;gap:4px}
+.pills span{font-family:var(--font-mono);font-size:.6875rem;font-weight:400;padding:2px 7px;border-radius:var(--r-sm);background:var(--hover);color:var(--soft)}
+.arrow{display:inline-flex;color:var(--muted);transform:rotate(90deg)}
+@media (min-width:860px){.arrow{transform:none}}
+.rules{list-style:none;display:grid;gap:0 48px}
+.rules--2{margin-top:56px}
+@media (min-width:768px){.rules--2{grid-template-columns:repeat(2,1fr)}}
+.rule{display:flex;gap:14px;padding:20px 0;border-top:1px solid var(--border)}
+.rule > svg{flex-shrink:0;width:18px;height:18px;margin-top:3px;color:var(--accent)}
+.rule b{display:block;font-weight:600;margin-bottom:2px}
+.rule p{font-size:.9375rem;line-height:1.6;color:var(--text-2)}
+
+/* split */
+.split{display:grid;gap:48px;align-items:center}
+@media (min-width:980px){.split{grid-template-columns:1fr 1.1fr;gap:64px}}
+.split .rules{margin-top:28px}
+
+/* board mock */
+.board{padding:16px;display:flex;flex-direction:column;gap:10px;font-size:.875rem;background:var(--card)}
+.board__input{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid var(--border-raised);border-radius:var(--r-md);background:#fff;color:var(--muted)}
+.board__input svg{width:16px;height:16px;flex-shrink:0}
+.board__input span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btask{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--r-md);background:#fff}
+.btask__head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.state{display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:var(--r-full);background:var(--hover);color:var(--soft)}
+.state--run::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.state--you{background:var(--signal-wash);color:var(--signal)}
+.state--done{background:#ecf6f0;color:var(--ok)}
+.proj{font-family:var(--font-mono);font-size:.75rem;color:var(--muted)}
+.btask__text{font-weight:500}
+.btask__line{font-size:.8125rem;color:var(--text-2);line-height:1.5}
+.btask--you{border-color:#f3c6cf}
+.btask .chips{margin-top:2px}
+.btask .chip{font-size:.75rem;padding:5px 12px}
+.steps-dots{font-family:var(--font-mono);font-size:.75rem;color:var(--muted);margin-left:auto;letter-spacing:2px}
+@keyframes pulse{50%{opacity:.25}}
+
+/* who */
+.who{display:grid;gap:16px;margin-top:48px}
+@media (min-width:900px){.who{grid-template-columns:repeat(3,1fr);align-items:start}}
+.tier{display:flex;flex-direction:column;gap:8px;padding:32px;background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-card)}
+.tier--featured{background:var(--bg);box-shadow:var(--shadow-lg)}
+@media (min-width:900px){.tier--featured{transform:translateY(-8px)}}
+.tier__name{display:flex;align-items:flex-start;gap:10px;font-family:var(--font-h);font-size:1.375rem;font-weight:600;letter-spacing:-.02em;line-height:1.2}
+.tier__name svg{width:20px;height:20px;flex-shrink:0;margin-top:3px}
+.tier__who{color:var(--text-2)}
+.tier ul{list-style:none;display:flex;flex-direction:column;gap:10px;margin-top:16px;padding-top:24px;border-top:1px solid var(--border);font-size:.9375rem;color:var(--soft)}
+.tier li{display:flex;gap:8px}
+.tier li::before{content:"·";font-weight:700}
+.tier .start,.tier .link{margin-top:24px;align-self:flex-start}
+.tier .cmd{margin-top:20px}
+.price{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+
+/* gallery */
+.gallery{display:grid;gap:24px;margin-top:48px}
+@media (min-width:980px){.gallery{grid-template-columns:270px 1fr;gap:40px;align-items:start}}
+.views{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:thin;margin:0 calc(var(--gutter) * -1);padding-inline:var(--gutter);scroll-snap-type:x proximity}
+@media (min-width:980px){.views{flex-direction:column;overflow:visible;margin:0;padding:0;gap:2px;position:sticky;top:calc(var(--nav-h) + 24px)}}
+.vgroup{display:none;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:14px 16px 6px}
+.vgroup:first-child{padding-top:0}
+@media (min-width:980px){.vgroup{display:block}}
+.view{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 14px;border:1px solid var(--border);border-radius:var(--r-full);background:none;font-size:.9375rem;font-weight:500;color:var(--text-2);white-space:nowrap;text-align:left;scroll-snap-align:start;flex-shrink:0}
+@media (min-width:980px){.view{border-color:transparent;border-radius:var(--r-md);width:100%;padding:0 16px}}
+.view:hover,.view[aria-selected="true"]{background:var(--hover);color:var(--text)}
+.view[aria-selected="true"]{border-color:var(--border-raised)}
+@media (min-width:980px){.view[aria-selected="true"]{border-color:transparent}}
+.view svg{width:16px;height:16px;flex-shrink:0;color:var(--muted)}
+.vpanel[hidden]{display:none}
+.vpanel__body{display:grid;gap:20px 40px;margin-top:24px}
+@media (min-width:760px){.vpanel__body{grid-template-columns:1.3fr 1fr}}
+.vpanel h3{font-family:var(--font-h);font-size:1.5rem;font-weight:600;letter-spacing:-.02em;margin-bottom:8px}
+.vpanel p{color:var(--text-2);line-height:1.6}
+.for{font-family:var(--font-mono);font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+.look{list-style:none;display:flex;flex-direction:column;gap:8px;font-size:.9375rem;color:var(--soft)}
+.look li{display:flex;gap:10px;line-height:1.5}
+.look svg{width:16px;height:16px;flex-shrink:0;margin-top:3px;color:var(--accent)}
+.window--strip img{background:#eef2ea}
+
+/* tour */
+.tour{position:relative;display:block;width:100%;border:0;background:#000;padding:0;aspect-ratio:16/9}
+.tour img{width:100%;height:100%;object-fit:cover}
+.tour__play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:inline-flex;align-items:center;gap:12px;padding:8px 22px 8px 8px;border-radius:var(--r-full);background:#fff;box-shadow:var(--shadow-md);font-weight:600;font-size:.9375rem;color:var(--text);white-space:nowrap}
+.tour__play i{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:var(--ink);color:#fff}
+
+/* built with */
+.logos{list-style:none;display:grid;grid-template-columns:repeat(2,1fr);margin-top:48px;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
+@media (min-width:640px){.logos{grid-template-columns:repeat(3,1fr)}}
+@media (min-width:980px){.logos{grid-template-columns:repeat(6,1fr)}}
+.logos li{border-right:1px solid var(--border);border-bottom:1px solid var(--border);margin:0 -1px -1px 0}
+.logos a{display:flex;align-items:center;justify-content:center;height:96px;padding:18px;text-decoration:none;color:var(--text)}
+.logos img{max-height:30px;max-width:100%;width:auto;filter:grayscale(1);opacity:.72;transition:opacity .2s ease,filter .2s ease}
+.logos a:hover img,.logos a:hover .logo-rag{filter:none;opacity:1}
+.logo-rag{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-h);font-weight:600;font-size:1.0625rem;filter:grayscale(1);opacity:.8;transition:opacity .2s ease,filter .2s ease}
+.logo-rag img{max-height:28px;filter:none;opacity:1;flex:none}
+.logo-rag span{line-height:1.15}
+.logos .logo-varando{max-height:18px}
+@media (max-width:639px){.logos a{padding:12px}.logo-rag{font-size:.9375rem}}
+
+/* pricing */
+.plans{display:grid;gap:16px;margin-top:48px;align-items:start}
+@media (min-width:680px){.plans{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:1100px){.plans{grid-template-columns:repeat(4,1fr)}}
+.plan{display:flex;flex-direction:column;gap:8px;padding:28px 24px;background:var(--card);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-card);height:100%}
+.plan--featured{background:var(--bg);box-shadow:var(--shadow-lg);border-color:var(--border-raised)}
+@media (min-width:1100px){.plan--featured{transform:translateY(-8px)}}
+.plan__name{font-family:var(--font-h);font-size:1.375rem;font-weight:600;letter-spacing:-.02em}
+.plan__price{display:flex;align-items:baseline;gap:4px;margin-top:4px}
+.plan__price b{font-family:var(--font-h);font-size:2.5rem;font-weight:600;letter-spacing:-.03em;line-height:1}
+.plan__price span{color:var(--text-2);font-size:.9375rem}
+.plan__who{color:var(--text-2);font-size:.9375rem;min-height:3em}
+.plan__spec{font-family:var(--font-mono);font-size:.75rem;color:var(--soft);background:var(--hover);border-radius:var(--r-sm);padding:6px 8px;align-self:flex-start}
+.plan ul{list-style:none;display:flex;flex-direction:column;gap:10px;margin-top:12px;padding-top:20px;border-top:1px solid var(--border);font-size:.9375rem;color:var(--soft)}
+.plan li{display:flex;gap:8px;line-height:1.45}
+.plan li svg{width:16px;height:16px;flex-shrink:0;margin-top:2px;color:var(--accent)}
+.plan__cta{margin-top:auto;padding-top:24px}
+.plan .start{width:100%;justify-content:space-between}
+.plan .btn-line{display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;border-radius:var(--r-full);border:1px solid var(--border-raised);background:#fff;font-weight:600;text-decoration:none}
+.plan .btn-line:hover{background:var(--hover)}
+.plan .cmd{margin-top:16px}
+.plan .cmd__code{white-space:nowrap;overflow-wrap:normal;font-size:.8125rem}
+.badge{align-self:flex-start;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:var(--r-full);background:var(--ink);color:#fff}
+.plans-note{margin-top:24px;text-align:center;font-size:.875rem;color:var(--text-2)}
+
+/* faq */
+.faq{max-width:800px;margin:40px auto 0}
+.faq details{border-top:1px solid var(--border)}
+.faq details:last-child{border-bottom:1px solid var(--border)}
+.faq summary{display:flex;justify-content:space-between;align-items:center;gap:16px;min-height:64px;padding:16px 0;font-weight:600;font-size:1.0625rem;cursor:pointer;list-style:none}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary svg{width:18px;height:18px;flex-shrink:0;color:var(--muted);transition:transform .2s ease}
+.faq details[open] summary svg{transform:rotate(45deg)}
+.faq .a{padding:0 32px 22px 0;color:var(--text-2);line-height:1.65}
+.faq .a p + p{margin-top:10px}
+.faq code{background:var(--hover);padding:1px 6px;border-radius:var(--r-sm)}
+
+/* closing */
+.closing{display:flex;flex-direction:column;align-items:center;text-align:center;padding-bottom:120px}
+.closing__mark{width:64px;height:auto;margin-bottom:28px;filter:drop-shadow(0 18px 24px rgba(11,15,26,.18))}
+.closing .ctas,.closing .micro{justify-content:center}
+
+/* footer */
+.footer{border-top:1px solid var(--border)}
+.footer__in{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 24px;max-width:1168px;margin:0 auto;padding:20px var(--gutter) 28px}
+.footer__brand img{height:18px;width:auto}
+.footer__links{display:flex;flex-wrap:wrap;gap:0 20px}
+.footer__links a{display:inline-flex;align-items:center;min-height:44px;font-size:.8125rem;color:var(--text-2);text-decoration:none}
+.footer__links a:hover{color:var(--text)}
+.footer__fine{width:100%;font-size:.75rem;color:var(--muted)}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></symbol>
+  <symbol id="i-radar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="M12 12 18 6"/></symbol>
+  <symbol id="i-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="9" cy="7" rx="6" ry="3"/><path d="M3 7v5c0 1.7 2.7 3 6 3s6-1.3 6-3V7"/><path d="M9 15v2c0 1.7 2.7 3 6 3s6-1.3 6-3v-5c0-1.7-2.7-3-6-3"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-city" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V9l5-3v15M10 21V4l6 3v14M16 21v-8l3 2v6"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4M4 4h13l-2 4 2 4H4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-diagram" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v4.5a1.5 1.5 0 0 0 1.5 1.5h6"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></symbol>
+</svg>
+
+<div class="page">
+
+<header class="nav">
+  <div class="nav__in">
+    <span class="nav__logo"><img src="logo.svg" alt="Code Tycoon" width="110" height="22"></span>
+    <div class="nav__right">
+      <a class="nav__link" href="#views">Views</a>
+      <a class="nav__link" href="#tasks">Task manager</a>
+      <a class="nav__link" href="#get">Pricing</a>
+      <a class="nav__link" href="https://github.com/silverbronze/code-tycoon" rel="noopener"><svg><use href="#i-github"/></svg>Open source</a>
+      <a class="btn-dark" href="#get">Get your server</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- HERO -->
+<section class="hero">
+  <div>
+    <h1 class="hero__title">Your Claude Code setup, on your own server, from anywhere.</h1>
+    <p class="hero__sub">Code Tycoon moves your local setup to a dedicated server: your skills, CLAUDE.md files, MCP servers and settings. Hand your agents tasks from your phone or any browser, get a report when they finish, and answer only when they need you. Every session shows up on a live map of your code.</p>
+    <div class="ctas">
+      <a class="start" href="#get">Get your server<span class="start__arrow"><svg width="18" height="18"><use href="#i-arrow"/></svg></span></a>
+      <button class="link" type="button" data-tour-open>Watch the 1:40 tour</button>
+    </div>
+    <div class="micro">
+      <span><svg><use href="#i-check"/></svg>Your skills and setup come with you</span>
+      <span><svg><use href="#i-check"/></svg>Claude Code and Codex, the models you like</span>
+      <span><svg><use href="#i-check"/></svg>From $39/month, or self-host free</span>
+    </div>
+  </div>
+  <div class="hero__art">
+    <div class="window">
+      <div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">your-server · taxonomy · 8 sessions at work</span></div>
+      <div class="hero__shot">
+        <img src="media/sessions.webp" width="1600" height="900" alt="A project drawn as an isometric city. Districts are grouped by role and each Claude Code session hovers over the building it is editing, with its task as a label." fetchpriority="high">
+        <span class="tag tag--a"><span class="dot" style="background:#7c4dff"></span>Billing page loading skeleton</span>
+      </div>
+    </div>
+    <div class="phone" aria-label="The task manager on a phone: one task waits for an approval, another has finished">
+      <div class="phone__screen">
+        <div class="phone__top"><span>Tasks</span><span>2 need you</span></div>
+        <div class="ask"><b>Needs you · shop</b><p>Allow <code>npm install stripe</code>?</p><div class="chips"><span class="chip chip--go">Allow</span><span class="chip">Deny</span></div></div>
+        <div class="done"><b>Done · blog</b> Footer links fixed. 3 files changed, tests pass.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section class="proof" aria-label="At a glance">
+  <div class="stats">
+    <div class="stat"><b>1 server</b><span>dedicated to you, for all your projects</span></div>
+    <div class="stat"><b>Any device</b><span>phone, laptop or tablet, in the browser</span></div>
+    <div class="stat"><b>Your models</b><span>Opus, Sonnet, Haiku, and OpenAI's through Codex</span></div>
+    <div class="stat"><b>Open source</b><span>AGPL-3.0, self-host it free</span></div>
+  </div>
+</section>
+
+<!-- BUILT WITH -->
+<section class="section built" aria-labelledby="built-h">
+  <p class="eyebrow eyebrow--center">Built with Code Tycoon</p>
+  <h2 class="h2 h2--center" id="built-h">Our own projects run on it every day</h2>
+  <p class="lead lead--center">Seventeen live products and stores, and Code Tycoon itself. 444 Claude Code sessions mapped, tracked and priced so far.</p>
+  <ul class="logos">
+    <li><a href="https://ragspaces.com" rel="noopener" title="Ragspaces: sync and share agent skills"><span class="logo-rag"><img src="logos/ragspaces.webp" alt="" width="28" height="28">Ragspaces</span></a></li>
+    <li><a href="https://stablecommerce.ai" rel="noopener" title="StableCommerce: your own store from Etsy"><span class="logo-rag"><img src="logos/stablecommerce.ai.webp" alt="" width="28" height="28"><span>Stable Commerce</span></span></a></li>
+    <li><a href="https://wootz.build" rel="noopener" title="Wootz: an AI rig"><span class="logo-rag"><img src="logos/wootz.build.svg" alt="" width="28" height="28" style="border-radius:6px">Wootz</span></a></li>
+    <li><a href="https://storescore.dev" rel="noopener" title="Store Score: free Etsy shop audit"><span class="logo-rag"><img src="logos/storescore.dev.webp" alt="" width="28" height="28">Store Score</span></a></li>
+    <li><a href="https://varando.dev" rel="noopener" title="Varando"><img class="logo-varando" src="logos/varando.dev.webp" alt="Varando" loading="lazy"></a></li>
+    <li><a href="https://glenbotal.co.uk" rel="noopener" title="Glenbotal"><img src="logos/glenbotal.co.uk.svg" alt="Glenbotal" loading="lazy"></a></li>
+    <li><a href="https://slingandclutch.com" rel="noopener" title="Sling &amp; Clutch"><img src="logos/slingandclutch.com.webp" alt="Sling &amp; Clutch" loading="lazy"></a></li>
+    <li><a href="https://fancybonnet.com" rel="noopener" title="Fancy Bonnet"><img src="logos/fancybonnet.com.svg" alt="Fancy Bonnet" loading="lazy"></a></li>
+    <li><a href="https://heritagecarat.com" rel="noopener" title="Heritage Carat"><img src="logos/heritagecarat.com.svg" alt="Heritage Carat" loading="lazy"></a></li>
+    <li><a href="https://bezelandnib.com" rel="noopener" title="Bezel &amp; Nib"><img src="logos/bezelandnib.com.svg" alt="Bezel &amp; Nib" loading="lazy"></a></li>
+    <li><a href="https://shteingal.com" rel="noopener" title="Shtein Gallery"><img src="logos/shteingal.com.svg" alt="Shtein Gallery" loading="lazy"></a></li>
+    <li><a href="https://bubbleinterior.com" rel="noopener" title="Bubble Interior"><img src="logos/bubbleinterior.com.svg" alt="Bubble Interior" loading="lazy"></a></li>
+    <li><a href="https://doublecoined.com" rel="noopener" title="Double Coined"><img src="logos/doublecoined.com.svg" alt="Double Coined" loading="lazy"></a></li>
+    <li><a href="https://stonedrelics.com" rel="noopener" title="Stoned Relics"><img src="logos/stonedrelics.com.svg" alt="Stoned Relics" loading="lazy"></a></li>
+    <li><a href="https://thelensroom.com" rel="noopener" title="The Lens Room"><img src="logos/thelensroom.com.svg" alt="The Lens Room" loading="lazy"></a></li>
+    <li><a href="https://antiquechapters.com" rel="noopener" title="Antique Chapters"><img src="logos/antiquechapters.com.svg" alt="Antique Chapters" loading="lazy"></a></li>
+    <li><a href="https://toycardon.com" rel="noopener" title="Toycardon"><img src="logos/toycardon.com.svg" alt="Toycardon" loading="lazy"></a></li>
+    <li><a href="https://github.com/silverbronze/code-tycoon" rel="noopener" title="Code Tycoon, built with itself"><img src="logo.svg" alt="Code Tycoon" loading="lazy"></a></li>
+  </ul>
+</section>
+
+<!-- TESTIMONIALS (problem-level) -->
+<section class="section">
+  <p class="eyebrow eyebrow--center">Sound familiar?</p>
+  <h2 class="h2 h2--center">What people who code with agents keep saying</h2>
+  <p class="lead lead--center">We built Code Tycoon around these. Each one is a real post from r/ClaudeCode, shortened, with the name left out.</p>
+  <div class="quotes">
+    <figure class="quote">
+      <blockquote>I got tired of babysitting Claude Code on big features. By the third session you're micromanaging.</blockquote>
+      <figcaption class="quote__who"><span class="avatar"><svg><use href="#i-user"/></svg></span>Claude Code user · r/ClaudeCode</figcaption>
+      <p class="quote__fix"><b>Code Tycoon:</b> hand the task to the board and walk away. It plans the steps, runs them, and comes back with a report.</p>
+    </figure>
+    <figure class="quote">
+      <blockquote>Developers are leaving their MacBooks open overnight so Claude Code can keep running.</blockquote>
+      <figcaption class="quote__who"><span class="avatar"><svg><use href="#i-user"/></svg></span>Developer · r/ClaudeCode</figcaption>
+      <p class="quote__fix"><b>Code Tycoon:</b> your sessions run on your own server. Close the laptop; they keep going.</p>
+    </figure>
+    <figure class="quote">
+      <blockquote>When Claude Code is working, there's no place in the phone app to stop it. I'd like to be able to interject if I see something I'd like to correct.</blockquote>
+      <figcaption class="quote__who"><span class="avatar"><svg><use href="#i-user"/></svg></span>Android user · r/ClaudeCode</figcaption>
+      <p class="quote__fix"><b>Code Tycoon:</b> follow, stop or answer any session from the browser on your phone.</p>
+    </figure>
+    <figure class="quote">
+      <blockquote>I copied CLAUDE.md to several locations. I keep re-introducing the same information in sessions just to unblock tasks.</blockquote>
+      <figcaption class="quote__who"><span class="avatar"><svg><use href="#i-user"/></svg></span>Claude user · r/ClaudeCode</figcaption>
+      <p class="quote__fix"><b>Code Tycoon:</b> one server holds your skills, CLAUDE.md files and settings for every project.</p>
+    </figure>
+    <figure class="quote">
+      <blockquote>Got tired of running blind with Claude Code. No idea how many tokens each task was burning.</blockquote>
+      <figcaption class="quote__who"><span class="avatar"><svg><use href="#i-user"/></svg></span>Claude Code user · r/ClaudeCode</figcaption>
+      <p class="quote__fix"><b>Code Tycoon:</b> every task and session is priced, and the habits that waste money are ranked in dollars.</p>
+    </figure>
+    <figure class="quote">
+      <blockquote>10% context is the new 50%. At 38% I'm sending 380k tokens per message and it eats my allowance.</blockquote>
+      <figcaption class="quote__who"><span class="avatar"><svg><use href="#i-user"/></svg></span>Max plan user · r/ClaudeCode</figcaption>
+      <p class="quote__fix"><b>Code Tycoon:</b> flags oversized contexts and cold resumes as they happen, with what a fresh session would cost.</p>
+    </figure>
+  </div>
+</section>
+
+<!-- CLOUD -->
+<section class="section" id="cloud">
+  <p class="eyebrow">Your setup, in the cloud</p>
+  <h2 class="h2">Everything you set up on your laptop, running on your own server</h2>
+  <p class="lead">You spent months tuning skills, CLAUDE.md files and MCP servers on one machine. Code Tycoon takes all of it to a dedicated server, so your agents work the same way from any device, and keep working when your laptop is closed.</p>
+  <div class="flow" aria-label="Your local setup moves to your server, which you reach from any device">
+    <div class="node"><svg><use href="#i-laptop"/></svg>Your local setup<div class="pills"><span>skills</span><span>CLAUDE.md</span><span>MCP</span><span>settings</span><span>hooks</span></div></div>
+    <span class="arrow"><svg width="16" height="16"><use href="#i-arrow"/></svg></span>
+    <div class="node node--hub"><img src="mark.svg" alt="" width="26" height="26">Your Code Tycoon server<small>all projects · always on</small></div>
+    <span class="arrow"><svg width="16" height="16"><use href="#i-arrow"/></svg></span>
+    <div class="node"><svg><use href="#i-phone"/></svg>Wherever you are<small>phone · laptop · tablet</small></div>
+  </div>
+  <ul class="rules rules--2">
+    <li class="rule"><svg><use href="#i-check"/></svg><div><b>Your skills and custom setups come with you</b><p>The same skills, CLAUDE.md rules, MCP servers, hooks and permissions you use at home. Nothing to rebuild, and nothing to copy between machines again.</p></div></li>
+    <li class="rule"><svg><use href="#i-check"/></svg><div><b>A dedicated server for all your projects</b><p>One server that is yours alone. Every project lives there, with its git history, its sessions and its maps.</p></div></li>
+    <li class="rule"><svg><use href="#i-check"/></svg><div><b>All the models you like</b><p>Claude Code with Opus, Sonnet or Haiku, and Codex with OpenAI's models. Pick per project or per task.</p></div></li>
+    <li class="rule"><svg><use href="#i-check"/></svg><div><b>Run your agents from anywhere</b><p>Start, follow, stop and answer sessions from the browser on any device. Close the laptop and they keep going.</p></div></li>
+  </ul>
+</section>
+
+<!-- TASK MANAGER -->
+<section class="section" id="tasks">
+  <div class="split">
+    <div>
+      <p class="eyebrow">Task manager</p>
+      <h2 class="h2">Hand off tasks. Get reports back. Answer only when it needs you.</h2>
+      <p class="lead">Write down what you want done, for any project, in one place. Code Tycoon routes each task to its project and runs it as a real session you can watch.</p>
+      <ul class="rules">
+        <li class="rule"><svg><use href="#i-check"/></svg><div><b>Paste a whole list</b><p>It splits the list across projects, finds the right project for each task, and queues one run per project at a time.</p></div></li>
+        <li class="rule"><svg><use href="#i-check"/></svg><div><b>Big tasks run as a plan of steps</b><p>Each step is checked off as it lands. Turn on "pause after each step" if you want to look before it goes on.</p></div></li>
+        <li class="rule"><svg><use href="#i-check"/></svg><div><b>"Needs you" is your to-do list</b><p>Decisions, a secret to put somewhere, a manual step, or a command it was not allowed to run. Answer it and the same session picks up where it stopped.</p></div></li>
+        <li class="rule"><svg><use href="#i-check"/></svg><div><b>A report for every finished task</b><p>What changed, what was checked, and anything left for you, in a few lines.</p></div></li>
+      </ul>
+    </div>
+    <div class="window">
+      <div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Tasks · all projects</span></div>
+      <div class="board" aria-label="Example task board">
+        <div class="board__input"><svg><use href="#i-list"/></svg><span>Add retries to the Stripe webhook, fix the blog footer links, and…</span></div>
+        <div class="btask">
+          <div class="btask__head"><span class="state state--run">Running</span><span class="proj">shop</span><span class="steps-dots" title="Step 2 of 4">✓●○○</span></div>
+          <div class="btask__text">Add retries to the Stripe webhook</div>
+          <div class="btask__line">Step 2/4: write the retry queue. Working for 6m.</div>
+        </div>
+        <div class="btask btask--you">
+          <div class="btask__head"><span class="state state--you">Needs you</span><span class="proj">shop</span></div>
+          <div class="btask__text">Which database should staging use?</div>
+          <div class="btask__line">I need the staging DATABASE_URL. Put it in .env.staging and tell me when it's there.</div>
+          <div class="chips"><span class="chip chip--go">Done</span><span class="chip">Reply…</span></div>
+        </div>
+        <div class="btask btask--you">
+          <div class="btask__head"><span class="state state--you">Needs you</span><span class="proj">api</span></div>
+          <div class="btask__text">Allow <code>npx prisma migrate dev</code>?</div>
+          <div class="chips"><span class="chip chip--go">Allow</span><span class="chip">Allow all for this task</span><span class="chip">Deny</span></div>
+        </div>
+        <div class="btask">
+          <div class="btask__head"><span class="state state--done">Done</span><span class="proj">blog</span></div>
+          <div class="btask__text">Fix the footer links</div>
+          <div class="btask__line">Three links pointed at the old docs domain. Updated them in site-footer.tsx; the type check and build pass.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHO -->
+<section class="section">
+  <h2 class="h2 h2--center">Made for people who let agents do the typing</h2>
+  <p class="lead lead--center">If one of these sounds like your week, Code Tycoon is for you.</p>
+  <div class="who">
+    <div class="tier">
+      <div class="tier__name"><svg><use href="#i-server"/></svg>You want your agents to keep working</div>
+      <p class="tier__who">Without your laptop open, and without you watching.</p>
+      <ul>
+        <li>Run sessions on your own server, day and night</li>
+        <li>Hand off a list of tasks before you leave</li>
+        <li>Answer the one question it has from your phone</li>
+      </ul>
+    </div>
+    <div class="tier tier--featured">
+      <div class="tier__name"><svg><use href="#i-radar"/></svg>You run several sessions at once</div>
+      <p class="tier__who">Three to six of them, across a few projects.</p>
+      <ul>
+        <li>See which one is waiting for you, and which is stuck</li>
+        <li>Get told when two sessions edit the same file</li>
+        <li>Know what the project is about after a week of changes</li>
+      </ul>
+    </div>
+    <div class="tier">
+      <div class="tier__name"><svg><use href="#i-coins"/></svg>You pay for Claude and want it to last</div>
+      <p class="tier__who">On the API, or on a Pro or Max plan with limits.</p>
+      <ul>
+        <li>Know what each task and session cost</li>
+        <li>Find the habits that waste tokens, ranked in dollars</li>
+        <li>See week over week if the way you work is getting better</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- VIEWS GALLERY -->
+<section class="section" id="views">
+  <p class="eyebrow">Every view</p>
+  <h2 class="h2">Every view, and what it's for</h2>
+  <p class="lead">Code Tycoon reads your code, its git history and your session transcripts, and draws them in thirteen ways. Each one answers a question you'd otherwise ask a session, or work out by hand.</p>
+  <div class="gallery">
+    <div class="views" role="tablist" aria-label="Views">
+      <span class="vgroup">What the project is</span>
+      <button class="view" role="tab" aria-selected="true" aria-controls="v-domain" id="tv-domain"><svg><use href="#i-map"/></svg>Domain map</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-flows" id="tv-flows" tabindex="-1"><svg><use href="#i-route"/></svg>Flows</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-drift" id="tv-drift" tabindex="-1"><svg><use href="#i-flag"/></svg>Drift</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-city" id="tv-city" tabindex="-1"><svg><use href="#i-city"/></svg>City</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-inspect" id="tv-inspect" tabindex="-1"><svg><use href="#i-search"/></svg>Inspect a file</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-arch" id="tv-arch" tabindex="-1"><svg><use href="#i-diagram"/></svg>Architecture diagram</button>
+      <span class="vgroup">What sessions are doing</span>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-live" id="tv-live" tabindex="-1"><svg><use href="#i-radar"/></svg>Sessions on the map</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-alerts" id="tv-alerts" tabindex="-1"><svg><use href="#i-bell"/></svg>Alerts</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-dash" id="tv-dash" tabindex="-1"><svg><use href="#i-grid"/></svg>Dashboard</button>
+      <span class="vgroup">What it did and cost</span>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-cost" id="tv-cost" tabindex="-1"><svg><use href="#i-coins"/></svg>Working with Claude</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-log" id="tv-log" tabindex="-1"><svg><use href="#i-doc"/></svg>Task log</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-digest" id="tv-digest" tabindex="-1"><svg><use href="#i-cal"/></svg>Daily digest</button>
+      <button class="view" role="tab" aria-selected="false" aria-controls="v-time" id="tv-time" tabindex="-1"><svg><use href="#i-clock"/></svg>Timeline and replay</button>
+    </div>
+
+    <div>
+      <div class="vpanel" id="v-domain" role="tabpanel" aria-labelledby="tv-domain">
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Domain map</span></div>
+          <img src="media/domain.webp" width="1600" height="900" loading="lazy" alt="Entities such as Post, User and Subscription float as islands joined by labelled bridges, with people, money and outside systems below."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Know what the project is about</h3><p>The folder tree shows where code sits; this shows what it is for. Each thing the project deals with is an island, bridges are how they relate, and the people and outside systems it serves stand on the ground below.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Cracks where code is shaky, scaffolding where it's half built</li><li><svg><use href="#i-check"/></svg>A ghost where something is needed but missing</li><li><svg><use href="#i-check"/></svg>Built for $0.33 on Sonnet here, then follows your commits</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-flows" role="tabpanel" aria-labelledby="tv-flows" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Domain map · Flows · Upgrade to PRO</span></div>
+          <img src="media/domain-flow.webp" width="1600" height="900" loading="lazy" alt="A flow played on the map: Upgrade to PRO, from the billing page through Subscription, Stripe checkout and the webhook to the money."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Check a feature works end to end</h3><p>Pick a user journey and a courier walks it from the person who starts it to where the result lands, step by step, with the files at each step.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Each step marked works, partial or broken</li><li><svg><use href="#i-check"/></svg>What is fragile at each step</li><li><svg><use href="#i-check"/></svg>Start from a person or system and see what it sets going</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-drift" role="tabpanel" aria-labelledby="tv-drift" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Domain map · Drift</span></div>
+          <img src="media/domain-drift.webp" width="1600" height="900" loading="lazy" alt="Drift: posts are published somewhere other than the editor, with the evidence, the cost today and the fix."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Find old design holding the new one back</h3><p>Code written for an earlier setup that newer code keeps working around, ranked by severity, with the evidence, what it costs you today and the fix.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Red flags on the islands that carry it</li><li><svg><use href="#i-check"/></svg>"Solve" hands the fix to a session you can watch and undo</li><li><svg><use href="#i-check"/></svg>Or copy the fix as a prompt</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-city" role="tabpanel" aria-labelledby="tv-city" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">City</span></div>
+          <img src="media/sessions.webp" width="1600" height="900" loading="lazy" alt="The project as a city: districts by role, one drone per Claude Code session, task labels over the buildings they touch."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>See how the code is built</h3><p>Modules and files are buildings, grouped into districts by what they do (database, payments, auth, UI, API). Roads are real imports. Height is size and how often it changes.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Each session is a drone: reads scan, writes spark, commands smoke</li><li><svg><use href="#i-check"/></svg>Uncommitted files marked in the colour of the session that wrote them</li><li><svg><use href="#i-check"/></svg>Optimize: a ranked list of fixes for a block, with undo</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-inspect" role="tabpanel" aria-labelledby="tv-inspect" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">City · Inspect</span></div>
+          <img src="media/inspect.webp" width="1600" height="900" loading="lazy" alt="Zoomed in on one file: its imports drawn as arcs, its commits, AI edits and the tasks that touched it in the inspect panel."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Understand one file in a minute</h3><p>Zoom in for one building per file and click it. Its imports are drawn as arcs, and the panel shows a short AI-written description of what it does.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Every commit and AI edit to it</li><li><svg><use href="#i-check"/></svg>The tasks that touched it, and when</li><li><svg><use href="#i-check"/></svg>What imports it and what it imports</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-arch" role="tabpanel" aria-labelledby="tv-arch" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Architecture diagram</span></div>
+          <img src="media/schematic-live.webp" width="1600" height="900" loading="lazy" alt="The same project as an architecture diagram while sessions work: the modules they touch light up in their colour."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Explain the structure to someone else</h3><p>The same project as boxes and connectors, drawn by metro-map rules so it stays readable. Good for a teammate, or for briefing a fresh session.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Modules light up as sessions read and change them</li><li><svg><use href="#i-check"/></svg>Connectors from real imports</li><li><svg><use href="#i-check"/></svg>Drag boxes to arrange it your way</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-live" role="tabpanel" aria-labelledby="tv-live" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Domain map · Live</span></div>
+          <img src="media/domain-live.webp" width="1600" height="900" loading="lazy" alt="Six sessions at work on the domain map: each island being touched is ringed in that session's colour, with a drone over it."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>See which part of the product is changing</h3><p>Each session hovers over the entity it is working on, so you see which parts of the product are changing right now, not just which files.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>One colour per session</li><li><svg><use href="#i-check"/></svg>Follows a session even while it runs commands</li><li><svg><use href="#i-check"/></svg>"Next task": a brief of the slice a new feature touches</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-alerts" role="tabpanel" aria-labelledby="tv-alerts" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">City · Alerts</span></div>
+          <img src="media/alerts.webp" width="1600" height="900" loading="lazy" alt="Collision alert: two sessions edited components/site-footer.tsx, next to a sessions list marking which ones are stuck or waiting."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Catch problems while they happen</h3><p>Two sessions in one file, two sessions in one module, a session that needs your answer, a cache that just expired. With desktop notifications while the tab is in the background.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Needs you, stuck, working, your turn</li><li><svg><use href="#i-check"/></svg>"Stuck?" when it fails the same check again and again</li><li><svg><use href="#i-check"/></svg>"Untested" when code was written without a passing check</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-dash" role="tabpanel" aria-labelledby="tv-dash" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Dashboard</span></div>
+          <img src="media/overview.webp" width="1600" height="900" loading="lazy" alt="Dashboard: every open session in every project, waiting ones first, with the machine's Claude processes, CPU and RAM."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Every session in every project, on one screen</h3><p>The open sessions across all your projects, the ones waiting on you first, with the server's Claude processes, CPU and memory.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Per project: cost per landed task, rework, wait</li><li><svg><use href="#i-check"/></svg>This week against last</li><li><svg><use href="#i-check"/></svg>A 0 to 100 health score per project</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-cost" role="tabpanel" aria-labelledby="tv-cost" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Dashboard · Working with Claude · 30 days</span></div>
+          <img src="media/coach.webp" width="1600" height="1106" loading="lazy" alt="Working with Claude over 30 days: $170 spent in 56 sessions, 97% cache hit rate, $19.88 that could have been saved, with the habits ranked in dollars."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Spend less, and hit your limits later</h3><p>Every call in a transcript is priced. The habits that cost you most are ranked in dollars: cold resumes, oversized contexts, a pricier model than the task needed, bulky tool output.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Click a habit for every time it happened, and the cheaper way</li><li><svg><use href="#i-check"/></svg>Rules you keep typing, ready to paste into CLAUDE.md</li><li><svg><use href="#i-check"/></svg>On its own repo: $19.88 of $170 was avoidable</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-log" role="tabpanel" aria-labelledby="tv-log" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Task log</span></div>
+          <img src="media/tasklog-crop.webp" width="1200" height="1134" loading="lazy" alt="Task log: one entry per prompt with its title, files written and read, commands, cost, and stuck or untested badges."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Answer "what did it actually do?"</h3><p>One entry per prompt, with a short title and everything that task changed, read, ran, called and cost. Searchable.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Whether a test or type check passed afterwards</li><li><svg><use href="#i-check"/></svg>Review tab: uncommitted changes, riskiest first</li><li><svg><use href="#i-check"/></svg>Cost per task</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-digest" role="tabpanel" aria-labelledby="tv-digest" hidden>
+        <div class="window"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Daily digest</span></div>
+          <img src="media/digest-crop.webp" width="1200" height="1134" loading="lazy" alt="Daily digest: tasks, sessions, commits and cost for the day, busiest modules and files edited by several sessions."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Wrap up the day in a minute</h3><p>Tasks, sessions, commits and cost for the day, the busiest modules, and files that several sessions touched.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>New connections between parts of the code</li><li><svg><use href="#i-check"/></svg>An optional written recap</li><li><svg><use href="#i-check"/></svg>Step back day by day</li></ul>
+        </div>
+      </div>
+      <div class="vpanel" id="v-time" role="tabpanel" aria-labelledby="tv-time" hidden>
+        <div class="window window--strip"><div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">Timeline</span></div>
+          <img src="media/timeline.webp" width="1600" height="160" loading="lazy" alt="Timeline: an activity histogram, one coloured lane per session, and git commits as diamonds."></div>
+        <div class="vpanel__body">
+          <div><p class="for">What it's for</p><h3>Go back to any moment</h3><p>An activity histogram with one lane per session and commits as landmarks. Replay from the first commit: the city starts on empty ground and every file appears when it was born.</p></div>
+          <ul class="look"><li><svg><use href="#i-check"/></svg>Up to 7200× speed, quiet stretches skipped</li><li><svg><use href="#i-check"/></svg>Switch between actions and cost</li><li><svg><use href="#i-check"/></svg>Nights shaded</li></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TOUR -->
+<section class="section" id="tour">
+  <p class="eyebrow">The tour</p>
+  <h2 class="h2">See it work on a real project</h2>
+  <p class="lead" style="margin-bottom:40px">A Next.js app after a dozen real Claude Code sessions, in one minute and forty seconds.</p>
+  <div class="window">
+    <div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">code-tycoon tour · 1:40</span></div>
+    <button class="tour" type="button" data-tour aria-label="Play the 1 minute 40 second tour">
+      <img src="media/tour-poster.webp" width="1600" height="900" alt="" loading="lazy">
+      <span class="tour__play"><i><svg width="18" height="18"><use href="#i-play"/></svg></i>Play the tour</span>
+    </button>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="section" id="get">
+  <p class="eyebrow eyebrow--center">Pricing</p>
+  <h2 class="h2 h2--center">Free on your machine. A server of your own from $39.</h2>
+  <p class="lead lead--center">Every plan has every view, the task manager and alerts. The hosted plans add a dedicated server with your setup on it, reachable from anywhere.</p>
+  <div class="plans">
+    <div class="plan" id="local">
+      <div class="plan__name">Self-hosted</div>
+      <div class="plan__price"><b>$0</b><span>forever</span></div>
+      <p class="plan__who">Run it on your own machine or server.</p>
+      <span class="plan__spec">your hardware</span>
+      <ul>
+        <li><svg><use href="#i-check"/></svg>Every view, alerts and the task manager</li>
+        <li><svg><use href="#i-check"/></svg>Everything stays local, no account</li>
+        <li><svg><use href="#i-check"/></svg>Open source, AGPL-3.0</li>
+      </ul>
+      <div class="cmd"><code class="cmd__code">npx code-tycoon</code><button class="copy" type="button" data-copy="npx code-tycoon" aria-label="Copy command"><svg><use href="#i-copy"/></svg></button></div>
+      <div class="plan__cta"><a class="btn-line" href="https://github.com/silverbronze/code-tycoon" rel="noopener"><svg width="18" height="18"><use href="#i-github"/></svg>Get it on GitHub</a></div>
+    </div>
+    <div class="plan plan--featured">
+      <span class="badge">Most people</span>
+      <div class="plan__name">Solo</div>
+      <div class="plan__price"><b>$39</b><span>/ month</span></div>
+      <p class="plan__who">Your own server for all your projects.</p>
+      <span class="plan__spec">4 vCPU · 8 GB RAM · 80 GB disk</span>
+      <ul>
+        <li><svg><use href="#i-check"/></svg>Dedicated server, always on</li>
+        <li><svg><use href="#i-check"/></svg>Your skills, CLAUDE.md files, MCP servers and settings moved over</li>
+        <li><svg><use href="#i-check"/></svg>Run and answer agents from any device</li>
+        <li><svg><use href="#i-check"/></svg>Claude Code and Codex, the models you like</li>
+      </ul>
+      <div class="plan__cta"><a class="start" href="mailto:hello@codetycoon.dev?subject=Code%20Tycoon%20Solo">Get Solo<span class="start__arrow"><svg width="18" height="18"><use href="#i-arrow"/></svg></span></a></div>
+    </div>
+    <div class="plan">
+      <div class="plan__name">Team</div>
+      <div class="plan__price"><b>$69</b><span>/ month</span></div>
+      <p class="plan__who">More sessions at once, and teammates.</p>
+      <span class="plan__spec">8 vCPU · 16 GB RAM · 160 GB disk</span>
+      <ul>
+        <li><svg><use href="#i-check"/></svg>Everything in Solo</li>
+        <li><svg><use href="#i-check"/></svg>Twice the room for parallel sessions and builds</li>
+        <li><svg><use href="#i-check"/></svg>Invite teammates to the same server</li>
+      </ul>
+      <div class="plan__cta"><a class="btn-line" href="mailto:hello@codetycoon.dev?subject=Code%20Tycoon%20Team">Get Team</a></div>
+    </div>
+    <div class="plan">
+      <div class="plan__name">Max</div>
+      <div class="plan__price"><b>$129</b><span>/ month</span></div>
+      <p class="plan__who">For large fleets of agents and heavy builds.</p>
+      <span class="plan__spec">16 vCPU · 32 GB RAM · 320 GB disk</span>
+      <ul>
+        <li><svg><use href="#i-check"/></svg>Everything in Team</li>
+        <li><svg><use href="#i-check"/></svg>Many sessions and test runs side by side</li>
+        <li><svg><use href="#i-check"/></svg>Priority help with moving your setup</li>
+      </ul>
+      <div class="plan__cta"><a class="btn-line" href="mailto:hello@codetycoon.dev?subject=Code%20Tycoon%20Max">Get Max</a></div>
+    </div>
+  </div>
+  <p class="plans-note">Hosted plans are billed monthly, cancel anytime. Model usage runs on your own Claude or ChatGPT subscription or API key.</p>
+</section>
+
+<!-- FAQ -->
+<section class="section">
+  <h2 class="h2 h2--center">Questions people ask first</h2>
+  <div class="faq">
+    <details>
+      <summary>Will my own skills and setup really work there?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>Yes. Your server runs the same Claude Code and Codex you run at home, with your skills, CLAUDE.md files, MCP servers, hooks and permission rules. Sessions behave the way they do on your laptop.</p></div>
+    </details>
+    <details>
+      <summary>Where does my code live? Who can see it?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>On your own dedicated server, which isn't shared with anyone else, behind a login. If you'd rather nothing left your machine, host Code Tycoon yourself: it reads everything locally and has no account.</p></div>
+    </details>
+    <details>
+      <summary>Which models can I use?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>Claude Code with Opus, Sonnet or Haiku, and Codex with OpenAI's models. Code Tycoon picks up sessions from both, prices them, and shows them side by side.</p></div>
+    </details>
+    <details>
+      <summary>Do I still need my own Claude or ChatGPT plan?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>Yes. The plan pays for your server; the models run on your own Claude subscription, ChatGPT subscription or API key, the same ones you use today. Code Tycoon shows you what each task cost, so you can see where that usage goes.</p></div>
+    </details>
+    <details>
+      <summary>What happens when a task needs me?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>It goes to "Needs you": a decision, a secret to put somewhere, a manual step, or a command the session wasn't allowed to run. Answer it from any device and the same session carries on. Steps that don't depend on your answer keep going meanwhile.</p></div>
+    </details>
+    <details>
+      <summary>Can I see what a session is doing while it runs?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>Yes. Every task runs as a real session that shows up on the city and the domain map, in the task log and on the dashboard. You can open it, follow it, or stop it.</p></div>
+    </details>
+    <details>
+      <summary>Can I host it myself instead?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>Yes. Code Tycoon is open source under AGPL-3.0. Run <code>npx code-tycoon</code> on your machine or your own server; the source and setup notes are on <a href="https://github.com/silverbronze/code-tycoon" rel="noopener">GitHub</a>. Live updates add a hook to <code>~/.claude/settings.json</code> after backing it up, and <code>npx code-tycoon hooks uninstall</code> removes it.</p></div>
+    </details>
+    <details>
+      <summary>Is it made by Anthropic?<svg><use href="#i-plus"/></svg></summary>
+      <div class="a"><p>No. Code Tycoon is an independent project, not made or endorsed by Anthropic.</p></div>
+    </details>
+  </div>
+</section>
+
+<!-- CLOSING -->
+<section class="section closing">
+  <img class="closing__mark" src="mark.svg" alt="" width="64" height="105">
+  <h2 class="h2 h2--center">Close the laptop. Your agents keep working.</h2>
+  <p class="lead lead--center">Your setup, your models, your own server. Reports when they finish, a question only when they need you.</p>
+  <div class="ctas"><a class="start" href="#get">Get your server<span class="start__arrow"><svg width="18" height="18"><use href="#i-arrow"/></svg></span></a><a class="link" href="#local">Or host it yourself, free</a></div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer__in">
+    <span class="footer__brand"><img src="logo.svg" alt="Code Tycoon" width="90" height="18"></span>
+    <nav class="footer__links" aria-label="Footer">
+      <a href="https://github.com/silverbronze/code-tycoon" rel="noopener">Open source on GitHub</a>
+      <a href="https://www.npmjs.com/package/code-tycoon" rel="noopener">npm</a>
+      <a href="https://github.com/silverbronze/code-tycoon/blob/main/LICENSE" rel="noopener">License (AGPL-3.0)</a>
+      <a href="https://github.com/silverbronze/code-tycoon/issues" rel="noopener">Report an issue</a>
+    </nav>
+    <p class="footer__fine">© 2026 Code Tycoon. Not made or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
+  </div>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('.copy'); if(!b) return;
+    var text = b.dataset.copy || '';
+    var done = function(){ b.setAttribute('data-done',''); setTimeout(function(){ b.removeAttribute('data-done'); }, 1400); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, done); else done();
+  });
+  // view tabs
+  var tabs = [].slice.call(document.querySelectorAll('.view[role=tab]'));
+  function select(t, focus){
+    tabs.forEach(function(x){
+      var on = x === t;
+      x.setAttribute('aria-selected', on); x.tabIndex = on ? 0 : -1;
+      document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+    });
+    if (focus) t.focus();
+    if (window.innerWidth < 980) t.scrollIntoView({block:'nearest', inline:'nearest'});
+  }
+  tabs.forEach(function(t, i){
+    t.addEventListener('click', function(){ select(t); });
+    t.addEventListener('keydown', function(e){
+      var d = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
+      if(!d) return; e.preventDefault(); select(tabs[(i + d + tabs.length) % tabs.length], true);
+    });
+  });
+  // tour video, loaded only on click
+  var tour = document.querySelector('[data-tour]');
+  function play(){
+    if (tour.tagName === 'VIDEO') return;
+    var v = document.createElement('video');
+    v.src = 'media/tour.mp4'; v.controls = true; v.autoplay = true; v.playsInline = true;
+    v.setAttribute('aria-label', 'Code Tycoon tour');
+    v.style.cssText = 'width:100%;aspect-ratio:16/9;background:#000';
+    tour.replaceWith(v); tour = v;
+  }
+  tour.addEventListener('click', play);
+  document.querySelector('[data-tour-open]').addEventListener('click', function(){
+    document.getElementById('tour').scrollIntoView({behavior:'smooth', block:'start'}); play();
+  });
+})();
+</script>
+</body>
+</html>
