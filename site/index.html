@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Code Tycoon: your Claude Code, on your own server</title>
+<title>Code Tycoon: manage, prompt and code your projects from anywhere</title>
 <meta name="description" content="Code Tycoon moves your local Claude Code setup (skills, CLAUDE.md, MCP servers, settings) to your own dedicated server. Run your agents from any device, hand them tasks, get reports back, and watch every session on a live map of your code.">
 <meta name="theme-color" content="#f4f5f6">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Code Tycoon">
-<meta property="og:title" content="Code Tycoon: your Claude Code, on your own server">
+<meta property="og:title" content="Code Tycoon: manage, prompt and code your projects from anywhere">
 <meta property="og:description" content="Your skills and setup on a dedicated server. Run agents from anywhere, get reports back, answer only when they need you.">
 <meta property="og:image" content="https://codetycoon.dev/media/sessions.webp">
 <meta name="twitter:card" content="summary_large_image">
@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Space+Grotesk:wght@500;600&display=swap" rel="stylesheet">
-<link rel="preload" as="image" href="media/sessions.webp" fetchpriority="high">
+<link rel="preload" as="image" href="media/tour-poster.webp" fetchpriority="high">
 <style>
 :root{
   --canvas:#f4f5f6; --bg:#ffffff; --card:#fafafa; --hover:#f0f0f2;
@@ -82,19 +82,12 @@ button{font:inherit;cursor:pointer;color:inherit}
 .micro svg{width:15px;height:15px;color:var(--accent);flex-shrink:0}
 
 /* hero */
-.hero{max-width:1168px;margin:0 auto;padding:40px var(--gutter) 0;display:grid;gap:40px;align-items:center}
-@media (min-width:960px){.hero{grid-template-columns:1.05fr 1fr;gap:56px;padding-top:80px;min-height:min(700px,calc(100svh - var(--nav-h)))}}
-.hero__title{font-family:var(--font-h);font-size:clamp(2.25rem,5vw,3.75rem);font-weight:600;line-height:1.06;letter-spacing:-.03em;max-width:17ch;text-wrap:balance}
-.hero__sub{margin-top:24px;font-size:1.125rem;line-height:1.6;color:var(--text-2);max-width:54ch}
-.hero__art{min-width:0;position:relative}
-.hero__shot{position:relative;aspect-ratio:4/3.2;overflow:hidden;background:#e9eee4}
-.hero__shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:52% 46%;transform:scale(1.55);transform-origin:52% 46%}
-.tag{position:absolute;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:var(--r-full);background:#fff;border:1px solid var(--border);box-shadow:var(--shadow-md);font-size:.75rem;font-weight:500;white-space:nowrap}
-.tag .dot{width:8px;height:8px;border-radius:50%}
-.tag--a{left:12px;top:14px}
-.phone{position:absolute;right:-8px;bottom:-28px;width:min(250px,58%);padding:10px;border-radius:26px;background:var(--ink);box-shadow:0 24px 48px -16px rgba(11,15,26,.45)}
-.phone__screen{border-radius:18px;background:#fff;padding:14px 12px 12px;display:flex;flex-direction:column;gap:8px;font-size:.75rem}
-.phone__top{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:.6875rem;color:var(--muted)}
+.hero{max-width:1168px;margin:0 auto;padding:48px var(--gutter) 0;display:flex;flex-direction:column;align-items:center;text-align:center}
+@media (min-width:960px){.hero{padding-top:72px}}
+.hero__title{font-family:var(--font-h);font-size:clamp(2.25rem,5vw,3.75rem);font-weight:600;line-height:1.06;letter-spacing:-.03em;max-width:20ch;text-wrap:balance}
+.hero__sub{margin-top:18px;font-size:1.25rem;line-height:1.5;color:var(--text-2)}
+.hero .ctas,.hero .micro{justify-content:center}
+.hero__art{width:100%;max-width:1040px;margin-top:40px;text-align:left}
 .ask{border:1px solid #f3c6cf;background:var(--signal-wash);border-radius:10px;padding:10px}
 .ask b{display:block;font-size:.6875rem;letter-spacing:.06em;text-transform:uppercase;color:var(--signal);margin-bottom:4px}
 .ask p{color:var(--text);line-height:1.4}
@@ -103,7 +96,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .chip--go{background:var(--ink);color:#fff;border-color:var(--ink)}
 .done{border:1px solid var(--border);border-radius:10px;padding:10px;color:var(--text-2);line-height:1.4}
 .done b{color:var(--ok);font-weight:600}
-@media (max-width:959px){.phone{right:8px;bottom:-24px;width:min(230px,62%)}.hero__art{margin-bottom:28px}}
 
 /* command boxes */
 .cmds{display:flex;flex-direction:column;gap:8px}
@@ -237,18 +229,20 @@ button{font:inherit;cursor:pointer;color:inherit}
 .tour__play i{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:var(--ink);color:#fff}
 
 /* built with */
-.logos{list-style:none;display:grid;grid-template-columns:repeat(2,1fr);margin-top:48px;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden}
-@media (min-width:640px){.logos{grid-template-columns:repeat(3,1fr)}}
-@media (min-width:980px){.logos{grid-template-columns:repeat(6,1fr)}}
-.logos li{border-right:1px solid var(--border);border-bottom:1px solid var(--border);margin:0 -1px -1px 0}
-.logos a{display:flex;align-items:center;justify-content:center;height:96px;padding:18px;text-decoration:none;color:var(--text)}
-.logos img{max-height:30px;max-width:100%;width:auto;filter:grayscale(1);opacity:.72;transition:opacity .2s ease,filter .2s ease}
+.marquee{margin-top:48px;overflow:hidden;border-block:1px solid var(--border);-webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)}
+.logos{list-style:none;display:flex;width:max-content;animation:marquee 70s linear infinite}
+.marquee:hover .logos,.marquee:focus-within .logos{animation-play-state:paused}
+@keyframes marquee{to{transform:translateX(-50%)}}
+.logos li{flex:none}
+.logos a{display:flex;align-items:center;justify-content:center;height:96px;padding:0 36px;text-decoration:none;color:var(--text);white-space:nowrap}
+.logos img{max-height:30px;width:auto;filter:grayscale(1);opacity:.72;transition:opacity .2s ease,filter .2s ease}
+@media (prefers-reduced-motion:reduce){.logos{animation:none;width:auto;flex-wrap:wrap;justify-content:center}.marquee{-webkit-mask-image:none;mask-image:none}}
 .logos a:hover img,.logos a:hover .logo-rag{filter:none;opacity:1}
 .logo-rag{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-h);font-weight:600;font-size:1.0625rem;filter:grayscale(1);opacity:.8;transition:opacity .2s ease,filter .2s ease}
 .logo-rag img{max-height:28px;filter:none;opacity:1;flex:none}
 .logo-rag span{line-height:1.15}
-.logos .logo-varando{max-height:18px}
-@media (max-width:639px){.logos a{padding:12px}.logo-rag{font-size:.9375rem}}
+.logos .logo-varando{max-height:22px}
+@media (max-width:639px){.logos a{height:80px;padding:0 24px}}
 
 /* pricing */
 .plans{display:grid;gap:16px;margin-top:48px;align-items:start}
@@ -352,8 +346,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 <!-- HERO -->
 <section class="hero">
   <div>
-    <h1 class="hero__title">Your Claude Code setup, on your own server, from anywhere.</h1>
-    <p class="hero__sub">Code Tycoon moves your local setup to a dedicated server: your skills, CLAUDE.md files, MCP servers and settings. Hand your agents tasks from your phone or any browser, get a report when they finish, and answer only when they need you. Every session shows up on a live map of your code.</p>
+    <h1 class="hero__title">Manage, prompt and code your projects from anywhere, anytime.</h1>
+    <p class="hero__sub">No PC open needed.</p>
     <div class="ctas">
       <a class="start" href="#get">Get your server<span class="start__arrow"><svg width="18" height="18"><use href="#i-arrow"/></svg></span></a>
       <button class="link" type="button" data-tour-open>Watch the 1:40 tour</button>
@@ -364,20 +358,13 @@ button{font:inherit;cursor:pointer;color:inherit}
       <span><svg><use href="#i-check"/></svg>From $39/month, or self-host free</span>
     </div>
   </div>
-  <div class="hero__art">
+  <div class="hero__art" id="tour">
     <div class="window">
-      <div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">your-server · taxonomy · 8 sessions at work</span></div>
-      <div class="hero__shot">
-        <img src="media/sessions.webp" width="1600" height="900" alt="A project drawn as an isometric city. Districts are grouped by role and each Claude Code session hovers over the building it is editing, with its task as a label." fetchpriority="high">
-        <span class="tag tag--a"><span class="dot" style="background:#7c4dff"></span>Billing page loading skeleton</span>
-      </div>
-    </div>
-    <div class="phone" aria-label="The task manager on a phone: one task waits for an approval, another has finished">
-      <div class="phone__screen">
-        <div class="phone__top"><span>Tasks</span><span>2 need you</span></div>
-        <div class="ask"><b>Needs you · shop</b><p>Allow <code>npm install stripe</code>?</p><div class="chips"><span class="chip chip--go">Allow</span><span class="chip">Deny</span></div></div>
-        <div class="done"><b>Done · blog</b> Footer links fixed. 3 files changed, tests pass.</div>
-      </div>
+      <div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">code-tycoon tour · 1:40</span></div>
+      <button class="tour" type="button" data-tour aria-label="Play the 1 minute 40 second tour">
+        <img src="media/tour-poster.webp" width="1600" height="900" alt="" fetchpriority="high">
+        <span class="tour__play"><i><svg width="18" height="18"><use href="#i-play"/></svg></i>Play the tour</span>
+      </button>
     </div>
   </div>
 </section>
@@ -397,9 +384,9 @@ button{font:inherit;cursor:pointer;color:inherit}
   <p class="eyebrow eyebrow--center">Built with Code Tycoon</p>
   <h2 class="h2 h2--center" id="built-h">Our own projects run on it every day</h2>
   <p class="lead lead--center">Seventeen live products and stores, and Code Tycoon itself. 444 Claude Code sessions mapped, tracked and priced so far.</p>
-  <ul class="logos">
+  <div class="marquee"><ul class="logos">
     <li><a href="https://ragspaces.com" rel="noopener" title="Ragspaces: sync and share agent skills"><span class="logo-rag"><img src="logos/ragspaces.webp" alt="" width="28" height="28">Ragspaces</span></a></li>
-    <li><a href="https://stablecommerce.ai" rel="noopener" title="StableCommerce: your own store from Etsy"><span class="logo-rag"><img src="logos/stablecommerce.ai.webp" alt="" width="28" height="28"><span>Stable Commerce</span></span></a></li>
+    <li><a href="https://stablecommerce.ai" rel="noopener" title="StableCommerce: your own store from Etsy"><span class="logo-rag"><img src="logos/stablecommerce.ai.webp" alt="" width="28" height="28">Stable Commerce</span></a></li>
     <li><a href="https://wootz.build" rel="noopener" title="Wootz: an AI rig"><span class="logo-rag"><img src="logos/wootz.build.svg" alt="" width="28" height="28" style="border-radius:6px">Wootz</span></a></li>
     <li><a href="https://storescore.dev" rel="noopener" title="Store Score: free Etsy shop audit"><span class="logo-rag"><img src="logos/storescore.dev.webp" alt="" width="28" height="28">Store Score</span></a></li>
     <li><a href="https://varando.dev" rel="noopener" title="Varando"><img class="logo-varando" src="logos/varando.dev.webp" alt="Varando" loading="lazy"></a></li>
@@ -416,7 +403,7 @@ button{font:inherit;cursor:pointer;color:inherit}
     <li><a href="https://antiquechapters.com" rel="noopener" title="Antique Chapters"><img src="logos/antiquechapters.com.svg" alt="Antique Chapters" loading="lazy"></a></li>
     <li><a href="https://toycardon.com" rel="noopener" title="Toycardon"><img src="logos/toycardon.com.svg" alt="Toycardon" loading="lazy"></a></li>
     <li><a href="https://github.com/silverbronze/code-tycoon" rel="noopener" title="Code Tycoon, built with itself"><img src="logo.svg" alt="Code Tycoon" loading="lazy"></a></li>
-  </ul>
+  </ul></div>
 </section>
 
 <!-- TESTIMONIALS (problem-level) -->
@@ -691,20 +678,6 @@ button{font:inherit;cursor:pointer;color:inherit}
   </div>
 </section>
 
-<!-- TOUR -->
-<section class="section" id="tour">
-  <p class="eyebrow">The tour</p>
-  <h2 class="h2">See it work on a real project</h2>
-  <p class="lead" style="margin-bottom:40px">A Next.js app after a dozen real Claude Code sessions, in one minute and forty seconds.</p>
-  <div class="window">
-    <div class="window__bar"><span class="wdot"></span><span class="wdot"></span><span class="wdot"></span><span class="window__title">code-tycoon tour · 1:40</span></div>
-    <button class="tour" type="button" data-tour aria-label="Play the 1 minute 40 second tour">
-      <img src="media/tour-poster.webp" width="1600" height="900" alt="" loading="lazy">
-      <span class="tour__play"><i><svg width="18" height="18"><use href="#i-play"/></svg></i>Play the tour</span>
-    </button>
-  </div>
-</section>
-
 <!-- PRICING -->
 <section class="section" id="get">
   <p class="eyebrow eyebrow--center">Pricing</p>
@@ -868,8 +841,18 @@ button{font:inherit;cursor:pointer;color:inherit}
   }
   tour.addEventListener('click', play);
   document.querySelector('[data-tour-open]').addEventListener('click', function(){
-    document.getElementById('tour').scrollIntoView({behavior:'smooth', block:'start'}); play();
+    document.getElementById('tour').scrollIntoView({behavior:'smooth', block:'center'}); play();
   });
+  // logo strip: a second copy makes the loop seamless
+  var logos = document.querySelector('.logos');
+  if (logos && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    Array.prototype.slice.call(logos.children).forEach(function(li){
+      var c = li.cloneNode(true); c.setAttribute('aria-hidden', 'true');
+      c.querySelectorAll('a').forEach(function(a){ a.tabIndex = -1; });
+      c.querySelectorAll('img').forEach(function(i){ i.loading = 'eager'; });
+      logos.appendChild(c);
+    });
+  }
 })();
 </script>
 </body>
