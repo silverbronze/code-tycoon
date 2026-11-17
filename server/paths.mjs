@@ -35,6 +35,8 @@ export function norm(p) {
   if (msys) s = msys[1] + ':/' + s.slice(3);
   if (/^[a-zA-Z]:/.test(s)) s = s[0].toUpperCase() + s.slice(1);
   s = s.replace(/\/{2,}/g, '/');
+  // a git worktree under .claude/worktrees (board tasks, `claude --worktree`) is the project itself
+  s = s.replace(/\/\.claude\/worktrees\/[^/]+(?=\/|$)/i, '');
   if (s.length > 3 && s.endsWith('/')) s = s.slice(0, -1);
   return s;
 }

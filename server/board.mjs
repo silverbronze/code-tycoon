@@ -8,7 +8,11 @@
 //     step, approval for something irreversible)
 //   - commands and tools it was not allowed to use (Claude Code's permission denials)
 // Answering the last open ask of a task resumes the same session with the answers.
-// One run per project at a time; the rest wait in a queue.
+// In a git project every task works in a worktree of its own (worktree.mjs), so any number
+// run side by side; when a task is done its branch is committed and merged into the branch
+// the main folder is on (conflicts go back to the session to resolve first). A project that
+// is not a git repo (or a task that started in the main folder before worktrees) has one
+// run in the main folder at a time; the rest wait in a queue.
 //
 // A task with distinct stages runs in steps: the first run writes a plan (steps, and which
 // earlier steps each one needs) and does step 1; every later step is one more run of the
@@ -23,6 +27,7 @@ import { SUMMARIZER_CWD, OWN_DIR_RE, PROJECTS_DIR } from './paths.mjs';
 import { listProjects } from './indexer.mjs';
 import { runAgent, provider, codexBlocked } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
+import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge } from './worktree.mjs';
 
 db.exec('CREATE TABLE IF NOT EXISTS board (id TEXT PRIMARY KEY, created INTEGER, v TEXT)');
 
@@ -206,7 +211,7 @@ Do as much of the task as you can on your own, and make sensible choices on smal
 - credentials, API keys, accounts, payments, or facts only the user knows
 - anything irreversible or outward-facing: deploying, publishing, pushing, sending messages or email, deleting data, spending money
 - a manual step outside this machine (a dashboard setting, a phone, a purchase)
-First do everything that does not depend on the answers. If a command you need is blocked, do not look for a way around it and do not add it to asks: blocked commands are shown to the user to allow on their own. Do not commit unless the task says so. Never write secrets into files tracked by git.
+First do everything that does not depend on the answers. If a command you need is blocked, do not look for a way around it and do not add it to asks: blocked commands are shown to the user to allow on their own. ${t.wt ? `You work in a git worktree of your own (branch ${t.wt.branch}, made from ${t.wt.base}), so other tasks can work in this project at the same time. When the task is done the board commits your changes and merges them into ${t.wt.base}: do not commit, switch branches or merge yourself. Files git ignores (node_modules, .env, data folders) are linked from the main folder ${t.wt.top}, so changes to those are shared with it at once. Uncommitted work in the main folder is not in your worktree; you can read it there.` : 'Do not commit unless the task says so.'} Never write secrets into files tracked by git.
 ${planning ? `
 Work in steps when the task has distinct stages, where a later one builds on what an earlier one produces (for example: gather material, then design options, then build), or separate parts the user would want to check one at a time. Then read just enough to plan, write a plan of 2 to 6 steps into the report, do ONLY step 1, and stop with the report: you will be told to go on with the next step in this same session. The user sees the plan as a checklist. In the plan, "after" lists the steps whose result a step needs, so one step can go ahead while another waits for the user. A task that is one piece of work (a fix, a small feature, a question) needs no plan: do it whole and leave "plan" and "step" out.
 ` : ''}
@@ -370,6 +375,7 @@ function denialAsks(denials, run) {
 }
 
 function run(t, retry = true) {
+  if (t.tree == null) t.tree = treeFor(t);
   if (!t.runs.length && !t.steps.length && !t.planned) {
     Object.assign(t, { state: 'running', error: null, planned: true });
     save(t);
@@ -381,6 +387,16 @@ function run(t, retry = true) {
       });
     return;
   }
+  // its own worktree (made again for a follow-up after the last one was merged)
+  if (t.tree && !(t.wt && fs.existsSync(t.wt.dir))) {
+    try { t.wt = makeWorktree(t.id, t.root); t.tree = !!t.wt; }
+    catch (e) {
+      Object.assign(t, { state: 'failed', error: e.message });
+      save(t);
+      return;
+    }
+  }
+  if (t.wt) t.wt.merge = { state: 'working' };
   const prov = provider();
   const last = t.runs.length - 1;
   const resume = prov === 'claude' && t.provider === 'claude' && t.sid ? t.sid : null;
@@ -395,7 +411,7 @@ function run(t, retry = true) {
   let goOn = false;
   const dep = depOf(t);
   runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, dirs: dep && fs.existsSync(dep.root) ? [dep.root] : [], name: 'Task: ' + t.text.replace(/\s+/g, ' ').slice(0, 50),
-    budgetUsd: RUN_USD, cwd: t.root, prompt, timeoutMs: RUN_MS, onSpawn: p => procs.set(t.id, p) })
+    budgetUsd: RUN_USD, cwd: t.wt ? t.wt.cwd : t.root, prompt, timeoutMs: RUN_MS, onSpawn: p => procs.set(t.id, p) })
     .then(({ text, cost, sid, denials }) => {
       const { j, prose } = report(text);
       // the plan: written by the first run, or rewritten later (done steps keep their state)
@@ -446,17 +462,107 @@ function run(t, retry = true) {
       t.seen = t.state !== 'done';
       save(t);
       next(t.pid);
-      if (t.state === 'done') settled(t);
+      if (t.state === 'done') {
+        if (t.wt) integrate(t).finally(() => settled(t));
+        else settled(t);
+      }
+      if (!t.wt) retryMerges(t.pid); // the main folder is free again
     });
 }
 
-// the task this one waits for (it needs that one's result), while it is not done
-function blockedBy(t) { const d = t.after && tasks.get(t.after); return d && d.state !== 'done' ? d : null; }
-const busyIn = pid => [...tasks.values()].some(x => x.pid === pid && x.state === 'running');
+// ------------------------------------------------------------------ merging
+// A finished task's branch goes into the base branch of the main folder: commit what the
+// session left, have the session resolve conflicts with work merged meanwhile, then merge.
+// A merge that git refuses (the user's uncommitted changes in the same files, the main
+// folder on another branch) waits and is tried again every few minutes.
+const MERGED = new Set(['merged', 'nothing']);
+const merging = new Set();
+const taskTitle = t => (t.tldr || t.text).replace(/\s+/g, ' ').trim().slice(0, 72);
+async function integrate(t) {
+  const w = t.wt;
+  if (!w || merging.has(t.id) || MERGED.has(w.merge?.state) || t.state !== 'done') return;
+  merging.add(t.id);
+  const setM = m => { w.merge = { ...m, at: Date.now() }; save(t); };
+  try {
+    const here = fs.existsSync(w.dir);
+    if (here) commitAll(w, `${taskTitle(t)}\n\nTask ${t.id} from the Code Tycoon board:\n${t.text.slice(0, 2000)}`);
+    if (!ahead(w)) { dropWorktree(w, { deleteBranch: true }); return setM({ state: 'nothing', why: 'The task changed no tracked files' }); }
+    if (rootBusy(t.pid)) return setM({ state: 'waiting', why: 'Another task is working in the main folder' });
+    let p = predict(w);
+    if (!p.clean) {
+      if (!here) return setM({ state: 'conflict', files: p.files, why: `Conflicts with ${w.base}, and the worktree folder is gone` });
+      setM({ state: 'resolving', files: p.files });
+      if (!await resolve(t, w)) return;
+      p = predict(w);
+      if (!p.clean) return setM({ state: 'conflict', files: p.files, why: `Still conflicts with ${w.base}` });
+    }
+    const files = changedFiles(w);
+    const r = mergeIntoBase(w, `Merge task: ${taskTitle(t)}`);
+    if (!r.ok) return setM({ state: 'waiting', why: r.why, files: r.files });
+    dropWorktree(w, { deleteBranch: true });
+    setM({ state: 'merged', sha: r.sha, files: files.slice(0, 50), into: w.base });
+  } catch (e) {
+    setM({ state: 'failed', why: e.message });
+  } finally { merging.delete(t.id); }
+}
+
+// git merged the base into the task branch with conflicts: the task's session resolves them
+async function resolve(t, w) {
+  const setM = m => { w.merge = { ...m, at: Date.now() }; save(t); };
+  const m = mergeBaseIn(w);
+  if (m.clean) return true;
+  const prompt = `The board is merging your task branch ${w.branch} into ${w.base}. ${w.base} moved on while you worked (other work was merged), and git left conflicts in:
+${m.files.map(f => '- ' + f).join('\n')}
+
+Resolve every conflict so the result keeps both sides' intent: your task's change and the other change. Check that it still works (a build or a quick test if the project has one). Do not commit and do not abort the merge.
+End with this JSON report as the very last thing: {"status": "done" | "failed", "summary": "what you kept from each side, 2 sentences at most"}`;
+  const resume = provider() === 'claude' && t.provider === 'claude' && t.sid ? t.sid : null;
+  try {
+    const { text, cost, sid } = await runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, name: 'Merge: ' + taskTitle(t).slice(0, 50),
+      budgetUsd: RUN_USD, cwd: w.cwd, prompt, timeoutMs: 30 * 60e3, onSpawn: p => procs.set(t.id, p) });
+    t.cost += cost || 0; t.sid = sid || t.sid;
+    const { j } = report(text);
+    const left = unresolved(w, m.files);
+    if (j?.status === 'failed' || left.length) {
+      abortMerge(w);
+      setM({ state: 'conflict', files: left.length ? left : m.files, why: String(j?.summary || 'The session could not resolve the conflicts').slice(0, 400) });
+      return false;
+    }
+    finishMerge(w);
+    return true;
+  } catch (e) {
+    abortMerge(w);
+    setM({ state: 'conflict', files: m.files, why: 'Resolving stopped: ' + e.message });
+    return false;
+  } finally { procs.delete(t.id); }
+}
+function retryMerges(pid) {
+  for (const t of tasks.values()) if ((!pid || t.pid === pid) && t.state === 'done' && t.wt && t.wt.merge?.state === 'waiting') integrate(t).finally(() => settled(t));
+}
+setInterval(() => retryMerges(null), 3 * 60e3).unref();
+
+// the task this one waits for (it needs that one's result), while it is not done and merged
+function blockedBy(t) {
+  const d = t.after && tasks.get(t.after);
+  return d && (d.state !== 'done' || (d.wt && !MERGED.has(d.wt.merge?.state))) ? d : null;
+}
+// a task works in a worktree when its project is a git repo; one that already ran in the
+// main folder stays there
+const TREES = process.env.CODETYCOON_TASK_WORKTREE !== '0';
+function treeFor(t) {
+  if (t.tree != null) return t.tree;
+  if (t.runs.length) return false;
+  return TREES && !!t.root && !!repoOf(t.root);
+}
+// a run in the main folder (no worktree): one per project at a time
+const rootBusy = pid => [...tasks.values()].some(x => x.pid === pid && x.state === 'running' && !x.tree);
 function next(pid) {
-  if (busyIn(pid)) return;
-  const q = [...tasks.values()].filter(x => x.pid === pid && x.state === 'queued' && !blockedBy(x)).sort((a, b) => a.created - b.created)[0];
-  if (q) run(q);
+  let free = !rootBusy(pid);
+  const qs = [...tasks.values()].filter(x => x.pid === pid && x.state === 'queued' && !blockedBy(x)).sort((a, b) => a.created - b.created);
+  for (const q of qs) {
+    if (treeFor(q)) run(q);
+    else if (free) { run(q); free = false; }
+  }
 }
 // a task finished: whatever waited for it may start now
 function settled(t) {
@@ -510,7 +616,7 @@ export function start(id) {
   if (!fs.existsSync(t.root)) return { error: 'folder not found: ' + t.root };
   const blocked = codexBlocked('task');
   if (blocked) return { error: blocked };
-  if (busyIn(t.pid) || blockedBy(t)) { t.state = 'queued'; save(t); return { task: view(t) }; }
+  if (blockedBy(t) || (!treeFor(t) && rootBusy(t.pid))) { t.state = 'queued'; save(t); return { task: view(t) }; }
   run(t);
   return { task: view(t) };
 }
@@ -586,7 +692,21 @@ export function close(id) {
   for (const a of openAsks(t)) Object.assign(a, { answer: '(closed)', answeredAt: Date.now() });
   t.state = 'done';
   save(t);
-  settled(t);
+  if (t.wt) integrate(t).finally(() => settled(t));
+  else settled(t);
+  return { task: view(t) };
+}
+
+// merge a finished task's branch now (after a wait or a conflict the user sorted out)
+export function mergeNow(id) {
+  const t = get(id);
+  if (!t) return { error: 'unknown task' };
+  if (!t.wt) return { error: 'this task has no branch of its own' };
+  if (t.state !== 'done') return { error: 'the task is not done yet' };
+  if (MERGED.has(t.wt.merge?.state)) return { error: 'already merged' };
+  if (merging.has(id)) return { error: 'merging already' };
+  t.wt.merge = { ...t.wt.merge, state: 'waiting' };
+  integrate(t).finally(() => settled(t));
   return { task: view(t) };
 }
 
@@ -606,7 +726,9 @@ export function join(id) {
 export function remove(id) {
   const t = get(id);
   if (!t) return { error: 'unknown task' };
-  if (t.state === 'running') return { error: 'stop it first' };
+  if (t.state === 'running' || merging.has(id)) return { error: 'stop it first' };
+  // its worktree folder goes; an unmerged branch stays, so the work can still be found
+  if (t.wt && fs.existsSync(t.wt.dir)) { try { commitAll(t.wt, `${taskTitle(t)} (task deleted from the board)`); } catch {} dropWorktree(t.wt); }
   tasks.delete(id);
   db.prepare('DELETE FROM board WHERE id=?').run(id);
   for (const l of listeners) l({ type: 'board-removed', id });
@@ -634,6 +756,7 @@ export function boardAction(id, action, b = {}) {
     case 'stop': return stop(id);
     case 'mode': return setMode(id, b.mode);
     case 'close': return close(id);
+    case 'merge': return mergeNow(id);
     case 'join': return join(id);
     case 'seen': { const t = get(id); if (!t) return { error: 'unknown task' }; t.seen = true; save(t); return { task: view(t) }; }
     case 'delete': return remove(id);
@@ -662,6 +785,16 @@ for (const t of tasks.values()) {
   if (!t.runs.length) t.planned = false; // cut off while planning: plan again
   save(t, false);
 }
+// a merge cut off by a restart: undo the half-done merge in the worktree and try again
+for (const t of tasks.values()) {
+  if (t.wt?.merge?.state !== 'resolving') continue;
+  if (fs.existsSync(t.wt.dir)) abortMerge(t.wt);
+  t.wt.merge = { state: 'waiting', why: 'interrupted by a restart', at: Date.now() };
+  save(t, false);
+}
+setTimeout(() => {
+  for (const t of tasks.values()) if (t.state === 'done' && t.wt && !MERGED.has(t.wt.merge?.state) && t.wt.merge?.state !== 'conflict') integrate(t).finally(() => settled(t));
+}, 5000).unref();
 setImmediate(() => {
   for (const t of tasks.values()) if (t.state === 'routing') route(t);
   for (const pid of new Set([...tasks.values()].filter(t => t.state === 'queued').map(t => t.pid))) next(pid);
