@@ -244,7 +244,9 @@ export class BoardPanel {
     for (const t of d.tasks) if (t.group) firstOf.set(t.group.id, Math.min(firstOf.get(t.group.id) ?? Infinity, t.created));
     const sorted = [...d.tasks].sort((a, b) => ((b.group ? firstOf.get(b.group.id)! : b.created) - (a.group ? firstOf.get(a.group.id)! : a.created))
       || ((a.group?.i ?? 0) - (b.group?.i ?? 0)));
-    const active = sorted.filter(t => t.state !== 'done'), done = sorted.filter(t => t.state === 'done');
+    // a done task stays up top until its branch is merged
+    const finished = (t: BoardTask) => t.state === 'done' && !unmerged(t);
+    const active = sorted.filter(t => !finished(t)), done = sorted.filter(finished);
     return [
       ...active.map(t => this.row(t)),
       done.length ? h('button', { class: 'bd-more', onclick: () => { this.showDone = !this.showDone; this.render(); } }, `${this.showDone ? 'Hide' : 'Show'} done (${done.length})`) : null,
@@ -266,6 +268,7 @@ export class BoardPanel {
       t.state === 'queued' && t.wait ? h('button', { class: 'chip', disabled: busy, title: 'Start now without waiting for the task it depends on',
         onclick: (e: Event) => { e.stopPropagation(); this.act(t, 'run', { force: true }); } }, 'Start anyway') : null,
       t.state === 'queued' ? btn('Unqueue', 'stop', 'chip', t.wait ? 'Take it out of the queue' : 'Waits for another task in the same project') : null,
+      canMerge(t) ? btn('Merge', 'merge', 'chip go', `Merge ${t.wt!.branch} into ${t.wt!.base} now`) : null,
       tracked && (t.state === 'running' || t.sid) ? h('button', { class: 'chip', title: 'Open the project and follow the session', onclick: (e: Event) => {
         e.stopPropagation(); location.hash = '#/p/' + encodeURIComponent(t.pid!) + (t.sid ? '/s/' + encodeURIComponent(t.sid) : ''); } }, 'Watch') : null,
     ];
@@ -278,7 +281,8 @@ export class BoardPanel {
       : t.state === 'needs-you' && N ? `${t.open} thing${t.open === 1 ? '' : 's'} in your to-do. ${doneN} of ${N} steps done`
       : t.state === 'routing' ? 'Reading your projects to find where this belongs…'
       : t.state === 'queued' && t.wait ? `Waits for “${short(t.wait.text, 70)}”${t.wait.project ? ` in ${t.wait.project}` : ''} to be done`
-      : t.state === 'queued' ? 'Waits for the task running in this project'
+      : t.state === 'queued' ? `Waits for the task running in this project${t.tree ? '' : ': it is not a git repo, so its tasks share one folder'}`
+      : t.state === 'done' && unmerged(t) ? mergeLine(t)!
       : t.state === 'needs-you' ? `${t.open} thing${t.open === 1 ? '' : 's'} in your to-do${t.summary ? '. ' + t.summary : ''}`
       : t.state === 'done' && t.tldr ? t.tldr
       : t.error ? t.error : t.summary || (t.state === 'ready' ? 'Press Run to start a session' : '');
@@ -305,6 +309,7 @@ export class BoardPanel {
     return h('div', { class: 'bd-detail' },
       h('div', { class: 'bd-full' }, t.text),
       t.route && t.project ? h('div', { class: 'bd-why' }, `Project: ${t.project}. ${t.route.why}`) : null,
+      t.wt ? h('div', { class: 'bd-why' }, mergeLine(t)) : null,
       t.group ? h('div', { class: 'bd-split' }, h('span', { class: 'bd-why' }, `Part ${t.group.i + 1} of ${t.group.n}, split from what you wrote:`),
         h('div', { class: 'bd-src' }, t.group.source),
         h('button', { class: 'chip', disabled: busy, title: 'Undo the split: one task with your original text, routed to one project', onclick: () => this.act(t, 'join') }, 'Join back into one task')) : null,
@@ -329,6 +334,24 @@ export class BoardPanel {
   }
 
   dispose() { this.off(); clearInterval(this.timer); this.el.remove(); }
+}
+
+// a task's own branch (git projects): where its merge into the main folder stands
+const unmerged = (t: BoardTask) => !!t.wt?.merge && !['merged', 'nothing'].includes(t.wt.merge.state);
+const canMerge = (t: BoardTask) => t.state === 'done' && !!t.wt?.merge && ['waiting', 'conflict', 'failed'].includes(t.wt.merge.state);
+function mergeLine(t: BoardTask) {
+  const w = t.wt, m = w?.merge;
+  if (!w || !m) return null;
+  const fs = m.files?.length ? ` (${m.files.slice(0, 4).join(', ')}${m.files.length > 4 ? ` and ${m.files.length - 4} more` : ''})` : '';
+  switch (m.state) {
+    case 'working': return `Works on its own branch ${w.branch}, merged into ${w.base} when done`;
+    case 'merged': return `Merged into ${m.into || w.base}${m.sha ? ` as ${m.sha}` : ''}${fs}`;
+    case 'nothing': return 'Changed no tracked files, so there was nothing to merge';
+    case 'resolving': return `Resolving conflicts with ${w.base}${fs}`;
+    case 'waiting': return `Waits to merge into ${w.base}: ${m.why || 'not yet'}${fs}. Tried again every 3 minutes`;
+    case 'conflict': return `Can't merge into ${w.base}: ${m.why || 'conflicts'}${fs}. Fix it on ${w.branch} in ${w.dir}, then press Merge`;
+    case 'failed': return `Merge failed: ${m.why || 'unknown error'}`;
+  }
 }
 
 // **bold** and `code` of a reply as DOM nodes (text only, never HTML); the rest stays as written

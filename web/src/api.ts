@@ -208,6 +208,12 @@ export interface BoardTask {
   wait: { id: string; text: string; project: string | null } | null;
   // steps: the plan the first run wrote (empty for one-piece tasks); pause: stop after each step
   steps: BoardStep[]; pause: boolean;
+  // tree: works in a git worktree of its own (wt), merged into the main folder's branch when done
+  tree?: boolean; wt?: BoardTree | null;
+}
+export interface BoardTree {
+  dir: string; branch: string; base: string; top: string;
+  merge?: { state: 'working' | 'waiting' | 'resolving' | 'conflict' | 'merged' | 'nothing' | 'failed'; why?: string; files?: string[]; sha?: string; into?: string; at?: number };
 }
 export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean }[] }
 
@@ -236,7 +242,7 @@ export const api = {
     return d as { task: BoardTask };
   },
   taskOutput: (id: string) => get<{ sid: string; pid: string | null; project: string | null; tldr: string | null; summary: string | null; text: string | null }>(`/api/board/${enc(id)}/output`),
-  taskAction: async (id: string, action: 'route' | 'run' | 'again' | 'answer' | 'stop' | 'mode' | 'close' | 'delete' | 'join' | 'pause' | 'seen', b: Record<string, unknown> = {}) => {
+  taskAction: async (id: string, action: 'route' | 'run' | 'again' | 'answer' | 'stop' | 'mode' | 'close' | 'delete' | 'join' | 'pause' | 'seen' | 'merge', b: Record<string, unknown> = {}) => {
     const r = await post(`/api/board/${enc(id)}/${action}`, b), d = await r.json();
     if (!r.ok) throw new Error(d.error || String(r.status));
     return d as { task?: BoardTask; ok?: boolean };
