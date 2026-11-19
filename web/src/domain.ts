@@ -5,7 +5,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Stage } from './city/scene';
 import { ink } from './city/env';
 import { api, live, type City, type DomainState, type DomainModel, type DEntity, type DFlow, type DAssumption, type Brief, type DriftFile, type EStatus, type OptJob } from './api';
-import { h, put, ago, dur, money } from './util';
+import { h, put, ago, dur, money, autoGrow } from './util';
 import './domain.css';
 
 // The domain map: what the project is about, as floating isles. Every entity
@@ -1375,7 +1375,7 @@ export class DomainMap {
     const ta = h('textarea', { class: 'dm-ta', rows: 4, placeholder: 'What do you want to do next?\ne.g. "Let buyers save a search and get an email when a matching lot appears"',
       oninput: (ev: Event) => { this.draft = (ev.target as HTMLTextAreaElement).value; go.disabled = !this.draft.trim(); },
       onkeydown: (ev: KeyboardEvent) => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) send(); } }) as HTMLTextAreaElement;
-    ta.value = this.draft;
+    ta.value = this.draft; autoGrow(ta);
     const send = async () => {
       const task = this.draft.trim(); if (!task) return;
       go.disabled = true;

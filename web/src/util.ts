@@ -18,6 +18,25 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<s
   return el;
 }
 
+// A textarea that grows with its text up to its CSS max-height, then scrolls.
+// Returns a fit() to call after setting .value from code.
+export function autoGrow(ta: HTMLTextAreaElement) {
+  const fit = () => {
+    if (!ta.isConnected) return;
+    const cs = getComputedStyle(ta);
+    const max = parseFloat(cs.maxHeight) || Infinity;
+    const edge = cs.boxSizing === 'border-box' ? parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth) : -(parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom));
+    ta.style.height = 'auto';
+    const want = ta.scrollHeight + edge;
+    ta.style.height = Math.min(want, max) + 'px';
+    ta.style.overflowY = want > max ? 'auto' : 'hidden';
+  };
+  ta.addEventListener('input', fit);
+  ta.addEventListener('focus', fit);
+  requestAnimationFrame(fit);
+  return fit;
+}
+
 // append children, skipping null/false (native append rejects them)
 export function put(el: Element, ...children: Child[]) {
   const add = (c: Child) => { if (c == null || c === false) return; if (Array.isArray(c)) c.forEach(add); else el.appendChild(c instanceof Node ? c : document.createTextNode(String(c))); };

@@ -1,7 +1,7 @@
 /* The task board on the overview (board.ts). Black and white; red only for what waits on you. */
 .board { margin-bottom: 8px; }
 .bd-compose { border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel-solid); padding: 10px 12px; }
-.bd-text { width: 100%; border: 0; outline: 0; resize: vertical; min-height: 44px; background: none; font: 14px/1.45 var(--ui); color: var(--text); }
+.bd-text { width: 100%; border: 0; outline: 0; resize: vertical; min-height: 44px; max-height: min(60vh, 560px); overflow-y: auto; box-sizing: border-box; background: none; font: 14px/1.45 var(--ui); color: var(--text); }
 .bd-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .bd-sel { height: 30px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); padding: 0 8px; font-size: 12.5px; max-width: 240px; }
 .bd-auto { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
@@ -30,7 +30,7 @@
 .bd-cmd { font: 12px/1.45 var(--mono); background: rgba(0, 0, 0, 0.04); border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow: auto; }
 .bd-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .bd-answer { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; }
-.bd-ans { flex: 1; min-width: 160px; min-height: 30px; border: 1px solid var(--line); border-radius: 9px; padding: 6px 9px; font: 13px/1.4 var(--ui); resize: vertical; background: var(--bg); outline: 0; }
+.bd-ans { flex: 1; min-width: 160px; min-height: 30px; max-height: min(45vh, 360px); overflow-y: auto; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 6px 9px; font: 13px/1.4 var(--ui); resize: vertical; background: var(--bg); outline: 0; }
 .bd-ans:focus, .bd-text:focus-visible { border-color: var(--line-2); }
 
 /* the tasks */

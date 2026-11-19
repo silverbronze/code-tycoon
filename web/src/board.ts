@@ -3,7 +3,7 @@
 // alone (questions, secrets, manual steps, commands it was not allowed to run) shows up
 // in "Your to-do"; answering the last one sends the answers back and the session carries on.
 import { api, live, type Board, type BoardTask, type BoardAsk, type BoardStep } from './api';
-import { h, ago, dur, money } from './util';
+import { h, ago, dur, money, autoGrow } from './util';
 import { notify } from './notify';
 import './board.css';
 
@@ -25,6 +25,7 @@ export class BoardPanel {
   private open = new Set<string>();
   private showDone = false;
   private text: HTMLTextAreaElement;
+  private fitText: () => void;
   private pick: HTMLSelectElement;
   private mode: HTMLSelectElement;
   private auto: HTMLInputElement;
@@ -39,6 +40,7 @@ export class BoardPanel {
   constructor() {
     this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', placeholder: 'A task for any of your projects, or a list of them. Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.add(); } } });
+    this.fitText = autoGrow(this.text);
     this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for' }, h('option', { value: '' }, 'Find the project for me'));
     this.mode = h('select', { class: 'bd-sel', title: 'What the session may run without asking you. File edits are always allowed.',
       onchange: () => lsSet(MODE_KEY, this.mode.value) },
@@ -106,7 +108,7 @@ export class BoardPanel {
     this.addBtn.disabled = true; this.addErr.textContent = '';
     try {
       await api.addTask({ text, pid: this.pick.value || null, mode: this.mode.value as 'ask' | 'full', autoRun: this.auto.checked, pause: this.pause.checked });
-      this.text.value = ''; this.pick.value = '';
+      this.text.value = ''; this.fitText(); this.pick.value = '';
     } catch (e) { this.addErr.textContent = (e as Error).message; }
     this.addBtn.disabled = false;
   }
@@ -204,7 +206,7 @@ export class BoardPanel {
     const box = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: a.kind === 'secret' ? 'Never paste the secret here. Put it where asked, then press Done.' : 'Your answer',
       oninput: () => this.drafts.set(key, box.value),
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && box.value.trim()) { e.preventDefault(); send(box.value); } } });
-    box.value = this.drafts.get(key) || '';
+    box.value = this.drafts.get(key) || ''; autoGrow(box);
     const manual = a.kind === 'secret' || a.kind === 'action';
     return h('div', { class: 'bd-item' },
       this.head(t, KIND[a.kind], a.kind === 'approval' || a.kind === 'secret' ? 'alarm' : '', a.step),
@@ -303,7 +305,7 @@ export class BoardPanel {
     const key = t.id + ':note';
     const note = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: t.state === 'done' ? 'A follow-up for the same session' : 'Anything to add before it continues',
       oninput: () => this.drafts.set(key, note.value) });
-    note.value = this.drafts.get(key) || '';
+    note.value = this.drafts.get(key) || ''; autoGrow(note);
     const answered = t.asks.filter(a => a.answer != null && a.answer !== '(closed)');
     const canFollow = t.runs.length && !t.open && (t.state === 'done' || t.state === 'failed' || t.state === 'stopped');
     return h('div', { class: 'bd-detail' },
