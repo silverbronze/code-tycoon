@@ -48,12 +48,13 @@ export class Overview {
     put(this.root,
       h('div', { class: 'ov-hero' },
         h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-light.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
-        h('div', { class: 'ov-stats' },
-          this.pulse.el,
-          notify.supported ? h('button', { class: 'big notif' + (notify.on ? ' on' : ''), title: 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
-            onclick: async () => { await notify.toggle(); this.render(); } }, h('b', {}, notify.on ? 'On' : 'Off'), h('span', {}, 'desktop alerts')) : null,
-          this.setupToggle('hooks', 'live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
-          this.setupToggle('autostart', 'start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
+        // settings, as switches, not numbers
+        h('div', { class: 'ov-switches' },
+          notify.supported ? this.switch(notify.on, 'Desktop alerts', 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
+            async () => { await notify.toggle(); this.render(); }) : null,
+          this.setupToggle('hooks', 'Live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
+          this.setupToggle('autostart', 'Start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
+      this.pulse.el,
       this.setupBanner(),
       // Tasks for any project, and the to-do of what their sessions need from you
       this.board.el,
@@ -77,8 +78,12 @@ export class Overview {
   private setupToggle(k: 'hooks' | 'autostart', label: string, tip: string) {
     const on = this.setup?.[k];
     if (on == null) return null;
-    return h('button', { class: 'big notif' + (on ? ' on' : ''), title: tip, disabled: this.setupBusy,
-      onclick: () => this.changeSetup({ [k]: !on }) }, h('b', {}, on ? 'On' : 'Off'), h('span', {}, label));
+    return this.switch(on, label, tip, () => this.changeSetup({ [k]: !on }), this.setupBusy);
+  }
+
+  private switch(on: boolean, label: string, tip: string, onclick: () => void, busy = false) {
+    return h('button', { class: 'ov-switch' + (on ? ' on' : ''), role: 'switch', 'aria-checked': String(on), title: tip, disabled: busy, onclick },
+      h('i', {}), label);
   }
 
   // First run: both switches in one place, until they are on or put off for later.

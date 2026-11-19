@@ -26,6 +26,7 @@ import { onDomain, domainView, domainModel, build as buildDomain, stop as stopDo
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
 import { onBoard, listBoard, create as createTask, boardAction, taskOutput } from './board.mjs';
 import { voiceStatus, voiceCommand } from './voice.mjs';
+import { accountLimits, accountLimitsNow } from './limits.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
 const TOKEN_FILE = path.join(DATA_DIR, 'token');
@@ -317,12 +318,13 @@ const server = http.createServer(async (req, res) => {
           return send(res, 200, { ...d, idle }, req);
         }
         if (k === 'cpu' || k === 'ram') return send(res, 200, await processBreakdown(k), req);
+        if (k === 'limits') return send(res, 200, { kind: k, ...(await accountLimitsNow() || { limits: [] }) }, req);
         return send(res, 404, { error: 'unknown' }, req);
       }
       if (parts[1] === 'pulse') {
         const open = openSessions();
         return send(res, 200, { open: open.length, needs: open.filter(s => s.state === 'needs-you').length,
-          tracked: trackedSet().size, summarizer: summarizerStatus(), system: systemLoad(), idle: idleSummary() }, req);
+          tracked: trackedSet().size, summarizer: summarizerStatus(), system: systemLoad(), idle: idleSummary(), limits: accountLimits() }, req);
       }
       // stop idle Claude Code processes; JSON only, so a plain form from another page cannot reach it
       if (parts[1] === 'procs' && parts[2] === 'stop' && req.method === 'POST') {

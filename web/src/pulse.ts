@@ -6,8 +6,12 @@ const gb = (n: number) => (n / GB).toFixed(n < 10 * GB ? 1 : 0);
 const mb = (n: number) => n >= GB ? gb(n) + ' GB' : Math.round(n / 1024 ** 2) + ' MB';
 const STATE: Record<string, string> = { 'needs-you': 'Needs you', working: 'Working', waiting: 'Your turn', idle: 'Idle' };
 
-// short: the label in the strip over the city, which has less room
-type Item = { key: string; value: string | number; label: string; short?: string; cls: string; title: string };
+// short: the label in the strip over the city, which has less room.
+// The overview ('big') splits items into a headline (work) and a row of meters
+// (machine and plan): meter = its label there, frac = bar fill 0..1, chip = an
+// extra action-looking note (idle memory).
+type Item = { key: string; value: string | number; label: string; short?: string; cls: string; title: string; meter?: string; mval?: string; frac?: number; chip?: string };
+const WORK = new Set(['sessions', 'needs', 'tracked']);
 
 // The top-line numbers shown on every page: sessions across all projects and
 // how hard the local machine is working. 'big' fills the overview hero with
@@ -35,13 +39,22 @@ export class Pulse {
     try { p = await api.pulse(); } catch { return; }
     this.last = p;
     this.el.innerHTML = '';
-    put(this.el, ...this.items(p).map(it => {
-      const attrs = { class: (this.variant === 'big' ? 'big' : 'pu') + ' tap' + (it.cls ? ' ' + it.cls : '') + (this.openKey === it.key ? ' sel' : ''),
-        title: it.title, 'data-k': it.key, onclick: (e: Event) => { e.stopPropagation(); this.toggle(it.key, e.currentTarget as HTMLElement); } };
-      return this.variant === 'big'
-        ? h('button', attrs, h('b', {}, it.value), h('span', {}, it.label))
-        : h('button', attrs, h('b', {}, it.value), ' ', it.short ?? it.label);
-    }));
+    const its = this.items(p);
+    const btn = (it: Item, base: string, ...kids: Parameters<typeof h>[2][]) => h('button', {
+      class: base + ' tap' + (it.cls ? ' ' + it.cls : '') + (this.openKey === it.key ? ' sel' : ''),
+      title: it.title, 'data-k': it.key, onclick: (e: Event) => { e.stopPropagation(); this.toggle(it.key, e.currentTarget as HTMLElement); } }, ...kids);
+    if (this.variant === 'strip') put(this.el, ...its.map(it => btn(it, 'pu', h('b', {}, it.value), ' ', it.short ?? it.label)));
+    else put(this.el,
+      // the numbers you act on, as one line
+      h('div', { class: 'pu-head' }, its.filter(it => WORK.has(it.key)).map((it, i) => [
+        i ? h('span', { class: 'pu-sep' }, '·') : null,
+        btn(it, 'pu-w' + (it.value ? '' : ' zero'), h('b', {}, it.value), ' ', it.label)])),
+      // the machine and the plan, as meters on a fixed grid
+      h('div', { class: 'pu-meters' }, its.filter(it => it.meter).map(it => btn(it, 'pu-m',
+        h('span', { class: 'pu-ml' }, it.meter),
+        it.frac != null ? h('span', { class: 'pu-track' }, h('i', { style: { width: `${Math.max(1, Math.min(100, it.frac * 100))}%` } })) : null,
+        h('b', {}, it.mval ?? it.value),
+        it.chip ? h('span', { class: 'pu-chip' }, it.chip) : null))));
     if (this.pop && this.openKey) this.place(this.el.querySelector(`[data-k="${this.openKey}"]`));
   }
 
@@ -49,9 +62,17 @@ export class Pulse {
     const sys = p.system;
     const out: Item[] = [
       { key: 'sessions', value: p.open, label: 'sessions open', short: 'open', cls: p.open ? 'on' : '', title: 'Claude Code sessions open right now, all projects' },
-      { key: 'needs', value: p.needs, label: 'sessions waiting on you', short: 'waiting on you', cls: p.needs ? 'alarm' : '', title: 'Sessions waiting for your answer or permission' },
-      { key: 'tracked', value: p.tracked, label: 'tracked projects', short: 'tracked', cls: '', title: 'Projects drawn as cities' },
+      { key: 'needs', value: p.needs, label: 'waiting on you', cls: p.needs ? 'alarm' : '', title: 'Sessions waiting for your answer or permission' },
+      { key: 'tracked', value: p.tracked, label: p.tracked === 1 ? 'project tracked' : 'projects tracked', short: 'tracked', cls: '', title: 'Projects drawn as cities' },
     ];
+    // the account's 5-hour and weekly plan limits; the model-scoped weekly ones live in the popover
+    for (const l of p.limits?.limits || []) {
+      if (!l.short) continue;
+      const session = l.kind === 'session';
+      out.push({ key: 'limits', value: `${l.percent}%`, label: session ? '5-hour limit used' : 'weekly limit used', short: session ? '5h limit' : 'week limit',
+        meter: session ? '5-hour limit' : 'Weekly limit', frac: l.percent / 100, cls: limitCls(l.percent), title: `${l.label}: ${l.percent}% of your plan's limit used` + (l.resets ? `, resets ${resetsAt(l.resets)}` : '')
+          + (p.limits!.stale ? ' (last known; Claude Code renews its login the next time it runs)' : '') });
+    }
     const ram = sys.memUsed / sys.memTotal;
     if (sys.procs) {
       const { node, claude } = sys.procs;
@@ -60,13 +81,14 @@ export class Pulse {
       const many = claude.n > p.open * 3 + 4;
       out.push({ key: 'node', value: node.n, label: 'node processes', short: 'node', cls: '', title: `Node.js processes on this machine: ${mb(node.mem)} RAM, ${node.cpu}% CPU` });
       out.push({ key: 'claude', value: claude.n, label: `Claude processes, ${mb(claude.mem)} RAM` + (idle ? `, ${mb(idle.mem)} idle` : ''),
-        short: `Claude procs · ${mb(claude.mem)}` + (idle ? ` · ${mb(idle.mem)} idle` : ''), cls: idle ? (ram >= 0.85 ? 'alarm' : 'warn') : many ? 'warn' : '',
+        short: `Claude procs · ${mb(claude.mem)}` + (idle ? ` · ${mb(idle.mem)} idle` : ''),
+        meter: 'Claude', mval: `${claude.n} procs · ${mb(claude.mem)}`, chip: idle ? `${mb(idle.mem)} idle · free` : undefined, cls: idle ? (ram >= 0.85 ? 'alarm' : 'warn') : many ? 'warn' : '',
         title: `Claude Code processes (CLI, extension, subagents): ${mb(claude.mem)} RAM, ${claude.cpu}% CPU.` +
           (idle ? ` ${idle.n} of them belong to sessions nobody has used for ${IDLE_HOURS}+ hours and hold ${mb(idle.mem)}. Click to stop them.`
             : many ? ' Far more than the open sessions; some may be leftovers from closed windows.' : '') });
     }
-    if (sys.cpu != null) out.push({ key: 'cpu', value: `${sys.cpu}%`, label: 'CPU', cls: sys.cpu >= 85 ? 'alarm' : sys.cpu >= 60 ? 'warn' : '', title: `Whole machine (${sys.cores} cores), last few seconds` });
-    out.push({ key: 'ram', value: `${gb(sys.memUsed)}/${gb(sys.memTotal)} GB`, label: 'RAM in use', short: 'RAM', cls: ram >= 0.9 ? 'alarm' : ram >= 0.75 ? 'warn' : '', title: `Whole machine: ${Math.round(ram * 100)}% of RAM in use` });
+    if (sys.cpu != null) out.push({ key: 'cpu', value: `${sys.cpu}%`, label: 'CPU', meter: 'CPU', frac: sys.cpu / 100, cls: sys.cpu >= 85 ? 'alarm' : sys.cpu >= 60 ? 'warn' : '', title: `Whole machine (${sys.cores} cores), last few seconds` });
+    out.push({ key: 'ram', value: `${gb(sys.memUsed)}/${gb(sys.memTotal)} GB`, label: 'RAM in use', short: 'RAM', meter: 'RAM', frac: ram, cls: ram >= 0.9 ? 'alarm' : ram >= 0.75 ? 'warn' : '', title: `Whole machine: ${Math.round(ram * 100)}% of RAM in use` });
     return out;
   }
 
@@ -135,6 +157,18 @@ export class Pulse {
           h('span', { class: 'pp-n' }, `${p.sessions} sessions · ${p.prompts} tasks · ${ago(p.last_ts)}`))),
         d.projects.length ? null : h('div', { class: 'pp-empty' }, 'No tracked projects. Pick one on the overview.'));
     }
+    if (d.kind === 'limits') {
+      const plan = d.plan ? d.plan[0].toUpperCase() + d.plan.slice(1) + (d.tier && /max_(\d+x)/.test(d.tier) ? ` (Max ${d.tier.match(/max_(\d+x)/)![1]})` : '') : null;
+      return h('div', { class: 'pp-limits' },
+        h('div', { class: 'pp-h' }, 'Plan limits of the Claude account signed in to Claude Code' + (plan ? ` · ${plan}` : '')),
+        d.error ? h('div', { class: 'pp-note' + (d.limits.length ? ' dim' : '') }, (d.limits.length ? 'Showing the last known numbers: ' : 'Could not read the limits: ') + d.error) : null,
+        d.limits.map(l => h('div', { class: 'pp-row' },
+          h('div', { class: 'pp-main' }, h('div', { class: 'pp-t' }, l.label),
+            h('div', { class: 'pp-track' }, h('i', { class: 'pp-bar ' + limitCls(l.percent), style: { width: `${Math.max(1, Math.min(100, l.percent))}%` } }))),
+          h('span', { class: 'pp-n' }, `${l.percent}%`, l.resets ? h('span', { class: 'dim' }, ` · resets ${resetsAt(l.resets)}`) : null))),
+        d.extra ? h('div', { class: 'pp-note dim' }, `Extra usage is on: ${d.extra.used ?? 0} of ${d.extra.limit ?? '∞'} ${d.extra.currency || ''} this month.`) : null,
+        d.at ? h('div', { class: 'pp-sub', style: { padding: '6px 6px 0' } }, `Checked ${ago(d.at)} · refreshed every minute`) : null);
+    }
     return this.procs(d as ProcBreakdown, now);
   }
 
@@ -172,7 +206,11 @@ export class Pulse {
             machine ? null : h('span', { class: 'pp-ses', title: i.session ? `${i.session.project ? i.session.project + ' · ' : ''}${i.session.title || i.session.id}` : '' },
               i.session ? [i.session.project ? h('span', { class: 'dim' }, i.session.project + ' · ') : null, i.session.title || h('span', { class: 'dim' }, i.session.id.slice(0, 8))]
                 : h('span', { class: 'dim' }, i.owner || d.kind === 'claude' ? 'session not identified' : 'not started by a Claude Code session'))))));
-      }));
+      }),
+      // the overview has no node meter: those are mostly MCP servers the sessions started
+      d.kind === 'claude' && this.variant === 'big' && this.last?.system.procs ? h('div', { class: 'pp-row link pp-more', onclick: () => { this.openKey = 'node'; this.load('node'); } },
+        h('div', { class: 'pp-main' }, `${this.last.system.procs.node.n} node processes, mostly MCP servers and tools these sessions started`),
+        h('span', { class: 'pp-n' }, `${mb(this.last.system.procs.node.mem)} →`)) : null);
   }
 
   // Sessions whose process (with its MCP servers and shells) outlived its use. "Stop all"
@@ -226,3 +264,11 @@ export class Pulse {
 const IDLE_HOURS = 2;
 const IDLE_WORTH = 300 * 1024 ** 2;
 const order = (s: string) => ['needs-you', 'working', 'waiting', 'idle'].indexOf(s);
+const limitCls = (pct: number) => pct >= 90 ? 'alarm' : pct >= 75 ? 'warn' : '';
+// "in 2h 10m (14:30)" today, "Sun 05:00" further out
+function resetsAt(ts: number) {
+  const d = new Date(ts), ms = ts - Date.now();
+  const clock = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (ms <= 0) return 'now';
+  return ms < 24 * 3600e3 ? `in ${dur(ms)} (${clock})` : `${d.toLocaleDateString([], { weekday: 'short' })} ${clock}`;
+}

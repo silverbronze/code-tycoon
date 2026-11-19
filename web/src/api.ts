@@ -74,6 +74,13 @@ export interface PulseT {
   open: number; needs: number; tracked: number; summarizer: { enabled: boolean; running: boolean; total: number; done: number };
   system: { cpu: number | null; cores: number; memUsed: number; memTotal: number; procs: { node: ProcGroup; claude: ProcGroup } | null; at: number };
   idle: { n: number; mem: number; at: number } | null;
+  limits: AccountLimits | null;
+}
+// the Claude account's plan limits (server/limits.mjs), as Claude Code's /usage shows them
+export interface PlanLimit { kind: string; group: string; percent: number; resets: number | null; severity: string; label: string; short: string | null }
+export interface AccountLimits {
+  limits: PlanLimit[]; at?: number; plan?: string | null; tier?: string | null; stale?: boolean; error?: string | null;
+  extra?: { used: number | null; limit: number | null; percent: number | null; currency: string | null } | null;
 }
 // a Claude Code process (and everything it started) nobody has used for hours
 export interface IdleProc {
@@ -90,6 +97,7 @@ export interface ProcGroupD {
 }
 export interface ProcBreakdown { kind: 'node' | 'claude' | 'cpu' | 'ram'; n: number; mem: number; priv: number; cpu: number; groups: ProcGroupD[]; memTotal?: number; memUsed?: number; idle?: IdleScan }
 export type PulseDetail = ProcBreakdown
+  | ({ kind: 'limits' } & AccountLimits)
   | { kind: 'sessions' | 'needs'; sessions: OpenSession[] }
   | { kind: 'tracked'; projects: { id: string; name: string; root: string; sessions: number; prompts: number; last_ts: number | null; open: number }[] };
 export interface Changes { isGit: boolean; files: { p: string; st: string; writers: { s: string; ts: number; n: number }[] }[] }
