@@ -101,7 +101,8 @@ function copyApp() {
 }
 
 const target = () => targets[process.platform];
-export const autostartSupported = () => !!target();
+// in a container the entrypoint starts the server; "start at login" means nothing there
+export const autostartSupported = () => !!target() && !process.env.CODETYCOON_CONTAINER;
 export const autostartInstalled = () => !!target() && fs.existsSync(target().file);
 
 export function setAutostart(mode) {

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { DATA_DIR, norm, findClaudeCli } from '../paths.mjs';
+import { DATA_DIR, norm, findClaudeCli, projectId } from '../paths.mjs';
 import { mergeClaudeJson } from './adapters/claude.mjs';
 import { fillSecrets } from './secrets.mjs';
 import { fillPaths, fillSlug } from './pathmap.mjs';
@@ -44,6 +44,12 @@ async function source(src) {
   if (fs.existsSync(path.join(dir, '.git'))) { const r = await git(dir, ['pull', '--ff-only'], 120000); if (!r.ok) throw new Error('git pull failed: ' + r.err); }
   else { fs.mkdirSync(path.dirname(dir), { recursive: true }); const r = await git(path.dirname(dir), ['clone', src, dir], 300000); if (!r.ok) throw new Error('git clone failed: ' + r.err); }
   return dir;
+}
+
+// Known to Code Tycoon (board routing, the city) before any session ran in them.
+export function registerProjects(list, db) {
+  const ins = db.prepare('INSERT INTO projects (id, root, name, tracked) VALUES ($id, $root, $name, 1) ON CONFLICT(id) DO UPDATE SET tracked=1, root=excluded.root');
+  for (const p of list) ins.run({ $id: projectId(p.root), $root: norm(p.root), $name: p.name });
 }
 
 // Everything restore would do, without doing it.
@@ -208,9 +214,25 @@ export async function restore(src, opts = {}, log = console.log) {
         p.backups = (await git(p.dest, ['for-each-ref', '--format=%(refname)', 'refs/codetycoon'])).out.split('\n').filter(Boolean);
       }
     }
-    for (const f of plan.files.filter(f => f.cls === 'repo' && f.action === 'clone')) f.result = (await clone(f.remote, f.dest)).ok ? 'cloned' : 'failed';
+    for (const f of plan.files.filter(f => f.cls === 'repo' && f.action === 'clone')) {
+      f.result = (await clone(f.remote, f.dest)).ok ? 'cloned' : 'failed';
+      // an MCP server or tool checked out from git: its build output is rarely committed
+      const pj = path.join(f.dest, 'package.json');
+      if (f.result === 'cloned' && opts.install !== false && fs.existsSync(pj)) {
+        let scripts = {}; try { scripts = JSON.parse(fs.readFileSync(pj, 'utf8')).scripts || {}; } catch {}
+        log(`Building ${f.dest}…`);
+        f.built = run(npmBin, ['install', '--no-audit', '--no-fund'], f.dest) && (!scripts.build || run(npmBin, ['run', 'build'], f.dest));
+      }
+    }
   }
   for (const f of plan.files) if (f.tool === 'project') writeOne(f);
+  // the board and the city list projects from session history, which a fresh machine
+  // doesn't have: register every project that is here now, tracked
+  const here = plan.projects.filter(p => fs.existsSync(path.join(p.dest, '.git')));
+  if (here.length) {
+    try { registerProjects(here.map(p => ({ root: p.dest, name: p.name })), (await import('../db.mjs')).db); }
+    catch (e) { log(`  ! could not register the projects with Code Tycoon: ${e.message}`); }
+  }
 
   if (opts.install !== false) for (const i of manifest.installs) {
     if (i.kind === 'npm-global') continue;

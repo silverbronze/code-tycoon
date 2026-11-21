@@ -189,7 +189,8 @@ async function protectOne(step, provider, state, log) {
     for (const b of (await git(root, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).out.split('\n').filter(Boolean)) {
       await git(root, ['config', `branch.${b}.remote`, name]); await git(root, ['config', `branch.${b}.merge`, `refs/heads/${b}`]);
     }
-    await git(root, ['fetch', '-q', ...gitAuth(remote.url), name]);
+    const f = await git(root, [...gitAuth(remote.url), 'fetch', '-q', name], 600000); // -c options go before the subcommand
+    if (!f.ok) log(`    ! fetch after push failed: ${f.err.split('\n').filter(Boolean).pop()}`);
     Object.assign(rec, { remote: remote.url, full: remote.full, own: true, provider: provider.kind });
     log(`    pushed to ${remote.full}`);
   }
@@ -272,7 +273,7 @@ export async function guardTick(log = () => {}) {
       const url = rec.remote; if (!url) continue;
       if (rec.own) {
         const ahead = await git(root, ['rev-list', '--count', '--branches', '--not', '--remotes']);
-        if (Number(ahead.out) > 0 && await push(root, url, ['refs/heads/*:refs/heads/*'], log)) await git(root, ['fetch', '-q', ...gitAuth(url), (await git(root, ['remote'])).out.split('\n').includes('codetycoon') ? 'codetycoon' : 'origin']);
+        if (Number(ahead.out) > 0 && await push(root, url, ['refs/heads/*:refs/heads/*'], log)) await git(root, [...gitAuth(url), 'fetch', '-q', (await git(root, ['remote'])).out.split('\n').includes('codetycoon') ? 'codetycoon' : 'origin'], 600000);
       } else {
         const refs = (await git(root, ['for-each-ref', '--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)', 'refs/heads'])).out.split('\n').filter(Boolean).map(l => l.split('\t'));
         const specs = refs.filter(([, up, tr]) => !up || /ahead/.test(tr)).map(([b]) => `refs/heads/${b}:refs/codetycoon/backup/${b}`);
