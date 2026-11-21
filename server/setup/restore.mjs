@@ -50,6 +50,11 @@ async function source(src) {
 export function registerProjects(list, db) {
   const ins = db.prepare('INSERT INTO projects (id, root, name, tracked) VALUES ($id, $root, $name, 1) ON CONFLICT(id) DO UPDATE SET tracked=1, root=excluded.root');
   for (const p of list) ins.run({ $id: projectId(p.root), $root: norm(p.root), $name: p.name });
+  // the indexer, the watcher and git sync read the kv list (trackedSet()), not the column
+  let tracked = [];
+  try { tracked = JSON.parse(db.prepare("SELECT v FROM kv WHERE k='tracked'").get()?.v || '[]'); } catch {}
+  const all = [...new Set([...tracked, ...list.map(p => projectId(p.root))])];
+  db.prepare("INSERT INTO kv(k,v) VALUES('tracked',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(JSON.stringify(all));
 }
 
 // Everything restore would do, without doing it.

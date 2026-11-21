@@ -407,6 +407,11 @@ function indexCodexFile(pid, f, slug) {
 }
 
 export function trackedSet() { return new Set(kvGet('tracked') || []); }
+// restore used to mark projects tracked only in the column, so nothing indexed them; setTracked keeps both
+{
+  const s = trackedSet(), cols = db.prepare('SELECT id FROM projects WHERE tracked=1').all().map(r => r.id);
+  if (cols.some(id => !s.has(id))) kvSet('tracked', [...new Set([...s, ...cols])]);
+}
 export function setTracked(pid, on) {
   const s = trackedSet(); on ? s.add(pid) : s.delete(pid);
   kvSet('tracked', [...s]);
