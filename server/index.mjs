@@ -5,7 +5,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { db } from './db.mjs';
-import { PORT, PROJECTS_DIR, rel } from './paths.mjs';
+import { PORT, TRANSCRIPT_DIRS, transcriptSlug, rel } from './paths.mjs';
 import { CODEX_DIR, isCodexFile, codexCwd, codexSlug } from './codex.mjs';
 import crypto from 'node:crypto';
 import { discover, indexFile, indexProject, listProjects, setTracked, trackedSet, refreshProjectAgg, backfillUsage, backfillResults, backfillCoach, repriceUsage } from './indexer.mjs';
@@ -27,6 +27,7 @@ import { autostartSupported, autostartInstalled, setAutostart } from './autostar
 import { onBoard, listBoard, create as createTask, boardAction, taskOutput } from './board.mjs';
 import { voiceStatus, voiceCommand } from './voice.mjs';
 import { accountLimits, accountLimitsNow } from './limits.mjs';
+import { onSync, syncStatus, setSync, syncSoon, syncProject, rebaseNow } from './gitsync.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
 const TOKEN_FILE = path.join(DATA_DIR, 'token');
@@ -99,6 +100,8 @@ onLive(msg => {
       try { checkCoach(s.id, s.pid, alertOnce); } catch (e) { console.warn('[coach]', e.message); }
       // backstop for the commit watcher: a turn that ended may have committed
       checkCommits(s.pid);
+      // and may have something to push, or be ready for what came in meanwhile
+      syncSoon(s.pid);
     });
   }
   if (msg.type === 'alert' || msg.type === 'alert-resolved' || msg.type === 'alerts-dismissed') broadcast({ ...msg, pid: msg.pid ?? msg.alert?.pid ?? null });
@@ -112,6 +115,11 @@ onOptimize(msg => broadcast(msg, msg.pid));
 settleInterrupted();
 onDomain(msg => broadcast(msg, msg.pid));
 onBoard(msg => broadcast(msg)); // the task board is on every page
+// git sync (server/gitsync.mjs): status to every page; commits pulled in rebuild the city
+onSync(msg => {
+  if (msg.type === 'pulled') { scheduleRebuild(msg.pid); checkCommits(msg.pid); }
+  else broadcast(msg);
+});
 
 // Live items -> city places -> clients
 function fanOut(pid, items) {
@@ -150,7 +158,7 @@ function onTranscriptChange(file) {
   pending.set(file, setTimeout(() => {
     pending.delete(file);
     const codex = isCodexFile(file);
-    const slug = codex ? codexCwd(file) && codexSlug(codexCwd(file)) : path.relative(PROJECTS_DIR, file).split(path.sep)[0];
+    const slug = codex ? codexCwd(file) && codexSlug(codexCwd(file)) : transcriptSlug(file);
     if (!slug) return;
     let pid = db.prepare('SELECT project_id FROM transcripts WHERE slug=? LIMIT 1').get(slug)?.project_id;
     if (!pid) { discovered = discover(); pid = [...discovered].find(([, p]) => p.slugs.has(slug))?.[0]; }
@@ -179,9 +187,11 @@ function onTranscriptChange(file) {
     watchCommits(pid => city(pid));
   }, 250));
 }
-try {
-  fs.watch(PROJECTS_DIR, { recursive: true }, (_, f) => { if (f && f.endsWith('.jsonl')) onTranscriptChange(path.join(PROJECTS_DIR, f)); });
-} catch (e) { console.warn('fs.watch unavailable, polling only:', e.message); }
+for (const dir of TRANSCRIPT_DIRS) {
+  try {
+    fs.watch(dir, { recursive: true }, (_, f) => { if (f && f.endsWith('.jsonl')) onTranscriptChange(path.join(dir, f)); });
+  } catch (e) { console.warn('fs.watch unavailable on ' + dir + ', polling only:', e.message); }
+}
 // Codex sessions; if the folder appears later, the periodic rescan below finds its files
 try {
   if (fs.existsSync(CODEX_DIR)) fs.watch(CODEX_DIR, { recursive: true }, (_, f) => { if (f && f.endsWith('.jsonl')) onTranscriptChange(path.join(CODEX_DIR, f)); });
@@ -310,7 +320,7 @@ const server = http.createServer(async (req, res) => {
           let spark = null;
           if (p.tracked) { spark = new Array(14).fill(0); for (const r of sparkQ.all(day0, p.id, day0)) if (r.d >= 0 && r.d < 14) spark[r.d] = r.n; }
           return { ...p, spark, open: open.filter(s => s.pid === p.id).length,
-            needs: open.filter(s => s.pid === p.id && s.state === 'needs-you').length, indexing: indexing.get(p.id) || null,
+            needs: open.filter(s => s.pid === p.id && s.state === 'needs-you').length, indexing: indexing.get(p.id) || null, sync: p.tracked ? syncStatus(p.id) : null,
             cost14: p.tracked ? db.prepare('SELECT COALESCE(SUM(cost),0) c FROM usage WHERE project_id=? AND ts > ?').get(p.id, day0).c : null };
         });
         const names = new Map(db.prepare('SELECT id, name FROM projects').all().map(r => [r.id, r.name]));
@@ -444,6 +454,15 @@ const server = http.createServer(async (req, res) => {
         if (parts[3] === 'untrack' && req.method === 'POST') {
           setTracked(pid, false); cities.delete(pid);
           return send(res, 200, { ok: true }, req);
+        }
+        // git sync: GET the state, POST {pull, push} to switch, POST sync/now, POST sync/rebase
+        if (parts[3] === 'sync') {
+          if (req.method !== 'POST') return send(res, 200, syncStatus(pid), req);
+          if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+          const b = JSON.parse(await readBody(req) || '{}');
+          if (parts[4] === 'now') return send(res, 200, await syncProject(pid, { force: true }), req);
+          if (parts[4] === 'rebase') { const r = await rebaseNow(pid); return send(res, r.error === 'busy' ? 409 : r.error ? 400 : 200, r, req); }
+          return send(res, 200, setSync(pid, b), req);
         }
         if (indexing.has(pid)) return send(res, 409, { indexing: indexing.get(pid) }, req);
         if (!proj.tracked) return send(res, 409, { untracked: true }, req);

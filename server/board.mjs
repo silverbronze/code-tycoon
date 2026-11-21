@@ -27,6 +27,7 @@ import { SUMMARIZER_CWD, OWN_DIR_RE, PROJECTS_DIR } from './paths.mjs';
 import { listProjects } from './indexer.mjs';
 import { runAgent, provider, codexBlocked } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
+import { syncSoon } from './gitsync.mjs';
 import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge } from './worktree.mjs';
 
 db.exec('CREATE TABLE IF NOT EXISTS board (id TEXT PRIMARY KEY, created INTEGER, v TEXT)');
@@ -501,6 +502,7 @@ async function integrate(t) {
     if (!r.ok) return setM({ state: 'waiting', why: r.why, files: r.files });
     dropWorktree(w, { deleteBranch: true });
     setM({ state: 'merged', sha: r.sha, files: files.slice(0, 50), into: w.base });
+    syncSoon(t.pid, 1000); // pushed right away where git sync is on
   } catch (e) {
     setM({ state: 'failed', why: e.message });
   } finally { merging.delete(t.id); }

@@ -1,4 +1,4 @@
-import { api, live, type Project, type OpenSession, type Weekly, type Setup } from './api';
+import { api, live, type Project, type OpenSession, type Weekly, type Setup, type SyncStatus } from './api';
 import { h, put, ago, bytes, dur, tail, money } from './util';
 import { notify } from './notify';
 import { Pulse } from './pulse';
@@ -31,7 +31,7 @@ export class Overview {
     api.setup().then(s => { this.setup = s; this.render(); }).catch(() => {});
     this.timer = window.setInterval(() => this.render(), 5000);
     live.subscribe(null);
-    this.off = live.on(m => { if (m.type === 'session' || m.type === 'indexed') this.render(); });
+    this.off = live.on(m => { if (m.type === 'session' || m.type === 'indexed' || m.type === 'sync') this.render(); });
   }
 
   async render() {
@@ -121,7 +121,8 @@ export class Overview {
         return h('div', { class: 'os-row ' + s.state + (go ? ' link' : ''), onclick: go, title: go ? 'Open the project and follow this session' : 'Track the project to open it' },
           h('span', { class: 'state ' + s.state }, label),
           h('span', { class: 'os-proj' }, s.project || '—'),
-          h('span', { class: 'os-title' }, s.title || s.prompt?.slice(0, 80) || s.id.slice(0, 8)),
+          // where it runs, in the title: the project column is hidden at phone width
+          h('span', { class: 'os-title' }, s.where ? h('span', { class: 'where', title: 'A session on ' + s.where + ', sent here by its uplink' }, s.where) : null, s.title || s.prompt?.slice(0, 80) || s.id.slice(0, 8)),
           h('span', { class: 'os-act' }, s.needs?.msg || act || (s.prompt ? '“' + s.prompt.slice(0, 90) + '”' : '')),
           h('span', { class: 'os-age' }, dur(now - s.since)));
       })];
@@ -162,7 +163,41 @@ export class Overview {
         h('div', { class: 'nums' }, h('span', {}, bytes(p.bytes), ' of transcripts')),
       p.spark ? spark(p.spark) : null,
       p.tracked ? this.weekRow(p.id) : null,
+      p.tracked && p.sync ? this.syncRow(p.id, p.sync) : null,
       !p.tracked ? h('button', { class: 'chip', disabled: !!indexing, onclick: trackOpen }, indexing ? `Indexing ${indexing.done}/${indexing.total}` : 'Track & open') : null);
+  }
+
+  // Git sync (server/gitsync.mjs): one switch for pull + push, then what it last did or why it waits.
+  private syncBusy = new Set<string>();
+  private syncErr = new Map<string, string>();
+  private syncRow(pid: string, s: SyncStatus) {
+    const on = s.pull || s.push, busy = this.syncBusy.has(pid) || s.running;
+    const act = (fn: () => Promise<unknown>) => async (e: Event) => {
+      e.stopPropagation();
+      this.syncBusy.add(pid); this.syncErr.delete(pid); this.render();
+      try { await fn(); } catch (err) { this.syncErr.set(pid, (err as Error).message); }
+      this.syncBusy.delete(pid); this.render();
+    };
+    const sw = h('button', { class: 'ov-switch mini' + (on ? ' on' : ''), role: 'switch', 'aria-checked': String(on), disabled: this.syncBusy.has(pid),
+      title: on ? 'Stop syncing this project with its git remote' : 'Keep this folder level with its git remote: pull new commits (fast-forward only, never over your uncommitted work) and push yours. Turn it on for the same project on every machine you work on.',
+      onclick: act(() => api.setSync(pid, { pull: !on, push: !on })) }, h('i', {}), 'Git sync');
+    if (!on) return h('div', { class: 'psync' }, sw);
+    const n = (k: number) => `${k} commit${k === 1 ? '' : 's'}`;
+    const last = s.last ? ` · ${s.last.kind} ${s.last.n ? n(s.last.n) + ' ' : ''}${ago(s.last.at)}` : '';
+    const text = busy ? 'Syncing…'
+      : s.state === 'synced' ? `Up to date with ${s.upstream}${last}`
+      : s.state === 'waiting' ? `${n(s.behind || 0)} to pull; waiting: ${s.msg}`
+      : s.state === 'unknown' ? 'Not checked yet'
+      : s.msg || s.state;
+    const bad = ['diverged', 'error', 'no-repo', 'no-upstream', 'detached'].includes(s.state);
+    return h('div', { class: 'psync' + (bad ? ' bad' : ''), onclick: (e: Event) => e.stopPropagation() },
+      sw,
+      h('span', { class: 'ps-acts' },
+        s.state === 'diverged' ? h('button', { class: 'chip', disabled: busy, title: 'Replay your local commits on top of the remote ones (only on a clean folder; undone if there are conflicts)',
+          onclick: act(() => api.syncNow(pid, 'rebase')) }, 'Rebase') : null,
+        h('button', { class: 'chip', disabled: busy, onclick: act(() => api.syncNow(pid, 'now')) }, 'Sync now')),
+      // its own line: the reason is the point, it must not be cut off
+      h('span', { class: 'ps-text', title: text }, this.syncErr.get(pid) || text));
   }
 
   // This week against last on four numbers: cost per landed task, share landed,

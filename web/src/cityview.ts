@@ -1167,6 +1167,7 @@ export class CityView {
       h('div', { class: 'row' },
         L ? h('span', { class: 'state ' + state }, stateLabel(state)) : null,
         meta?.entry === 'codex' ? h('span', { class: 'via', title: 'An OpenAI Codex CLI session' }, 'Codex') : null,
+        meta?.entry?.includes('@') ? h('span', { class: 'via', title: 'Running on ' + meta.entry.split('@').pop() + ', sent here by its uplink' }, meta.entry.split('@').pop()) : null,
         h('span', { class: 'since' }, L ? dur(Date.now() - L.since) : 'last action ' + dur(this.t - s.lastTs) + ' before'),
         L && L.agents.length ? h('span', { class: 'agents' }, `+${L.agents.length} subagent${L.agents.length > 1 ? 's' : ''}`) : null,
         meta?.cost ? h('span', { class: 'cost', title: 'API-equivalent cost of this session so far' }, money(meta.cost)) : null,

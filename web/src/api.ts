@@ -2,6 +2,13 @@ export interface Project {
   id: string; root: string; name: string; tracked: number; sessions: number; prompts: number;
   first_ts: number | null; last_ts: number | null; bytes: number; indexed_bytes: number;
   open: number; needs: number; indexing: { done: number; total: number } | null; cost14: number | null;
+  sync?: SyncStatus | null;
+}
+// git sync of a project (server/gitsync.mjs)
+export interface SyncStatus {
+  pull: boolean; push: boolean; running: boolean; at?: number; msg?: string; branch?: string; upstream?: string; ahead?: number; behind?: number;
+  state: 'unknown' | 'synced' | 'ahead' | 'behind' | 'diverged' | 'waiting' | 'error' | 'no-repo' | 'no-upstream' | 'detached';
+  last?: { kind: 'pulled' | 'pushed'; n: number; at: number } | null;
 }
 // A core property of a block or district for the role it plays (Database: engine,
 // tables...; Payments: providers, currencies...). n: files showing a value, f: some of them.
@@ -40,7 +47,7 @@ export interface Timeline {
 export interface OlderEvents { ids: { s: string[]; a: string[]; task: string[] }; events: Timeline['events'] }
 export interface LiveSession {
   id: string; pid: string; title: string | null; state: 'working' | 'needs-you' | 'waiting' | 'idle' | 'ended';
-  since: number; lastSeen: number; prompt: string | null; hooks: boolean;
+  since: number; lastSeen: number; prompt: string | null; hooks: boolean; where?: string | null;
   action: { kind: string; tool: string; path: string | null; target: string | null; detail: string | null; agentId: string | null } | null;
   needs: { type: string; msg: string } | null; agents: { id: string; type?: string | null; ts: number }[];
   health?: SessionHealth | null;
@@ -269,6 +276,8 @@ export const api = {
   githubLogin: async () => { const r = await post('/api/setup/github', {}), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as ProtectStatus; },
   setupAudit: () => get<{ running: boolean; error: string | null; result: SetupAudit | null }>('/api/setup/audit'),
   rerunSetupAudit: async () => { const r = await post('/api/setup/audit'); return r.json() as Promise<{ running: boolean; error: string | null; result: SetupAudit | null }>; },
+  setSync: async (pid: string, b: { pull?: boolean; push?: boolean }) => { const r = await post(`/api/projects/${enc(pid)}/sync`, b), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as SyncStatus; },
+  syncNow: async (pid: string, how: 'now' | 'rebase') => { const r = await post(`/api/projects/${enc(pid)}/sync/${how}`, {}), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d; },
   board: () => get<Board>('/api/board'),
   addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean }) => {
     const r = await post('/api/board', b), d = await r.json();

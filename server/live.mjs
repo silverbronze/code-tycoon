@@ -57,8 +57,19 @@ function setState(s, state, extra = {}) {
   emit({ type: 'session', session: publicSession(s) });
 }
 
+// a session sent in from another machine has its entrypoint tagged "<entrypoint>@<machine>"
+// (transcripts in CODETYCOON_TRANSCRIPT_DIRS); asked again while unknown, the row may come later
+function whereOf(s) {
+  if (s.where === undefined || (s.where === null && Date.now() - (s.whereAt || 0) > 30e3)) {
+    s.whereAt = Date.now();
+    const e = db.prepare('SELECT entrypoint FROM sessions WHERE id=?').get(s.id)?.entrypoint;
+    s.where = /@([^@]+)$/.exec(e || '')?.[1] || null;
+  }
+  return s.where;
+}
+
 export function publicSession(s) {
-  return { id: s.id, pid: s.pid, title: s.title, state: s.state, since: s.since, lastSeen: s.lastSeen, prompt: s.prompt,
+  return { id: s.id, pid: s.pid, title: s.title, state: s.state, since: s.since, lastSeen: s.lastSeen, prompt: s.prompt, where: whereOf(s),
     action: s.action, needs: s.needs, hooks: s.hooks, agents: Object.values(s.agents).filter(a => Date.now() - a.ts < 15 * 60e3),
     health: decorate ? decorate(s) : null };
 }

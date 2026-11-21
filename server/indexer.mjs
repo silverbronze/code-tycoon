@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { db, tx, kvGet, kvSet } from './db.mjs';
-import { PROJECTS_DIR, SUMMARIZER_CWD, slugFor, norm, projectId, baseName, isTempPath } from './paths.mjs';
+import { TRANSCRIPT_DIRS, SUMMARIZER_CWD, slugFor, norm, projectId, baseName, isTempPath } from './paths.mjs';
 import { quickSkip, parseRecord, redact, toolResults, resultText, clipResult, checkKind } from './transcript.mjs';
 import { isCodexFile, codexFiles, codexCwd, codexSlug, codexSessionId, codexQuickSkip, parseCodexRecord } from './codex.mjs';
 import { costOf } from './prices.mjs';
@@ -41,11 +41,13 @@ function folderCwd(dir, files) {
 export function discover() {
   const known = new Map(db.prepare('SELECT slug, project_id FROM transcripts GROUP BY slug').all().map(r => [r.slug, r.project_id]));
   const out = new Map(); // projectId -> {root, files:[]}
-  let dirs = [];
-  try { dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()); } catch {}
+  const dirs = [];
+  for (const base of TRANSCRIPT_DIRS) {
+    try { for (const d of fs.readdirSync(base, { withFileTypes: true })) if (d.isDirectory()) dirs.push({ name: d.name, dir: path.join(base, d.name) }); } catch {}
+  }
   for (const d of dirs) {
     if (d.name.toLowerCase() === SUMMARIZER_SLUG) continue;
-    const dir = path.join(PROJECTS_DIR, d.name);
+    const dir = d.dir;
     const files = [];
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (e.isFile() && e.name.endsWith('.jsonl')) files.push(path.join(dir, e.name));

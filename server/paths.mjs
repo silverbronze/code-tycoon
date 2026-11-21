@@ -6,6 +6,17 @@ import fs from 'node:fs';
 export const HOME = os.homedir();
 export const CLAUDE_DIR = path.join(HOME, '.claude');
 export const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+// More folders laid out like ~/.claude/projects (<slug>/<session>.jsonl), e.g. transcripts
+// copied in from another machine; CODETYCOON_TRANSCRIPT_DIRS, separated like PATH
+export const TRANSCRIPT_DIRS = [PROJECTS_DIR, ...(process.env.CODETYCOON_TRANSCRIPT_DIRS || '').split(path.delimiter).map(s => s.trim()).filter(Boolean).map(s => path.resolve(s))];
+// the transcript folder a file sits in, and its slug (the folder under it)
+export function transcriptSlug(file) {
+  for (const base of TRANSCRIPT_DIRS) {
+    const r = path.relative(base, file);
+    if (r && !r.startsWith('..') && !path.isAbsolute(r)) return r.split(path.sep)[0];
+  }
+  return null;
+}
 
 // Data lived in ~/.visualizer before the rename; it is moved on the first start.
 // While something still holds it open (an old server, its log), the old folder
