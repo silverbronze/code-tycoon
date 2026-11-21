@@ -145,6 +145,21 @@ Click a habit for every time it happened: the session, the prompts involved, wha
 
 The screenshots show [shadcn-ui/taxonomy](https://github.com/shadcn-ui/taxonomy), an open-source Next.js app, after a dozen real Claude Code sessions. The analytics screenshot is Code Tycoon's own repo instead, where a month of real sessions gives the habits something to find.
 
+## Back up and move your AI setup
+
+```
+npx code-tycoon audit                        # what would be lost if this disk died today
+npx code-tycoon protect --to github          # or --to <folder of backups>: push what is only here
+npx code-tycoon snapshot ~/setup-backup      # or a private git repo URL
+npx code-tycoon restore ~/setup-backup       # on the new machine, any OS
+```
+
+The audit lists, ranked, what exists only on this disk: projects with no remote or unpushed commits, `.env` files git ignores, and your Claude Code and Codex setup (settings, MCP servers, `CLAUDE.md`/`AGENTS.md`, project memory, skills, SSH keys). The same list is on the dashboard under **Setup backup**. Nothing leaves your machine.
+
+**Protect** (a button on the panel, or `code-tycoon protect`) fixes the project items in one go: a folder not in git gets a `.gitignore` first (build output, data, media, `.env` and anything over 50 MB stay out; you see the list), then a first commit and a new **private** repo; a repo with no remote gets a private repo; unpushed branches and uncommitted work on an existing remote go to hidden refs (`refs/codetycoon/backup/*`, `refs/codetycoon/wip/*`), so nothing is ever pushed over your branches. While Code Tycoon runs it keeps them pushed. New repos go to GitHub (`--login`, or `CODETYCOON_GITHUB_TOKEN`) or to any folder of bare repos, such as a NAS.
+
+A snapshot copies that setup with every absolute path turned into a placeholder, and cuts API keys, MCP tokens and private keys out into a vault encrypted with your passphrase (AES-256-GCM, scrypt; a recovery key is shown once). Restore clones your projects, puts every file back with paths rewritten for the new OS and user name, reinstalls the tools and packages, re-registers the hooks, and tells you which sign-ins to redo (logins are never copied). Format and crypto: [docs/setup-snapshot.md](docs/setup-snapshot.md).
+
 ## Install
 
 ```
@@ -183,6 +198,10 @@ npx code-tycoon hooks install        # instant live updates; backs up ~/.claude/
 npx code-tycoon hooks uninstall      # removes them again
 npx code-tycoon autostart install    # start hidden at every login (copies the app to ~/.codetycoon/app)
 npx code-tycoon autostart uninstall
+npx code-tycoon audit [--json]       # what of your AI setup and projects exists only on this disk
+npx code-tycoon protect [--to github[:org]|<folder>] [--only a,b] [--yes] [--login]
+npx code-tycoon snapshot <target>    # setup + encrypted vault to a folder or a private git repo
+npx code-tycoon restore <source>     # rebuild it here; --yes, --projects <dir>, --recovery-key
 ```
 
 Hooks and autostart are also the "live updates" and "start at login" switches on the dashboard. Without hooks the live view still works from transcript tailing, a second or two behind. A second copy started while one is running exits quietly. `CODETYCOON_PORT` changes the port. Settings named `VISUALIZER_*` and data in `~/.visualizer` (from before v0.4) still work; the folder is moved on the first start.

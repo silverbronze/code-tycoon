@@ -4,6 +4,7 @@ import { notify } from './notify';
 import { Pulse } from './pulse';
 import { CoachPanel } from './coach';
 import { BoardPanel } from './board';
+import { SetupAuditPanel } from './setupaudit';
 
 const VERB: Record<string, string> = { write: 'Editing', read: 'Reading', search: 'Searching', touch: 'Touching', cmd: 'Running', remote: 'Calling', skill: 'Using skill', spawn: 'Spawning agent', ask: 'Asking you', other: 'Using' };
 const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Working'], ['waiting', 'Your turn'], ['idle', 'Idle']];
@@ -18,6 +19,7 @@ export class Overview {
   private pulse = new Pulse('big');
   private coach = new CoachPanel();
   private board = new BoardPanel();
+  private setupAudit = new SetupAuditPanel();
   private setup: Setup | null = null;
   private setupBusy = false;
   private setupError = '';
@@ -62,6 +64,7 @@ export class Overview {
       // on screen without scrolling past sessions and coaching.
       tracked.length ? [h('h2', { class: 'ov-h' }, 'Tracked'), h('div', { class: 'grid' }, ...tracked.map(p => this.card(p)))] : null,
       others,
+      this.setupAudit.el,
       res.sessions.length ? this.openSessions(res.sessions) : null,
       tracked.length ? this.coach.el : null,
     );
@@ -186,7 +189,7 @@ export class Overview {
       cell('wait', w.waitMedian ? dur(w.waitMedian) : '–', w.waitMedian, p.waitMedian, 'down', 'Median time a finished turn waited for your next prompt'));
   }
 
-  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.root.remove(); }
+  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.setupAudit.dispose(); this.root.remove(); }
 }
 
 function spark(v: number[]) {

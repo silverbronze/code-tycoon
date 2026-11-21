@@ -195,6 +195,27 @@ export interface DomainState {
 // hooks: live updates from Claude Code; autostart: null where the platform has none
 export interface Setup { hooks: boolean; autostart: boolean | null }
 
+// code-tycoon protect (server/setup/protect.mjs): projects put in private repos and kept pushed
+export interface ProtectStatus {
+  provider: { kind: 'github' | 'folder'; owner?: string | null; dir?: string } | null;
+  ready: { ok: boolean; label?: string; why?: string } | null;
+  github: { login: string | null; canLogin: boolean };
+  projects: { name: string; root: string; remote: string; own: boolean; at: number; checked: number | null }[];
+  run: { running: boolean; log: string[]; result: { done: string[]; failed?: string[] } | null };
+  login: { state: 'waiting' | 'done' | 'failed'; code?: string; url?: string; login?: string; error?: string } | null;
+}
+
+// The setup audit (server/setup/audit.mjs): what of the AI setup and projects exists only on this disk.
+export type AuditLevel = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export interface AuditItem { level: AuditLevel; kind: string; title: string; detail: string | null; fix: string | null; project?: string }
+export interface SetupAudit {
+  at: number; ms: number; counts: Partial<Record<AuditLevel, number>>; items: AuditItem[];
+  tools: { id: string; name: string; present: boolean; dirs: string[]; classes: Record<string, { n: number; files: number; bytes: number }> }[];
+  setup: { files: number; bytes: number; secrets: { values: number; files: number }; changed: number | null };
+  projects: { name: string; root: string; git: boolean; remote: string | null; unpushed: number; dirty: number; synced: string | null }[];
+  last: { at: number; target: string } | null;
+}
+
 // The task board (server/board.mjs): tasks for any project, routed and run by real sessions.
 // asks: what a run left for the user (the to-do); permission asks are commands it was not allowed to run.
 export type BoardState = 'routing' | 'unrouted' | 'ready' | 'queued' | 'running' | 'needs-you' | 'done' | 'failed' | 'stopped' | 'paused';
@@ -243,6 +264,11 @@ export const api = {
     if (!r.ok) throw new Error(d.error || String(r.status));
     return d as Setup;
   },
+  protect: () => get<ProtectStatus>('/api/setup/protect'),
+  runProtect: async (b: { to?: string; only?: string[] }) => { const r = await post('/api/setup/protect', b), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as ProtectStatus; },
+  githubLogin: async () => { const r = await post('/api/setup/github', {}), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as ProtectStatus; },
+  setupAudit: () => get<{ running: boolean; error: string | null; result: SetupAudit | null }>('/api/setup/audit'),
+  rerunSetupAudit: async () => { const r = await post('/api/setup/audit'); return r.json() as Promise<{ running: boolean; error: string | null; result: SetupAudit | null }>; },
   board: () => get<Board>('/api/board'),
   addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean }) => {
     const r = await post('/api/board', b), d = await r.json();

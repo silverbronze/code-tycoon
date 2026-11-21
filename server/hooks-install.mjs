@@ -18,7 +18,7 @@ const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse',
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse']);
 
 // ours under either name (Visualizer before the rename), so a reinstall replaces old entries
-const isOurs = h => (typeof h?.command === 'string' && OWN_DIR_RE.test(h.command) && h.command.includes('hook.mjs'))
+export const isOurs = h => (typeof h?.command === 'string' && OWN_DIR_RE.test(h.command) && h.command.includes('hook.mjs'))
   || (h?.type === 'http' && typeof h.url === 'string' && /^http:\/\/127\.0\.0\.1:\d+\/hook$/.test(h.url)
     && !!(h.headers?.['x-codetycoon-token'] || h.headers?.['x-visualizer-token']));
 

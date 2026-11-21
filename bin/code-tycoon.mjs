@@ -3,6 +3,7 @@
 // npx code-tycoon hooks install|uninstall - live updates from Claude Code hooks
 // npx code-tycoon autostart install|uninstall - start the server at login
 // npx code-tycoon index [project]       - backfill one project (or all tracked)
+// npx code-tycoon audit | snapshot <target> | restore <source> - back up and rebuild the AI setup
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +50,8 @@ if (cmd === 'start') {
   run('autostart.mjs', [args[1]]);
 } else if (cmd === 'index' || cmd === 'stats') {
   run('cli.mjs', args);
+} else if (cmd === 'audit' || cmd === 'protect' || cmd === 'snapshot' || cmd === 'restore') {
+  run('setup/cli.mjs', args);
 } else {
   console.log(`Usage:
   npx code-tycoon [--no-open]          start the server on ${url} and open it
@@ -56,6 +59,12 @@ if (cmd === 'start') {
   npx code-tycoon hooks uninstall      remove the hooks
   npx code-tycoon autostart install    start the server hidden at every login
   npx code-tycoon autostart uninstall  stop starting it at login
-  npx code-tycoon index [project]      backfill one project, or every tracked one`);
+  npx code-tycoon index [project]      backfill one project, or every tracked one
+  npx code-tycoon audit [--json]       what of your AI setup and projects exists only on this disk
+  npx code-tycoon protect [--to github|<folder>]
+                                       put unpushed projects in private repos and keep them pushed
+  npx code-tycoon snapshot <target>    save settings, MCP servers, memory, skills and an encrypted
+                                       vault of secrets to a folder or your own private git repo
+  npx code-tycoon restore <source>     rebuild that setup here (asks before writing; --yes to skip)`);
   process.exit(cmd === 'help' ? 0 : 1);
 }

@@ -48,6 +48,26 @@ const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist
 let discovered = discover();
 const cities = new Map(); // pid -> city (with resolveTarget)
 const indexing = new Map(); // pid -> progress
+const setupAudit = { running: false, result: null, error: null };
+// protect (server/setup/protect.mjs): one run at a time from the Setup panel, its log kept for the panel
+const protectRun = { running: false, log: [], result: null, login: null };
+function runProtect(opts) {
+  if (protectRun.running) return;
+  Object.assign(protectRun, { running: true, log: [], result: null });
+  import('./setup/protect.mjs').then(m => m.protect({ ...opts, yes: true }, l => protectRun.log.push(l)))
+    .then(r => { protectRun.result = r; }, e => { protectRun.log.push('! ' + e.message); })
+    .finally(() => { protectRun.running = false; runSetupAudit(); });
+}
+// the guard keeps protected projects pushed
+setInterval(() => import('./setup/protect.mjs').then(m => m.guardTick()).catch(() => {}), 5 * 60e3).unref();
+setTimeout(() => import('./setup/protect.mjs').then(m => m.guardTick()).catch(() => {}), 90e3).unref();
+function runSetupAudit() {
+  if (setupAudit.running) return;
+  setupAudit.running = true;
+  import('./setup/audit.mjs').then(m => m.audit())
+    .then(r => { setupAudit.result = r; setupAudit.error = null; }, e => { setupAudit.error = e.message; })
+    .finally(() => { setupAudit.running = false; });
+}
 
 function city(pid, fresh = false) {
   if (fresh || !cities.has(pid)) {
@@ -334,6 +354,31 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, await stopIdle(b.pids), req);
       }
       // first-run setup: Claude Code hooks for live updates, start at login. JSON only, like procs/stop
+      // the setup audit (server/setup/audit.mjs): ~30 s, so it runs in the background and is cached
+      if (parts[1] === 'setup' && (parts[2] === 'protect' || parts[2] === 'github')) {
+        const pm = await import('./setup/protect.mjs'), gh = await import('./setup/github.mjs');
+        if (req.method === 'POST') {
+          if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+          const b = JSON.parse(await readBody(req) || '{}');
+          if (parts[2] === 'github' && parts[3] === 'logout') gh.logout();
+          else if (parts[2] === 'github') {
+            try {
+              const s = await gh.startDeviceLogin();
+              protectRun.login = { code: s.code, url: s.url, state: 'waiting' };
+              gh.finishDeviceLogin(s).then(login => { protectRun.login = { state: 'done', login }; }, e => { protectRun.login = { state: 'failed', error: e.message }; });
+            } catch (e) { return send(res, 400, { error: e.message }, req); }
+          } else runProtect({ to: typeof b.to === 'string' ? b.to : undefined, only: Array.isArray(b.only) ? b.only : undefined });
+        }
+        const st = pm.protectState();
+        const ready = st.provider ? await pm.providerReady(st.provider) : null;
+        return send(res, 200, { provider: st.provider, ready, github: { login: await gh.whoami().catch(() => null), canLogin: gh.canDeviceLogin() },
+          projects: Object.values(st.projects).map(p => ({ name: p.name, root: p.root, remote: p.full || p.remote, own: !!p.own, at: p.at, checked: p.checked || null })),
+          run: { running: protectRun.running, log: protectRun.log.slice(-40), result: protectRun.result }, login: protectRun.login }, req);
+      }
+      if (parts[1] === 'setup' && parts[2] === 'audit') {
+        if (req.method === 'POST' || !setupAudit.result) runSetupAudit();
+        return send(res, 200, { running: !!setupAudit.running, error: setupAudit.error, result: setupAudit.result }, req);
+      }
       if (parts[1] === 'setup') {
         if (req.method === 'POST') {
           if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
