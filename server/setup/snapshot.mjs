@@ -15,6 +15,7 @@ import { COPIED } from './adapters/common.mjs';
 import { pickClaudeJson } from './adapters/claude.mjs';
 import { cutJson, cutText, cutFile } from './secrets.mjs';
 import { makeMapper } from './pathmap.mjs';
+import { npmRoot, npmGlobals } from './npm.mjs';
 import { createVault, unlock, readSecrets, writeSecrets, askSecret } from './vault.mjs';
 import { sha256, isText, git, fmtBytes } from './util.mjs';
 import { LAST_FILE } from './audit.mjs';
@@ -56,7 +57,9 @@ export async function buildSnapshot(env = machine(), log = () => {}) {
     unpushed: p.unpushed, dirty: p.dirty, synced: p.synced || null,
     rel: p.root.toLowerCase().startsWith(home.toLowerCase() + '/') ? p.root.slice(home.length + 1) : null,
   }));
-  const mapper = makeMapper([{ path: home, token: '@@ct-home@@' }, ...projects.map(p => ({ path: p.path, token: `@@ct-project:${p.n}@@` }))], env.platform === 'win32');
+  const npmroot = npmRoot();
+  const mapper = makeMapper([{ path: home, token: '@@ct-home@@' }, ...(npmroot ? [{ path: npmroot, token: '@@ct-npmroot@@' }] : []),
+    ...projects.map(p => ({ path: p.path, token: `@@ct-project:${p.n}@@` }))], env.platform === 'win32');
 
   const blobs = new Map();   // hash -> Buffer
   const secrets = {};        // id -> value; whole files as f:<hash> -> base64
@@ -145,6 +148,9 @@ export async function buildSnapshot(env = machine(), log = () => {}) {
     }
     entry.hash = put(Buffer.from(text, 'utf8'));
   }
+
+  const globals = npmGlobals();
+  if (globals.length) installs.unshift({ kind: 'npm-global', packages: globals });
 
   if (hooksInstalled()) register.push({ kind: 'codetycoon-hooks' });
   try { if (autostartInstalled()) register.push({ kind: 'codetycoon-autostart' }); } catch {}

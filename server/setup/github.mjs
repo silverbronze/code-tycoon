@@ -9,8 +9,20 @@ import { DATA_DIR } from '../paths.mjs';
 const FILE = path.join(DATA_DIR, 'github.json');
 const API = 'https://api.github.com';
 const UA = { 'user-agent': 'code-tycoon', accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' };
-// Set once Code Tycoon's GitHub App is registered; until then CODETYCOON_GITHUB_CLIENT_ID.
-const CLIENT_ID = process.env.CODETYCOON_GITHUB_CLIENT_ID || '';
+// Code Tycoon's GitHub App (public; a device-flow client ID is not a secret).
+// CODETYCOON_GITHUB_CLIENT_ID points at another App, e.g. for a fork.
+const APP = { clientId: 'Iv23lizXsTmcbwxJaWoe', slug: 'code-tycoon-sync' }; // github.com/apps/code-tycoon-sync, App ID 5860065
+const CLIENT_ID = process.env.CODETYCOON_GITHUB_CLIENT_ID || APP.clientId;
+export const installUrl = () => `https://github.com/apps/${process.env.CODETYCOON_GITHUB_APP_SLUG || APP.slug}/installations/new`;
+
+// A GitHub App's sign-in reaches only accounts the App is installed on (with every
+// repo, or the repos it creates are out of its reach). A plain token has no installations.
+export async function installed(token = githubToken()) {
+  if (!token || !savedLogin()?.token || token !== savedLogin().token) return true; // a personal token: not an App
+  const r = await api('GET', '/user/installations', token);
+  if (r.status !== 200) return true;
+  return (r.data.installations || []).some(i => i.repository_selection === 'all');
+}
 
 export function savedLogin() { try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return null; } }
 export function githubToken() {

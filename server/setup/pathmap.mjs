@@ -2,6 +2,7 @@
 // machine restores on another OS, user name or folder layout:
 //   @@ct-home@@             the home folder
 //   @@ct-project:<n>@@      the folder of project <n> in manifest.projects
+//   @@ct-npmroot@@          npm's global node_modules (`npm root -g`), where MCP servers often live
 // Windows spells one folder many ways (C:\Users\a, C:\\Users\\a in JSON text,
 // C:/Users/a, c:/users/a, /c/Users/a); every spelling maps to the same placeholder.
 import { norm, slugFor } from '../paths.mjs';
@@ -47,14 +48,15 @@ export function makeMapper(roots, win) {
   };
 }
 
-const TOKEN = /@@ct-(home|project:\d+)(?::(bb|b))?@@((?:(?:\\\\|\\|\/)[^\\/\s"'`,;:)\]}>@]*)*)/g;
+// path segments run to the next separator; `@` is allowed (scoped npm packages) but not `@@` (the next token)
+const TOKEN = /@@ct-(home|npmroot|project:\d+)(?::(bb|b))?@@((?:(?:\\\\|\\|\/)(?:(?!@@)[^\\/\s"'`,;:)\]}>])*)*)/g;
 
 // Back from placeholders to this machine's folders.
 // where: { home, projects: { '<n>': absolute path } }, win: target is Windows.
 // On Windows the path keeps the separators it was written with; elsewhere all become `/`.
 export function fillPaths(s, where, win) {
   return s.replace(TOKEN, (m, tok, style, rest) => {
-    const base = tok === 'home' ? where.home : where.projects[tok.slice(8)];
+    const base = tok === 'home' ? where.home : tok === 'npmroot' ? where.npmroot : where.projects[tok.slice(8)];
     if (!base) return m;
     if (!win) return norm(base) + rest.replace(/\\\\|\\|\//g, '/');
     const sep = style === 'bb' ? '\\\\' : style === 'b' ? '\\' : '/';

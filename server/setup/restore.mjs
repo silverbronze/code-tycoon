@@ -14,6 +14,7 @@ import { fillSecrets } from './secrets.mjs';
 import { fillPaths, fillSlug } from './pathmap.mjs';
 import { unlock, readSecrets, askSecret } from './vault.mjs';
 import { git, sha256 } from './util.mjs';
+import { npmRoot, installGlobals } from './npm.mjs';
 import { FORMAT, VERSION, isGitUrl } from './snapshot.mjs';
 
 const WIN_ONLY = /\.(vbs|bat|cmd|ps1|lnk|exe)$/i;
@@ -49,7 +50,7 @@ async function source(src) {
 export function planRestore(manifest, secrets, opts = {}) {
   const home = norm(opts.home || os.homedir());
   const win = (opts.platform || process.platform) === 'win32';
-  const where = { home, projects: {} };
+  const where = { home, projects: {}, npmroot: opts.npmroot !== undefined ? opts.npmroot : (npmRoot() || (win ? `${home}/AppData/Roaming/npm/node_modules` : '/usr/local/lib/node_modules')) };
   const projects = manifest.projects.map(p => {
     const name = p.name.replace(/[<>:"|?*]/g, '_');
     const dest = opts.projectsDir ? norm(path.resolve(opts.projectsDir, name))
@@ -137,7 +138,9 @@ export async function restore(src, opts = {}, log = console.log) {
   log(`  files: ${count('new')} new, ${count('replace')} replaced (old copies backed up), ${count('same')} already the same${plan.skipped.length ? `, ${plan.skipped.length} skipped` : ''}`);
   for (const p of plan.projects) log(`  project ${p.name}: ${p.action === 'clone' ? `clone ${p.remote} -> ${p.dest}` : p.action === 'exists' ? `${p.dest} already there` : `never pushed, cannot restore${p.synced ? ` (synced by ${p.synced})` : ''}`}`);
   for (const t of tools.filter(t => !t.present)) log(`  install ${t.name}: ${t.install}`);
-  if (manifest.installs.length) log(`  reinstall packages in ${manifest.installs.length} folder${manifest.installs.length > 1 ? 's' : ''}`);
+  const g = manifest.installs.find(i => i.kind === 'npm-global'), dirs = manifest.installs.filter(i => i.kind !== 'npm-global');
+  if (g) log(`  global npm packages: ${g.packages.map(p => p.name).join(', ')}`);
+  if (dirs.length) log(`  reinstall packages in ${dirs.length} folder${dirs.length > 1 ? 's' : ''}`);
   for (const r of manifest.register) log(`  register ${r.kind}`);
 
   if (!opts.yes) {
@@ -147,7 +150,14 @@ export async function restore(src, opts = {}, log = console.log) {
   }
 
   // tools first: hooks and MCP servers need them
-  if (opts.install !== false) for (const t of tools.filter(t => !t.present && t.install)) { log(`Installing ${t.name}…`); run(t.install.split(' ')[0] === 'npm' ? npmBin : t.install.split(' ')[0], t.install.split(' ').slice(1)); }
+  const globals = manifest.installs.find(i => i.kind === 'npm-global');
+  if (opts.install !== false) {
+    for (const t of tools.filter(t => !t.present && t.install)) {
+      if (globals?.packages.some(p => t.install.endsWith(' ' + p.name))) continue; // comes with the globals below
+      log(`Installing ${t.name}…`); run(t.install.split(' ')[0] === 'npm' ? npmBin : t.install.split(' ')[0], t.install.split(' ').slice(1));
+    }
+    if (globals) globals.result = installGlobals(globals.packages, log);
+  }
 
   // Order: setup files first (the SSH key and git config clone the private repos), then
   // the clones, then the files that go inside projects (.env).
@@ -203,6 +213,7 @@ export async function restore(src, opts = {}, log = console.log) {
   for (const f of plan.files) if (f.tool === 'project') writeOne(f);
 
   if (opts.install !== false) for (const i of manifest.installs) {
+    if (i.kind === 'npm-global') continue;
     const d = fillPaths(i.path, plan.where, plan.win);
     if (!fs.existsSync(path.join(d, i.kind === 'npm' ? 'package.json' : 'requirements.txt'))) continue;
     log(`Installing packages in ${d}…`);

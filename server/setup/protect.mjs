@@ -13,7 +13,7 @@ import path from 'node:path';
 import { DATA_DIR, norm, key } from '../paths.mjs';
 import { git as gitRun, fmtBytes, lstat } from './util.mjs';
 import { scanProjects } from './projects.mjs';
-import { createRepo, gitAuth, githubToken, whoami } from './github.mjs';
+import { createRepo, gitAuth, githubToken, whoami, installed, installUrl } from './github.mjs';
 
 const STATE = path.join(DATA_DIR, 'protect.json');
 export function protectState() { try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { return { provider: null, projects: {} }; } }
@@ -104,7 +104,9 @@ export async function providerReady(provider) {
   if (!provider) return { ok: false, why: 'no remote chosen' };
   if (provider.kind === 'folder') return { ok: true, label: provider.dir };
   const login = await whoami();
-  return login ? { ok: true, label: `GitHub ${provider.owner || login}`, login } : { ok: false, why: githubToken() ? 'the GitHub token was refused' : 'not signed in to GitHub' };
+  if (!login) return { ok: false, why: githubToken() ? 'the GitHub token was refused' : 'not signed in to GitHub' };
+  if (!await installed()) return { ok: false, why: `install the Code Tycoon app on your account with "All repositories": ${installUrl()}`, install: installUrl() };
+  return { ok: true, label: `GitHub ${provider.owner || login}`, login };
 }
 
 // ---------------------------------------------------------------- per project
