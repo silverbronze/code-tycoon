@@ -7,7 +7,7 @@ import { h, ago, dur, money, autoGrow } from './util';
 import { notify } from './notify';
 import './board.css';
 
-const STATE: Record<BoardTask['state'], string> = { routing: 'Finding project', unrouted: 'Pick project', ready: 'Ready', queued: 'Queued', running: 'Running',
+const STATE: Record<BoardTask['state'], string> = { routing: 'Finding project', unrouted: 'Pick project', targets: 'Pick projects', ready: 'Ready', queued: 'Queued', running: 'Running',
   'needs-you': 'Needs you', done: 'Done', failed: 'Failed', stopped: 'Stopped', paused: 'Paused' };
 const KIND: Record<BoardAsk['kind'], string> = { decision: 'Decide', secret: 'Secret', action: 'Do this', info: 'Tell it', approval: 'Approve', permission: 'Allow?' };
 const AUTO_KEY = 'vz-board-auto', MODE_KEY = 'vz-board-mode2', PAUSE_KEY = 'vz-board-pause';
@@ -23,6 +23,9 @@ export class BoardPanel {
   private errors = new Map<string, string>();
   private busy = new Set<string>();
   private open = new Set<string>();
+  private ticks = new Map<string, Set<string>>(); // fan-out: the projects ticked so far, per task
+  private moreOpen = new Set<string>();
+  private apart = new Set<string>(); // fan-out questions the user answers per project
   private showDone = false;
   private text: HTMLTextAreaElement;
   private fitText: () => void;
@@ -38,7 +41,7 @@ export class BoardPanel {
   private timer = 0;
 
   constructor() {
-    this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', placeholder: 'A task for any of your projects, or a list of them. Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
+    this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', placeholder: 'A task for any of your projects, a list of them, or one change for many (“in all my sites…”). Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.add(); } } });
     this.fitText = autoGrow(this.text);
     this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for' }, h('option', { value: '' }, 'Find the project for me'));
@@ -69,7 +72,7 @@ export class BoardPanel {
         const t = m.task as BoardTask, i = this.data.tasks.findIndex(x => x.id === t.id);
         const was = i >= 0 ? this.data.tasks[i] : null;
         if (i >= 0) this.data.tasks[i] = t; else this.data.tasks.unshift(t);
-        if ((t.state === 'needs-you' || t.state === 'unrouted' || t.state === 'paused') && was?.state !== t.state) this.alert(t);
+        if ((t.state === 'needs-you' || t.state === 'unrouted' || t.state === 'targets' || t.state === 'paused') && was?.state !== t.state) this.alert(t);
         this.render();
       }
       if (m.type === 'board-removed' && this.data) { this.data.tasks = this.data.tasks.filter(x => x.id !== m.id); this.render(); }
@@ -84,7 +87,7 @@ export class BoardPanel {
   // a desktop notification while the tab is in the background
   private alert(t: BoardTask) {
     if (!notify.on || (document.visibilityState === 'visible' && document.hasFocus())) return;
-    const n = new Notification(t.state === 'unrouted' ? 'Which project is this task for?' : t.state === 'paused' ? 'A step is done: check it' : 'A task needs you', { body: short(t.text, 120), tag: 'vz-board-' + t.id });
+    const n = new Notification(t.state === 'unrouted' ? 'Which project is this task for?' : t.state === 'targets' ? 'Which projects should this task run in?' : t.state === 'paused' ? 'A step is done: check it' : 'A task needs you', { body: short(t.text, 120), tag: 'vz-board-' + t.id });
     n.onclick = () => { window.focus(); location.hash = '#/'; n.close(); };
   }
 
@@ -142,10 +145,24 @@ export class BoardPanel {
   // ---------------------------------------------------------------- your to-do
   private todo(d: Board) {
     const items: HTMLElement[] = [], finished: HTMLElement[] = [];
-    for (const t of [...d.tasks].sort((a, b) => a.updated - b.updated)) {
+    const sorted = [...d.tasks].sort((a, b) => a.updated - b.updated);
+    // the same open question from several projects of one fan-out: one item, one answer for all
+    const twins = new Map<string, { t: BoardTask; a: BoardAsk }[]>();
+    const twinKey = (t: BoardTask, a: BoardAsk) => t.group?.fan && !this.apart.has(t.group.id + ':' + (a.twin || a.id)) ? t.group.id + ':' + (a.twin || a.id) : null;
+    for (const t of sorted) for (const a of t.asks) {
+      const k = a.answer == null && twinKey(t, a);
+      if (k) twins.set(k, [...(twins.get(k) || []), { t, a }]);
+    }
+    for (const t of sorted) {
       if (t.state === 'unrouted') items.push(this.routeItem(t, d));
+      if (t.state === 'targets') items.push(this.targetsItem(t, d));
       if (t.state === 'paused') items.push(this.reviewItem(t));
-      for (const a of t.asks) if (a.answer == null) items.push(this.askItem(t, a));
+      for (const a of t.asks) {
+        if (a.answer != null) continue;
+        const k = twinKey(t, a), all = k ? twins.get(k)! : [];
+        if (all.length > 1) { if (all[0].a === a) items.push(this.askItem(t, a, all)); }
+        else items.push(this.askItem(t, a));
+      }
       if (t.state === 'done' && t.seen === false) finished.push(this.doneItem(t));
     }
     if (!items.length && !finished.length) return [];
@@ -167,9 +184,9 @@ export class BoardPanel {
       this.err(key));
   }
 
-  private head(t: BoardTask, tag: string, cls = '', step?: number | null) {
+  private head(t: BoardTask, tag: string, cls = '', step?: number | null, proj?: string) {
     const st = step != null ? t.steps.find(x => x.n === step) : null;
-    return h('div', { class: 'bd-ihead' }, h('span', { class: 'bd-tag ' + cls }, tag), h('span', { class: 'bd-proj' }, t.project || 'No project yet'),
+    return h('div', { class: 'bd-ihead' }, h('span', { class: 'bd-tag ' + cls }, tag), h('span', { class: 'bd-proj', title: proj }, proj ? short(proj, 60) : t.project || 'No project yet'),
       st ? h('span', { class: 'bd-part', title: st.title }, `Step ${st.n}/${t.steps.length}`) : null,
       h('span', { class: 'bd-task', title: t.text }, short(t.text, 140)));
   }
@@ -189,18 +206,50 @@ export class BoardPanel {
       this.err(key));
   }
 
-  private askItem(t: BoardTask, a: BoardAsk) {
-    const key = t.id + ':' + a.id, busy = this.busy.has(key);
-    const send = (v: string) => this.act(t, 'answer', { ask: a.id, answer: v }, key);
+  // one change for several projects: the user ticks the projects it runs in
+  private targetsItem(t: BoardTask, d: Board) {
+    const key = t.id + ':fan', busy = this.busy.has(key);
+    const picks = t.fan?.picks || [];
+    let on = this.ticks.get(t.id);
+    if (!on) { on = new Set(picks.map(p => p.pid)); this.ticks.set(t.id, on); }
+    const ticked = on;
+    const box = (pid: string, name: string) => h('label', { class: 'bd-tick' + (ticked.has(pid) ? ' on' : '') },
+      h('input', { type: 'checkbox', checked: ticked.has(pid), disabled: busy, onchange: (e: Event) => {
+        if ((e.target as HTMLInputElement).checked) ticked.add(pid); else ticked.delete(pid);
+        this.render(); } }), name);
+    const rest = d.projects.filter(p => !picks.some(x => x.pid === p.id));
+    const n = ticked.size;
+    return h('div', { class: 'bd-item' },
+      this.head(t, 'Projects?', 'alarm'),
+      h('div', { class: 'bd-q' }, `The same change for ${picks.length} projects. Which should it run in?`),
+      t.route?.why ? h('div', { class: 'bd-why' }, t.route.why) : null,
+      h('div', { class: 'bd-ticks' }, ...picks.map(p => box(p.pid, p.name))),
+      rest.length ? h('details', { class: 'bd-more-p', open: this.moreOpen.has(t.id), ontoggle: (e: Event) => { if ((e.target as HTMLDetailsElement).open) this.moreOpen.add(t.id); else this.moreOpen.delete(t.id); } },
+        h('summary', {}, `Other projects (${rest.length})`), h('div', { class: 'bd-ticks' }, ...rest.map(p => box(p.id, p.name)))) : null,
+      h('div', { class: 'bd-opts' },
+        h('button', { class: 'chip go', disabled: busy || !n, title: 'One session per project, all at once', onclick: () => this.act(t, 'fan', { pids: [...ticked] }, key) },
+          n === 1 ? 'Run in 1 project' : `Run in ${n} projects`),
+        h('button', { class: 'chip ghost', disabled: busy, onclick: () => this.act(t, 'delete', {}, key) }, 'Drop task')),
+      this.err(key));
+  }
+
+  // all: the same question from other projects of a fan-out, answered together
+  private askItem(t: BoardTask, a: BoardAsk, all: { t: BoardTask; a: BoardAsk }[] = []) {
+    const key = t.id + ':' + a.id, busy = this.busy.has(key), many = all.length > 1;
+    const send = (v: string) => this.act(t, 'answer', { ask: a.id, answer: v, all: many }, key);
+    const proj = many ? all.map(x => x.t.project).join(', ') : undefined;
+    const tag = (k: string) => many ? `${k} ×${all.length}` : k;
+    const apart = many ? h('button', { class: 'chip ghost', disabled: busy, title: 'Show this question once per project, to answer each one differently',
+      onclick: () => { this.apart.add(t.group!.id + ':' + (a.twin || a.id)); this.render(); } }, 'Answer each separately') : null;
     if (a.kind === 'permission') {
       return h('div', { class: 'bd-item' },
-        this.head(t, KIND.permission, 'alarm', a.step),
+        this.head(t, tag(KIND.permission), 'alarm', a.step, proj),
         h('div', { class: 'bd-q' }, a.question, a.why ? h('span', { class: 'bd-why' }, ' ', a.why) : null),
         a.cmd ? h('pre', { class: 'bd-cmd' }, a.cmd) : a.detail ? h('pre', { class: 'bd-cmd' }, a.detail) : null,
         h('div', { class: 'bd-opts' },
           h('button', { class: 'chip go', disabled: busy, onclick: () => send('Allow') }, 'Allow'),
           h('button', { class: 'chip', disabled: busy, title: 'The session may run any command for this task, without asking again', onclick: () => send('Allow all commands for this task') }, 'Allow all for this task'),
-          h('button', { class: 'chip', disabled: busy, onclick: () => send('Deny') }, 'Deny')),
+          h('button', { class: 'chip', disabled: busy, onclick: () => send('Deny') }, 'Deny'), apart),
         this.err(key));
     }
     const box = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: a.kind === 'secret' ? 'Never paste the secret here. Put it where asked, then press Done.' : 'Your answer',
@@ -209,13 +258,14 @@ export class BoardPanel {
     box.value = this.drafts.get(key) || ''; autoGrow(box);
     const manual = a.kind === 'secret' || a.kind === 'action';
     return h('div', { class: 'bd-item' },
-      this.head(t, KIND[a.kind], a.kind === 'approval' || a.kind === 'secret' ? 'alarm' : '', a.step),
+      this.head(t, tag(KIND[a.kind]), a.kind === 'approval' || a.kind === 'secret' ? 'alarm' : '', a.step, proj),
       h('div', { class: 'bd-q' }, a.question),
       a.why ? h('div', { class: 'bd-why' }, a.why) : null,
       a.options.length ? h('div', { class: 'bd-opts' }, ...a.options.map(o => h('button', { class: 'chip', disabled: busy, onclick: () => send(o) }, o))) : null,
       h('div', { class: 'bd-answer' }, box,
         manual ? h('button', { class: 'chip go', disabled: busy, title: 'You did it yourself', onclick: () => send(box.value.trim() ? 'Done. ' + box.value.trim() : 'Done') }, 'Done') : null,
-        h('button', { class: 'chip' + (manual ? '' : ' go'), disabled: busy, onclick: () => { if (box.value.trim()) send(box.value); else box.focus(); } }, 'Send')),
+        h('button', { class: 'chip' + (manual ? '' : ' go'), disabled: busy, onclick: () => { if (box.value.trim()) send(box.value); else box.focus(); } }, many ? `Send to all ${all.length}` : 'Send')),
+      apart ? h('div', { class: 'bd-opts' }, apart) : null,
       this.err(key));
   }
 
@@ -248,12 +298,70 @@ export class BoardPanel {
       || ((a.group?.i ?? 0) - (b.group?.i ?? 0)));
     // a done task stays up top until its branch is merged
     const finished = (t: BoardTask) => t.state === 'done' && !unmerged(t);
-    const active = sorted.filter(t => !finished(t)), done = sorted.filter(finished);
+    // the tasks of one fan-out are one entry, done when all of them are
+    const entries: BoardTask[][] = [], fans = new Map<string, BoardTask[]>();
+    for (const t of sorted) {
+      if (!t.group?.fan) { entries.push([t]); continue; }
+      const g = fans.get(t.group.id);
+      if (g) g.push(t); else { const e = [t]; fans.set(t.group.id, e); entries.push(e); }
+    }
+    const show = (e: BoardTask[]) => e[0].group?.fan ? this.fanCard(e) : this.row(e[0]);
+    const active = entries.filter(e => !e.every(finished)), done = entries.filter(e => e.every(finished));
     return [
-      ...active.map(t => this.row(t)),
+      ...active.map(show),
       done.length ? h('button', { class: 'bd-more', onclick: () => { this.showDone = !this.showDone; this.render(); } }, `${this.showDone ? 'Hide' : 'Show'} done (${done.length})`) : null,
-      ...(this.showDone ? done.map(t => this.row(t)) : []),
+      ...(this.showDone ? done.map(show) : []),
     ].filter(Boolean) as HTMLElement[];
+  }
+
+  // one change in several projects: one card, a chip per project, actions for all of them
+  private fanCard(ts: BoardTask[]) {
+    const g = ts[0].group!, key = 'fan:' + g.id, busy = this.busy.has(key), isOpen = this.open.has(key);
+    const ORDER: BoardTask['state'][] = ['needs-you', 'paused', 'running', 'queued', 'failed', 'stopped', 'ready', 'routing', 'done'];
+    const st = ORDER.find(s => ts.some(t => t.state === s)) || ts[0].state;
+    const counts = ORDER.map(s => [s, ts.filter(t => t.state === s).length] as const).filter(([, n]) => n);
+    const merged = ts.filter(t => t.wt?.merge?.state === 'merged').length;
+    const line = counts.map(([s, n]) => `${n} ${STATE[s].toLowerCase()}`).join(' · ') + (merged ? ` · ${merged} merged` : '');
+    const cost = ts.reduce((a, t) => a + (t.cost || 0), 0);
+    const pick = (f: (t: BoardTask) => boolean) => ts.filter(f);
+    const ready = pick(t => t.state === 'ready'), stuck = pick(t => t.state === 'failed' || t.state === 'stopped');
+    const running = pick(t => t.state === 'running' || t.state === 'queued'), merge = pick(canMerge);
+    const btn = (label: string, list: BoardTask[], action: (t: BoardTask) => Parameters<typeof api.taskAction>[1], cls = 'chip', title?: string) =>
+      list.length ? h('button', { class: cls, disabled: busy, title, onclick: (e: Event) => { e.stopPropagation(); this.actAll(key, list, action); } }, list.length === ts.length || list.length === 1 && ts.length === 1 ? label : `${label} (${list.length})`) : null;
+    const acts = [
+      btn('Run all', ready, () => 'run', 'chip go'),
+      btn('Continue', stuck, t => t.runs.length ? 'again' : 'run', 'chip go', 'Resume the ones that failed or were stopped'),
+      btn('Stop all', running, () => 'stop'),
+      btn('Merge', merge, () => 'merge', 'chip go', 'Merge every branch that waits'),
+    ];
+    const strip = h('div', { class: 'bd-fan-strip' }, ...ts.map(t => h('span', { class: 'bd-fan-p ' + t.state,
+      title: `${t.project}: ${STATE[t.state]}${t.tldr ? '. ' + t.tldr : t.error ? '. ' + t.error : ''}` }, t.project || '?')));
+    return h('div', { class: 'bd-task-row bd-fan ' + st + (isOpen ? ' open' : '') },
+      h('div', { class: 'bd-main', onclick: () => { if (isOpen) this.open.delete(key); else this.open.add(key); this.render(); } },
+        h('span', { class: 'bd-state ' + st }, STATE[st]),
+        h('span', { class: 'bd-proj' }, `${ts.length} projects`),
+        h('div', { class: 'bd-body' }, h('div', { class: 'bd-text-1' }, short(ts[0].text, 160)), h('div', { class: 'bd-line' }, line), strip),
+        h('span', { class: 'bd-meta' }, cost ? money(cost) : '', h('i', {}, ago(Math.max(...ts.map(t => t.updated))))),
+        h('div', { class: 'bd-acts' }, ...acts)),
+      isOpen ? h('div', { class: 'bd-fan-rows' },
+        ...ts.map(t => this.row(t)),
+        ts.every(t => t.state !== 'running') ? h('div', { class: 'bd-opts' },
+          h('button', { class: 'chip ghost', disabled: busy, onclick: () => this.actAll(key, ts, () => 'delete') }, `Delete all ${ts.length}`)) : null) : null,
+      this.err(key));
+  }
+
+  private async actAll(key: string, list: BoardTask[], action: (t: BoardTask) => Parameters<typeof api.taskAction>[1]) {
+    if (this.busy.has(key)) return;
+    this.busy.add(key); this.errors.delete(key); this.render();
+    const errs: string[] = [];
+    await Promise.all(list.map(async t => {
+      try {
+        const r = await api.taskAction(t.id, action(t));
+        if (r.task && this.data) { const i = this.data.tasks.findIndex(x => x.id === t.id); if (i >= 0) this.data.tasks[i] = r.task; }
+      } catch (e) { errs.push(`${t.project}: ${(e as Error).message}`); }
+    }));
+    if (errs.length) this.errors.set(key, errs.join('; '));
+    this.busy.delete(key); this.render();
   }
 
   private row(t: BoardTask) {
@@ -293,7 +401,7 @@ export class BoardPanel {
         h('span', { class: 'bd-state ' + t.state }, STATE[t.state]),
         h('span', { class: 'bd-proj' }, t.project || '—'),
         h('div', { class: 'bd-body' }, h('div', { class: 'bd-text-1' },
-          t.group ? h('span', { class: 'bd-part', title: 'Split from: ' + short(t.group.source, 300) }, `${t.group.i + 1}/${t.group.n}`) : null, short(t.text, 160)), line ? h('div', { class: 'bd-line' }, short(line, 240)) : null),
+          t.group && !t.group.fan ? h('span', { class: 'bd-part', title: 'Split from: ' + short(t.group.source, 300) }, `${t.group.i + 1}/${t.group.n}`) : null, short(t.text, 160)), line ? h('div', { class: 'bd-line' }, short(line, 240)) : null),
         h('span', { class: 'bd-meta' }, N ? h('span', { class: 'bd-dots', title: t.steps.map(s => `${MARK[s.state]} ${s.n}. ${s.title}`).join('\n') }, t.steps.map(s => MARK[s.state]).join('')) : null,
           t.cost ? money(t.cost) : '', h('i', {}, ago(t.updated))),
         h('div', { class: 'bd-acts' }, ...acts)),
@@ -312,7 +420,8 @@ export class BoardPanel {
       h('div', { class: 'bd-full' }, t.text),
       t.route && t.project ? h('div', { class: 'bd-why' }, `Project: ${t.project}. ${t.route.why}`) : null,
       t.wt ? h('div', { class: 'bd-why' }, mergeLine(t)) : null,
-      t.group ? h('div', { class: 'bd-split' }, h('span', { class: 'bd-why' }, `Part ${t.group.i + 1} of ${t.group.n}, split from what you wrote:`),
+      t.group?.fan ? h('div', { class: 'bd-why' }, `The same change in ${t.group.n} projects: ${(t.group.names || []).join(', ')}`) : null,
+      t.group && !t.group.fan ? h('div', { class: 'bd-split' }, h('span', { class: 'bd-why' }, `Part ${t.group.i + 1} of ${t.group.n}, split from what you wrote:`),
         h('div', { class: 'bd-src' }, t.group.source),
         h('button', { class: 'chip', disabled: busy, title: 'Undo the split: one task with your original text, routed to one project', onclick: () => this.act(t, 'join') }, 'Join back into one task')) : null,
       t.steps.length ? h('div', { class: 'bd-steps' }, h('span', { class: 'bd-why' }, 'The plan:'), ...t.steps.map(s => h('div', { class: 'bd-step ' + s.state },
@@ -323,7 +432,7 @@ export class BoardPanel {
       t.runs.length ? h('div', { class: 'bd-runs' }, ...t.runs.map(r => h('div', { class: 'bd-run' },
         h('b', {}, `Run ${r.n + 1}${r.step != null ? ` · step ${r.step}` : ''}`), h('span', {}, r.status), h('span', {}, r.ended ? dur(r.ended - r.started) : 'running'), r.cost ? h('span', {}, money(r.cost)) : null,
         r.summary || r.error ? h('div', { class: 'bd-sum' }, r.summary || r.error) : null))) : null,
-      answered.length ? h('div', { class: 'bd-qa' }, ...answered.map(a => h('div', {}, h('span', { class: 'bd-why' }, a.cmd ? `Command ${a.cmd}` : a.question), ' → ', h('b', {}, a.answer)))) : null,
+      answered.length ? h('div', { class: 'bd-qa' }, ...answered.map(a => h('div', {}, h('span', { class: 'bd-why' }, a.cmd ? `Command ${a.cmd}` : a.question), ' → ', h('b', {}, a.answer), a.auto ? h('span', { class: 'bd-why' }, ` (your answer in ${a.auto})`) : null))) : null,
       h('div', { class: 'bd-opts' },
         h('label', { class: 'bd-auto' }, 'Commands',
           h('select', { class: 'bd-sel', disabled: busy || t.state === 'running', onchange: (e: Event) => this.act(t, 'mode', { mode: (e.target as HTMLSelectElement).value }) },

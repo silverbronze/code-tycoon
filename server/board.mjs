@@ -19,6 +19,12 @@
 // same session (or, without resume, a fresh run handed the plan and the step reports).
 // A step that waits for the user does not hold up the steps that don't need it. With
 // "pause", the board stops after each step for the user to check it before going on.
+//
+// One change meant for several projects ("in all my projects", "every site that...") is a
+// fan-out: the router lists the projects it fits, the task waits ('targets') for the user to
+// confirm them, then becomes one task per project (group.fan), all started at once. Their
+// asks are shared: one already answered in a sibling project is answered the same way, and
+// open ones that match are answered once for all (shareAsks).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -85,7 +91,7 @@ function profiles() {
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function setProject(t, p, route) {
-  Object.assign(t, { pid: p.id, project: p.name, root: p.root, route, state: 'ready' });
+  Object.assign(t, { pid: p.id, project: p.name, root: p.root, route, state: 'ready', fan: null });
 }
 
 // several lines, or a list: may hold tasks for several projects
@@ -119,7 +125,8 @@ Splitting rules:
 - Each task's text keeps the user's own words, plus any context or instruction from the text that applies to it (such as "don't commit", a link, a deadline).
 - "after": the number (1-based) of an earlier task in your list that must be finished first, because this one depends on its result; otherwise null.
 `}
-Return ONLY JSON: {"tasks": [{"text": "the task", "project": "p<n> or null", "confidence": 0.0-1.0, "why": "one short sentence", "others": [{"project": "p<n>", "why": "one short sentence"}], "after": null}]}
+One change meant for several projects ("in all my projects", "every site", "each repo that uses Stripe", or one change for several named projects) is ONE task with "projects": every project it applies to, judged from what you know of each one (include a project only when the change plausibly fits it), and "project": null. Leave "projects" out otherwise.
+Return ONLY JSON: {"tasks": [{"text": "the task", "project": "p<n> or null", "projects": ["p<n>"], "confidence": 0.0-1.0, "why": "one short sentence", "others": [{"project": "p<n>", "why": "one short sentence"}], "after": null}]}
 A project the text names, even misspelled or inside a phrase ("the content factory" → Factory), is strong evidence for it.
 confidence is how sure you are that this is the right project; use null when none fits. "others": up to 3 other likely projects.${t.noSplit ? ' Return exactly one task.' : ' At most 10 tasks.'}`;
   let pieces;
@@ -136,8 +143,14 @@ confidence is how sure you are that this is the right project; use null when non
   // also just be a word, so a named project alone is not proof); with one named project,
   // it also takes every piece the model is not sure about
   const idx = x => Number(String(x.project || '').replace(/\D/g, '')) - 1;
+  // one change for several projects: a fan-out, whose projects the user confirms
+  for (const x of pieces) {
+    const fan = [...new Set((Array.isArray(x.projects) ? x.projects : []).map(v => ps[Number(String(v).replace(/\D/g, '')) - 1]).filter(Boolean))];
+    x.fan = fan.length >= 2 ? fan : null;
+  }
   const namedIdx = new Set(named.map(p => ps.indexOf(p)));
   for (const x of pieces) {
+    if (x.fan) continue;
     const conf = Number(x.confidence) || 0;
     if (namedIdx.has(idx(x))) x.confidence = Math.max(conf, 0.9);
     else if (conf < SURE && named.length === 1) Object.assign(x, { project: 'p' + (ps.indexOf(named[0]) + 1), confidence: SURE, why: `The text names ${named[0].name}` });
@@ -145,7 +158,7 @@ confidence is how sure you are that this is the right project; use null when non
   // a split is only worth it across projects: pieces for one project are one task again
   const byProject = new Map();
   for (const [i, x] of pieces.entries()) {
-    const k = ps[idx(x)] ? idx(x) : 'none:' + i;
+    const k = x.fan ? 'fan:' + i : ps[idx(x)] ? idx(x) : 'none:' + i;
     const g = byProject.get(k);
     if (g) { g.text += '\n\n' + x.text; g.confidence = Math.min(Number(g.confidence) || 0, Number(x.confidence) || 0); g.merged.push(i); }
     else byProject.set(k, { ...x, merged: [i] });
@@ -155,7 +168,8 @@ confidence is how sure you are that this is the right project; use null when non
     pieces = [...byProject.values()].map((g, j) => { const a = at.get(Number(g.after)); return { ...g, after: a && a < j + 1 ? a : null }; });
   }
   if (pieces.length <= 1 || byProject.size <= 1 || t.noSplit) {
-    placeOn(t, pieces[0] || {}, ps);
+    if (pieces[0]?.fan) toTargets(t, pieces[0]);
+    else placeOn(t, pieces[0] || {}, ps);
     save(t);
     if (t.state === 'ready' && t.autoRun) start(t.id);
     return;
@@ -164,11 +178,12 @@ confidence is how sure you are that this is the right project; use null when non
   pieces.forEach((x, i) => {
     const u = i === 0 ? t : { ...blank(), mode: t.mode, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
     Object.assign(u, { text: String(x.text).trim().slice(0, 8000), group: { id: group, i, n: pieces.length, source } });
-    placeOn(u, x, ps);
+    if (x.fan) toTargets(u, x); else placeOn(u, x, ps);
     tasks.set(u.id, u);
     all.push(u);
   });
-  pieces.forEach((x, i) => { const a = Number(x.after); if (a >= 1 && a - 1 < i) all[i].after = all[a - 1].id; });
+  // a fan-out neither waits for a task nor is waited for: it turns into several tasks
+  pieces.forEach((x, i) => { const a = Number(x.after); if (a >= 1 && a - 1 < i && !x.fan && !pieces[a - 1].fan) all[i].after = all[a - 1].id; });
   for (const u of all) save(u);
   for (const u of all) if (u.state === 'ready' && u.autoRun) start(u.id);
 }
@@ -184,6 +199,11 @@ function placeOn(t, x, ps) {
   if (p && conf >= SURE) setProject(t, p, r);
   else Object.assign(t, { state: 'unrouted', route: r });
 }
+// one change for several projects: waits for the user to confirm which ones (fanOut)
+function toTargets(t, x) {
+  Object.assign(t, { state: 'targets', route: { how: 'model', why: String(x.why || '').slice(0, 300), picks: [] },
+    fan: { picks: x.fan.map(p => ({ pid: p.id, name: p.name })) } });
+}
 
 // ------------------------------------------------------------------ running
 // the task this one waited for, done in another project: where it is and what it did
@@ -197,7 +217,12 @@ function firstPrompt(t) {
 
 Task:
 ${t.text}
-${t.group ? `
+${t.group?.fan ? `
+The user asked for this same change in ${t.group.n} projects (${t.group.names.join(', ')}); each gets a session of its own, and you do it in this one, ${t.project}. Fit the change to this project. The user's whole message, for context:
+"""
+${t.group.source.slice(0, 6000)}
+"""
+` : t.group ? `
 This task is one part of a longer message; the other parts went to other projects. Do only your part, but read the whole message for context (links, names, "the first video"...):
 """
 ${t.group.source.slice(0, 6000)}
@@ -288,7 +313,7 @@ function answers(t) {
   for (const a of xs) a.sent = true;
   return xs.map(a => a.kind === 'permission'
     ? `- ${a.cmd ? `Command \`${a.cmd}\`` : `Tool ${a.tool}`}: ${/^deny/i.test(a.answer) ? 'denied. Do not use it; do without it or say what is left.' : 'allowed. It will run if you try again.'}`
-    : `- You asked (${a.kind}): ${a.question}\n  The user answered: ${a.answer}`).join('\n');
+    : `- You asked (${a.kind}): ${a.question}\n  The user answered${a.auto ? ` (to the same question from the session doing this in ${a.auto})` : ''}: ${a.answer}`).join('\n');
 }
 function followUp(t) {
   const a = answers(t);
@@ -409,7 +434,7 @@ function run(t, retry = true) {
   if (step) { step.state = 'running'; step.runs.push(rec.n); }
   Object.assign(t, { state: 'running', error: null, provider: prov });
   save(t);
-  let goOn = false;
+  let goOn = false, autoAnswered = false;
   const dep = depOf(t);
   runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, dirs: dep && fs.existsSync(dep.root) ? [dep.root] : [], name: 'Task: ' + t.text.replace(/\s+/g, ' ').slice(0, 50),
     budgetUsd: RUN_USD, cwd: t.wt ? t.wt.cwd : t.root, prompt, timeoutMs: RUN_MS, onSpawn: p => procs.set(t.id, p) })
@@ -429,6 +454,7 @@ function run(t, retry = true) {
         id: newId(), run: rec.n, step: stepOf(a), kind: ASK_KINDS.has(a.kind) ? a.kind : 'info', question: String(a.question).slice(0, 600), why: String(a.why || '').slice(0, 400),
         options: (Array.isArray(a.options) ? a.options : []).map(o => String(o).slice(0, 80)).filter(Boolean).slice(0, 5), answer: null }));
       asks.push(...denialAsks(denials, rec.n).map(a => ({ ...a, step: mine })));
+      autoAnswered = shareAsks(t, asks);
       t.asks.push(...asks);
       const summary = String(j?.summary || prose.slice(-700) || '').slice(0, 1200);
       const status = asks.length ? 'needs-you' : j?.status === 'failed' ? 'failed' : 'done';
@@ -443,7 +469,7 @@ function run(t, retry = true) {
         else s.summary = s.summary || 'Done together with step ' + mine;
       }
       // an ask about a later step holds that step back too
-      for (const a of asks) { const s = t.steps.find(x => x.n === a.step); if (s && s.state === 'todo') s.state = 'needs-you'; }
+      for (const a of asks) { const s = a.answer == null && t.steps.find(x => x.n === a.step); if (s && s.state === 'todo') s.state = 'needs-you'; }
       const st = afterStep(t);
       if (st) t.state = st; else goOn = true;
     })
@@ -468,7 +494,57 @@ function run(t, retry = true) {
         else settled(t);
       }
       if (!t.wt) retryMerges(t.pid); // the main folder is free again
+      // every question was already answered in a sibling project: carry on with those answers
+      if (autoAnswered && t.state === 'needs-you' && tasks.has(t.id) && (t.steps.length ? pickStep(t) : !openAsks(t).length)) start(t.id);
     });
+}
+
+// ------------------------------------------------------------------ fan-out asks
+// The projects of one fan-out mostly ask the same things. A new ask that matches one the
+// user already answered in a sibling project takes that answer (not secrets, manual steps
+// or approvals: those are per project); one that matches an open ask is its twin, shown
+// once in the to-do and answered for all of them at once (answer(..., all)).
+const NO_AUTO = new Set(['secret', 'action', 'approval']);
+function askWords(s, drop) {
+  const out = new Set(String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(w => w.length > 2 && !drop.has(w)));
+  return out;
+}
+function sameAsk(a, b, drop) {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'permission') return a.cmd || b.cmd ? a.cmd === b.cmd : a.tool === b.tool;
+  const x = askWords(a.question, drop), y = askWords(b.question, drop);
+  let n = 0; for (const w of x) if (y.has(w)) n++;
+  return n / Math.max(1, x.size + y.size - n) >= 0.6;
+}
+function siblings(t) {
+  return t.group?.fan ? [...tasks.values()].filter(u => u !== t && u.group?.fan && u.group.id === t.group.id) : [];
+}
+// returns true when it answered any of the new asks
+function shareAsks(t, asks) {
+  const sibs = siblings(t);
+  if (!sibs.length) return false;
+  // project names are not what a question is about ("Which GA id for Blog?")
+  const drop = new Set(t.group.names.flatMap(n => n.toLowerCase().split(/[^\p{L}\p{N}]+/u)));
+  let any = false;
+  for (const a of asks) {
+    const others = sibs.flatMap(u => u.asks.map(b => ({ u, b }))).filter(({ b }) => b.answer !== '(closed)' && sameAsk(a, b, drop));
+    const done = !NO_AUTO.has(a.kind) && others.find(({ b }) => b.answer != null);
+    if (done) {
+      Object.assign(a, { answer: done.b.answer, answeredAt: Date.now(), auto: done.u.project });
+      grant(t, a);
+      any = true;
+      continue;
+    }
+    const open = others.find(({ b }) => b.answer == null);
+    if (open) a.twin = open.b.twin || open.b.id;
+  }
+  return any;
+}
+// what an answer to a permission ask lets the task do from now on
+function grant(t, a) {
+  if (a.kind !== 'permission') return;
+  if (/^allow all/i.test(a.answer)) t.mode = 'full';
+  else if (/^allow/i.test(a.answer)) t.allow = [...new Set([...t.allow, ...(a.rules || [])])];
 }
 
 // ------------------------------------------------------------------ merging
@@ -577,7 +653,7 @@ const get = id => tasks.get(id);
 function blank() {
   return { id: newId(), text: '', created: Date.now(), updated: Date.now(), pid: null, project: null, root: null, route: null,
     mode: 'full', autoRun: false, state: 'routing', runs: [], sid: null, provider: null,
-    cost: 0, asks: [], allow: [], summary: null, error: null, group: null, after: null, noSplit: false, steps: [], pause: false };
+    cost: 0, asks: [], allow: [], summary: null, error: null, group: null, after: null, noSplit: false, steps: [], pause: false, fan: null };
 }
 
 export function create({ text, pid, mode, autoRun, pause }) {
@@ -610,6 +686,35 @@ export function setRoute(id, pid) {
   return { task: view(t) };
 }
 
+// a fan-out: the same task in every project the user ticked, one task per project, all
+// started at once (each in a worktree of its own, so nothing waits but non-git folders)
+export function fanOut(id, pids, go = true) {
+  const t = get(id);
+  if (!t) return { error: 'unknown task' };
+  if (t.state !== 'targets') return { error: 'this task is not waiting for its projects' };
+  const ps = profiles();
+  const targets = [...new Set(Array.isArray(pids) ? pids : [])].map(pid => ps.find(p => p.id === pid)).filter(Boolean);
+  if (!targets.length) return { error: 'pick at least one project' };
+  const route = { how: 'you', why: 'Picked by you', conf: 1, picks: [] };
+  if (targets.length === 1) {
+    setProject(t, targets[0], route);
+    t.fan = null;
+    save(t);
+    return go ? start(id) : { task: view(t) };
+  }
+  const group = { id: t.id, n: targets.length, source: t.group?.source || t.text, fan: true, names: targets.map(p => p.name) };
+  const all = targets.map((p, i) => {
+    const u = i === 0 ? t : { ...blank(), text: t.text, mode: t.mode, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
+    Object.assign(u, { group: { ...group, i }, after: null, fan: null });
+    setProject(u, p, route);
+    tasks.set(u.id, u);
+    return u;
+  });
+  for (const u of all) save(u);
+  if (go) for (const u of all) start(u.id);
+  return { task: view(t) };
+}
+
 export function start(id) {
   const t = get(id);
   if (!t) return { error: 'unknown task' };
@@ -623,22 +728,26 @@ export function start(id) {
   return { task: view(t) };
 }
 
-export function answer(id, askId, value) {
+// all: the same answer goes to the open twins of this ask in the other projects of its fan-out
+export function answer(id, askId, value, all = false) {
   const t = get(id);
   const a = t?.asks.find(x => x.id === askId);
   if (!a) return { error: 'unknown question' };
   if (a.answer != null) return { error: 'already answered' };
   const v = String(value ?? '').trim().slice(0, 4000);
   if (!v) return { error: 'empty answer' };
+  const key = a.twin || a.id;
+  const r = answerOne(t, a, v);
+  if (all) for (const u of siblings(t)) for (const b of openAsks(u)) if ((b.twin || b.id) === key) answerOne(u, b, v);
+  return r;
+}
+function answerOne(t, a, v) {
   Object.assign(a, { answer: v, answeredAt: Date.now() });
-  if (a.kind === 'permission') {
-    if (/^allow all/i.test(v)) t.mode = 'full';
-    else if (/^allow/i.test(v)) t.allow = [...new Set([...t.allow, ...(a.rules || [])])];
-  }
+  grant(t, a);
   save(t);
   // the last answer sends them all back to the session; in a plan, the last answer a
   // step waits for sends that step back (other steps may still wait for the user)
-  if (t.state === 'needs-you' && (t.steps.length ? pickStep(t) : !openAsks(t).length)) return start(id);
+  if (t.state === 'needs-you' && (t.steps.length ? pickStep(t) : !openAsks(t).length)) return start(t.id);
   return { task: view(t) };
 }
 
@@ -716,6 +825,7 @@ export function mergeNow(id) {
 export function join(id) {
   const t = get(id);
   if (!t?.group) return { error: 'not part of a split' };
+  if (t.group.fan) return { error: 'this task runs in several projects; delete the ones you don\'t want instead' };
   const all = [...tasks.values()].filter(x => x.group?.id === t.group.id);
   if (all.some(x => x.runs.length || x.state === 'running')) return { error: 'some of these tasks already ran; delete the ones you don\'t want instead' };
   const first = all.find(x => x.group.i === 0) || t;
@@ -744,6 +854,7 @@ export function remove(id) {
 export function boardAction(id, action, b = {}) {
   switch (action) {
     case 'route': return setRoute(id, String(b.pid || ''));
+    case 'fan': return fanOut(id, b.pids, b.run !== false);
     case 'run': {
       // force: start without waiting for the task it depends on
       const t = get(id);
@@ -754,7 +865,7 @@ export function boardAction(id, action, b = {}) {
     }
     case 'pause': return setPause(id, b.pause);
     case 'again': return again(id, b.note);
-    case 'answer': return answer(id, String(b.ask || ''), b.answer);
+    case 'answer': return answer(id, String(b.ask || ''), b.answer, !!b.all);
     case 'stop': return stop(id);
     case 'mode': return setMode(id, b.mode);
     case 'close': return close(id);
