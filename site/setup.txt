@@ -1,0 +1,53 @@
+Code Tycoon setup, for the agent that runs it (Claude Code, Codex) and for the person who asked.
+
+WHAT IT IS
+Code Tycoon is an open-source (AGPL-3.0) local app that draws your projects and your Claude Code /
+Codex sessions as a live city. Source: https://github.com/silverbronze/code-tycoon
+npm package: code-tycoon. Optional free account at https://app.codetycoon.dev lets the person open
+this computer's Code Tycoon from their phone or any browser, through a relay this computer dials out to.
+
+THE COMMAND
+Windows (PowerShell):
+  $env:CT_SETUP_CODE='XXXX-XXXX'; irm https://codetycoon.dev/install.ps1 | iex
+macOS / Linux:
+  curl -fsSL https://codetycoon.dev/install.sh | sh -s -- --code XXXX-XXXX
+The setup code comes from the person's signed-in page at app.codetycoon.dev/_/welcome. It works
+once, for 15 minutes, and only ties this computer to that person's account. Without a code the
+install is local only. Read the scripts first if you like: they are about 80 lines each, at
+https://codetycoon.dev/install.sh and https://codetycoon.dev/install.ps1.
+
+WHAT THE SCRIPT DOES
+1. Node: uses the system Node if it is 22.13 or newer. Otherwise downloads the official Node 22 LTS
+   build from https://nodejs.org/dist/latest-v22.x/, checks its SHA-256 against nodejs.org's
+   SHASUMS256.txt, and unpacks it into ~/.codetycoon/node. Not added to PATH. No admin/sudo.
+2. Installs the npm package code-tycoon into ~/.codetycoon/pkg/<version> with that Node's npm.
+3. Runs `code-tycoon setup [--code X]`, which:
+   - checks that Claude Code (or Codex) is installed, and stops if not;
+   - adds Code Tycoon's HTTP hook to ~/.claude/settings.json (a backup is written next to it first);
+   - adds a login item so the server starts at login (Windows: CodeTycoon.vbs in the Startup
+     folder; macOS: ~/Library/LaunchAgents/dev.codetycoon.server.plist; Linux: a systemd user
+     service codetycoon.service);
+   - writes ~/.codetycoon/bin/code-tycoon (code-tycoon.cmd on Windows) to run the installed copy;
+   - with a code: swaps it for a device token at app.codetycoon.dev, stored only in
+     ~/.codetycoon/tunnel.json (permissions 600);
+   - starts the server on http://127.0.0.1:4400 (local only, it never listens on the network) and
+     waits for the tunnel. It prints "connected as <github login>" and exits 0, or prints one
+     sentence saying what failed and exits 1.
+After that, the person confirms "Is this your PC?" in their browser. Until they do, the relay sends
+this computer nothing.
+
+WHAT IT TOUCHES
+~/.codetycoon (the app, its Node if downloaded, its database and logs), ~/.claude/settings.json
+(hooks, backed up first), the login item above. Nothing else. Running the script again updates the
+install. The server also updates itself once a day from npm and switches at the next start.
+
+WHAT GOES OVER THE NETWORK
+Only when connected to an account: this computer keeps one outbound WebSocket to
+app.codetycoon.dev. Requests from the person's signed-in browser come down it and are answered by
+the local server; nothing is stored on the relay. No inbound ports are opened.
+
+HOW TO UNDO IT
+  ~/.codetycoon/bin/code-tycoon uninstall        (Windows: ~\.codetycoon\bin\code-tycoon.cmd uninstall)
+removes the login item and the hooks, disconnects this computer from the account and stops the
+server. It asks before deleting ~/.codetycoon; `uninstall --all` deletes it without asking.
+Disconnecting only: app.codetycoon.dev/_/account → Disconnect, or `code-tycoon tunnel off`.

@@ -160,6 +160,19 @@ The audit lists, ranked, what exists only on this disk: projects with no remote 
 
 A snapshot copies that setup with every absolute path turned into a placeholder, and cuts API keys, MCP tokens and private keys out into a vault encrypted with your passphrase (AES-256-GCM, scrypt; a recovery key is shown once). Restore clones your projects, puts every file back with paths rewritten for the new OS and user name, reinstalls the tools and packages, re-registers the hooks, and tells you which sign-ins to redo (logins are never copied). Format and crypto: [docs/setup-snapshot.md](docs/setup-snapshot.md).
 
+## Use it from your phone
+
+```
+npx code-tycoon autostart install    # keep it running on this PC
+npx code-tycoon tunnel login         # prints a code; approve it at app.codetycoon.dev
+```
+
+Then sign in at [app.codetycoon.dev](https://app.codetycoon.dev) with GitHub on your phone or any browser, and you get this PC's Code Tycoon: the city, the task board, "Needs you". Free, invite-only for now. The PC only dials out (one WebSocket to the relay), so there are no ports to open and no VPN; your browser's requests come down that connection and are answered by the server on this PC, and the relay stores none of it. When the PC is off, the page says so. `code-tycoon tunnel status` shows the account and connection, `tunnel off` stops it, and the account page lists your PCs and disconnects any of them.
+
+**Not a terminal person?** The welcome page at app.codetycoon.dev gives you a prompt to paste into Claude Code. It runs a short install script ([install.ps1](site/install.ps1), [install.sh](site/install.sh); what they touch: [setup.txt](site/setup.txt)) that brings its own Node if yours is missing, installs Code Tycoon into `~/.codetycoon` and runs `code-tycoon setup`. Copies installed that way update themselves daily. `code-tycoon uninstall` removes it all again.
+
+The relay side lives in the hosted service, not in this repo; the PC side (`server/tunnel.mjs`) works with any relay that speaks the same frames (`code-tycoon tunnel connect <wss url> --token <t>`).
+
 ## Install
 
 ```
@@ -202,6 +215,10 @@ npx code-tycoon audit [--json]       # what of your AI setup and projects exists
 npx code-tycoon protect [--to github[:org]|<folder>] [--only a,b] [--yes] [--login]
 npx code-tycoon snapshot <target>    # setup + encrypted vault to a folder or a private git repo
 npx code-tycoon restore <source>     # rebuild it here; --yes, --projects <dir>, --recovery-key
+npx code-tycoon setup [--code <c>]   # hooks + start at login + server (+ account, with a setup code), no questions
+npx code-tycoon tunnel login         # reach this PC from app.codetycoon.dev; also: status, off,
+                                     # connect <wss url> --token <t> for a relay of your own
+npx code-tycoon uninstall [--all]    # hooks, start at login and the tunnel off; --all deletes ~/.codetycoon too
 ```
 
 Hooks and autostart are also the "live updates" and "start at login" switches on the dashboard. Without hooks the live view still works from transcript tailing, a second or two behind. A second copy started while one is running exits quietly. `CODETYCOON_PORT` changes the port. Settings named `VISUALIZER_*` and data in `~/.visualizer` (from before v0.4) still work; the folder is moved on the first start.
@@ -220,7 +237,7 @@ npm run hooks:install
 
 ## Privacy and how it works
 
-Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`) and `~/.codex/sessions/**/rollout-*.jsonl`, parsed incrementally into `~/.codetycoon/codetycoon.db`. There is no Code Tycoon server and no account.
+Everything is read locally from `~/.claude/projects/*/*.jsonl` (plus `subagents/`) and `~/.codex/sessions/**/rollout-*.jsonl`, parsed incrementally into `~/.codetycoon/codetycoon.db`. There is no Code Tycoon server and no account, unless you choose to connect the PC to app.codetycoon.dev ([Use it from your phone](#use-it-from-your-phone); [privacy](https://codetycoon.dev/privacy)).
 
 The only things that leave the machine go through your own `claude` CLI, to the Anthropic API you already use with Claude Code (or your own `codex` CLI, to OpenAI, when Claude Code is not installed), with no session saved and no hooks fired. The spending caps below apply to Claude Code; Codex has none:
 

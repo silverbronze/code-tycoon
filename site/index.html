@@ -268,6 +268,12 @@ button{font:inherit;cursor:pointer;color:inherit}
 .plan .cmd__code{white-space:nowrap;overflow-wrap:normal;font-size:.8125rem}
 .badge{align-self:flex-start;font-family:var(--font-mono);font-size:.6875rem;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:var(--r-full);background:var(--ink);color:#fff}
 .plans-note{margin-top:24px;text-align:center;font-size:.875rem;color:var(--text-2)}
+.anywhere{display:grid;gap:16px;align-items:center;margin-top:32px;padding:24px;border:1px solid var(--border-raised);border-radius:var(--r-lg);background:var(--card)}
+@media (min-width:860px){.anywhere{grid-template-columns:1fr auto;padding:28px 32px}}
+.anywhere h3{font-family:var(--font-h);font-size:1.25rem;font-weight:600;letter-spacing:-.02em}
+.anywhere p{color:var(--text-2);font-size:.9375rem;margin-top:6px;max-width:60ch}
+.anywhere .btn-line{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 22px;border-radius:var(--r-full);border:1px solid var(--border-raised);background:#fff;font-weight:600;text-decoration:none;white-space:nowrap}
+.anywhere .btn-line:hover{background:var(--hover)}
 
 /* faq */
 .faq{max-width:800px;margin:40px auto 0}
@@ -736,6 +742,14 @@ button{font:inherit;cursor:pointer;color:inherit}
       <div class="plan__cta"><a class="btn-line" href="mailto:hello@codetycoon.dev?subject=Code%20Tycoon%20Max">Get Max</a></div>
     </div>
   </div>
+  <div class="anywhere" id="anywhere">
+    <div>
+      <span class="badge">Free</span>
+      <h3 style="margin-top:10px">Your own PC, from anywhere</h3>
+      <p>Sign in with GitHub at app.codetycoon.dev and connect the computer you already work on. Then open your city, your tasks and "Needs you" from your phone or any browser. Your PC only dials out: no open ports, no VPN. Invite-only while the first people try it.</p>
+    </div>
+    <a class="btn-line" href="https://app.codetycoon.dev/_/welcome">Connect your PC</a>
+  </div>
   <p class="plans-note">Hosted plans are billed monthly, cancel anytime. Model usage runs on your own Claude or ChatGPT subscription or API key.</p>
 </section>
 
@@ -796,6 +810,8 @@ button{font:inherit;cursor:pointer;color:inherit}
       <a href="https://www.npmjs.com/package/code-tycoon" rel="noopener">npm</a>
       <a href="https://github.com/silverbronze/code-tycoon/blob/main/LICENSE" rel="noopener">License (AGPL-3.0)</a>
       <a href="https://github.com/silverbronze/code-tycoon/issues" rel="noopener">Report an issue</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
     </nav>
     <p class="footer__fine">© 2026 Code Tycoon. Not made or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</p>
   </div>

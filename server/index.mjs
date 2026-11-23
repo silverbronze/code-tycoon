@@ -27,7 +27,8 @@ import { autostartSupported, autostartInstalled, setAutostart } from './autostar
 import { onBoard, listBoard, create as createTask, boardAction, taskOutput } from './board.mjs';
 import { voiceStatus, voiceCommand } from './voice.mjs';
 import { accountLimits, accountLimitsNow } from './limits.mjs';
-import { startTunnel, tunnelStatus } from './tunnel.mjs';
+import { startTunnel, tunnelStatus, reloadTunnel } from './tunnel.mjs';
+import { startUpdates, updateStatus } from './update.mjs';
 import { onSync, syncStatus, setSync, syncSoon, syncProject, rebaseNow } from './gitsync.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
@@ -408,7 +409,10 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, coach({ pid: u.searchParams.get('pid') || null, days }), req);
       }
       // the tunnel to a relay (server/tunnel.mjs): whether this PC is reachable from outside
-      if (parts[1] === 'tunnel') return send(res, 200, tunnelStatus(), req);
+      if (parts[1] === 'tunnel') {
+        if (req.method === 'POST' && parts[2] === 'reload') return send(res, 200, reloadTunnel(), req);
+        return send(res, 200, { ...tunnelStatus(), update: updateStatus() }, req);
+      }
       // the task board (server/board.mjs): GET the tasks, POST a new one, POST /<id>/<action>
       if (parts[1] === 'board') {
         if (req.method !== 'POST' && parts[2] && parts[3] === 'output') { const r = taskOutput(parts[2]); return send(res, r.error ? 404 : 200, r, req); }
@@ -583,6 +587,7 @@ server.on('error', e => {
 server.listen(PORT, process.env.CODETYCOON_HOST || '127.0.0.1', () => {
   console.log(`Code Tycoon on http://127.0.0.1:${PORT}`);
   startTunnel(); // reachable through a relay, when ~/.codetycoon/tunnel.json says where
+  startUpdates(); // installs made by install.sh/install.ps1 keep themselves current
   // catch up tracked projects that changed while we were down
   setImmediate(() => {
     for (const pid of trackedSet()) {

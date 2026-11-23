@@ -17,6 +17,9 @@
 //   relay → PC  {t:'req', id, method, path, headers, body}     PC → relay {t:'res', id, status, headers, body}
 //   relay → PC  {t:'wso', id, path, headers}                   PC → relay {t:'wsa', id} | {t:'wsc', id, code}
 //   both ways   {t:'wsm', id, data, bin}  {t:'wsc', id, code}
+//   relay → PC  {t:'hello', login, account_url, device, confirmed, live}   who this PC belongs to
+// The relay closes with 4401 when the PC was disconnected from its account: no retrying then,
+// until tunnel.json changes (a new `code-tycoon tunnel login`) or the server restarts.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,7 +27,8 @@ import WebSocket from 'ws';
 import { DATA_DIR, PORT } from './paths.mjs';
 
 export const TUNNEL_FILE = path.join(DATA_DIR, 'tunnel.json');
-const MAX_BODY = 50 * 1024 * 1024;
+const MAX_BODY = 20 * 1024 * 1024; // what a free relay passes; bigger answers fail here, not on the socket
+const REVOKED = 'This PC was disconnected from your account. Run `code-tycoon tunnel login` to connect it again.';
 // headers that belong to one hop, or that would leak the relay's side into this server
 const DROP = new Set(['host', 'origin', 'cookie', 'connection', 'upgrade', 'keep-alive', 'transfer-encoding', 'te', 'trailer',
   'proxy-authorization', 'proxy-authenticate', 'content-length', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-accept',
@@ -38,7 +42,8 @@ export function tunnelConfig() {
   return null;
 }
 
-const status = { state: 'off', url: null, since: null, error: null };
+// state: off | connecting | connected | revoked; account: the relay's hello (login, device, confirmed, live)
+const status = { state: 'off', url: null, since: null, error: null, account: null };
 export const tunnelStatus = () => ({ ...status });
 
 let ws = null, cfgKey = '', retry = 0, timer = null;
@@ -46,7 +51,7 @@ const socks = new Map(); // id -> local WebSocket (a browser's /ws, carried thro
 
 function connect(cfg) {
   clearTimeout(timer);
-  Object.assign(status, { state: 'connecting', url: cfg.url, error: null });
+  Object.assign(status, { state: 'connecting', url: cfg.url, error: null, account: null });
   const sock = new WebSocket(cfg.url, { headers: { authorization: 'Bearer ' + cfg.token }, handshakeTimeout: 15e3, maxPayload: MAX_BODY * 2 });
   ws = sock;
   let ping = null;
@@ -56,15 +61,25 @@ function connect(cfg) {
     console.log('[tunnel] connected to', cfg.url);
     ping = setInterval(() => { try { sock.ping(); } catch {} }, 25e3);
   });
-  sock.on('unexpected-response', (_req, res) => { status.error = res.statusCode === 401 ? 'the relay refused the token' : 'relay answered ' + res.statusCode; sock.terminate(); });
+  let refused = false;
+  sock.on('unexpected-response', (_req, res) => {
+    refused = res.statusCode === 401;
+    status.error = refused ? 'the relay does not know this PC (token refused)' : 'relay answered ' + res.statusCode;
+    sock.terminate();
+  });
   sock.on('error', e => { status.error = status.error || e.message; });
   sock.on('message', (m, isBin) => { if (!isBin) handle(sock, String(m)); });
-  sock.on('close', () => {
+  sock.on('close', code => {
     clearInterval(ping);
     for (const s of socks.values()) try { s.close(); } catch {}
     socks.clear();
     if (ws !== sock) return; // replaced or switched off on purpose
     ws = null;
+    if (code === 4401 || refused) {
+      Object.assign(status, { state: 'revoked', since: null, error: REVOKED, account: null });
+      console.log('[tunnel] ' + REVOKED);
+      return;
+    }
     if (status.state === 'connected') console.log('[tunnel] disconnected');
     status.state = 'connecting';
     const wait = Math.min(60e3, 2e3 * 2 ** Math.min(retry++, 5));
@@ -76,13 +91,18 @@ function stop() {
   clearTimeout(timer);
   const s = ws; ws = null;
   if (s) try { s.close(); } catch {}
-  Object.assign(status, { state: 'off', url: null, since: null, error: null });
+  Object.assign(status, { state: 'off', url: null, since: null, error: null, account: null });
 }
 
 const send = (sock, o) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(o)); };
 
 function handle(sock, text) {
   let f; try { f = JSON.parse(text); } catch { return; }
+  if (f.t === 'hello') {
+    const pick = ({ login, account_url, device, confirmed, live }) => ({ login, account_url, device, confirmed, live });
+    status.account = pick(f);
+    return;
+  }
   if (f.t === 'req') return request(sock, f);
   if (f.t === 'wso') return openWs(sock, f);
   const s = socks.get(f.id);
@@ -119,15 +139,19 @@ function openWs(sock, f) {
   s.on('error', () => { if (socks.delete(f.id)) send(sock, { t: 'wsc', id: f.id, code: 1011 }); });
 }
 
-// started by the server once it listens; follows tunnel.json from then on
+// follows tunnel.json: reconnects when the relay or the token changed
+function tick() {
+  const c = tunnelConfig(), k = c ? c.url + '\n' + c.token : '';
+  if (k === cfgKey) return;
+  cfgKey = k;
+  if (ws) { const s = ws; ws = null; try { s.close(); } catch {} }
+  if (c) connect(c); else stop();
+}
+// `code-tycoon tunnel login|setup` call this (POST /api/tunnel/reload) so the change applies now
+export const reloadTunnel = () => { tick(); return tunnelStatus(); };
+
+// started by the server once it listens
 export function startTunnel() {
-  const tick = () => {
-    const c = tunnelConfig(), k = c ? c.url + '\n' + c.token : '';
-    if (k === cfgKey) return;
-    cfgKey = k;
-    if (ws) { const s = ws; ws = null; try { s.close(); } catch {} }
-    if (c) connect(c); else stop();
-  };
   tick();
   setInterval(tick, 30e3).unref();
 }

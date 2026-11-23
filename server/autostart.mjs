@@ -101,6 +101,8 @@ function copyApp() {
 }
 
 const target = () => targets[process.platform];
+// the copy the launcher starts (and `code-tycoon setup` starts right away)
+export const launchRoot = () => (fromNpx ? APP : ROOT);
 // in a container the entrypoint starts the server; "start at login" means nothing there
 export const autostartSupported = () => !!target() && !process.env.CODETYCOON_CONTAINER;
 export const autostartInstalled = () => !!target() && fs.existsSync(target().file);

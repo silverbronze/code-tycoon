@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy · Code Tycoon</title>
+<meta name="description" content="What Code Tycoon's free relay at app.codetycoon.dev stores, and what it doesn't.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+body{font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:#fff;color:#111}
+main{max-width:680px;margin:0 auto;padding:40px 16px 80px}h1{font-size:28px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 8px}
+p,li{color:#333}.muted{color:#666;font-size:14px}a{color:#111}ul{padding-left:20px}
+</style>
+</head>
+<body>
+<main>
+<p class="muted"><a href="/">Code Tycoon</a></p>
+<h1>Privacy</h1>
+<p class="muted">Last updated 23 November 2026</p>
+
+<h2>The app on your computer</h2>
+<p>Code Tycoon runs on your own computer. It reads your projects and your Claude Code and Codex transcripts there, and keeps what it builds in <code>~/.codetycoon</code>. None of that is sent to us. If you never connect an account, nothing leaves your computer except the model calls you start yourself, which go to your own Claude or OpenAI account.</p>
+
+<h2>The free relay (app.codetycoon.dev)</h2>
+<p>If you sign in at app.codetycoon.dev and connect a computer, that computer keeps one outbound connection to our relay, and your signed-in browser reaches it through that connection. For this we store:</p>
+<ul>
+<li>from GitHub, when you sign in: your GitHub user id, login and primary email address. We ask GitHub for nothing else and get no access to your repositories;</li>
+<li>a session for each browser you sign in with (stored as a hash), with its browser name, for 30 days;</li>
+<li>your connected computers: the name you or the setup gave them, the operating system, when each last connected and from which IP address. Their tokens are stored only as hashes;</li>
+<li>daily counts of bytes and requests per account, used for the free plan's limits and to spot abuse.</li>
+</ul>
+<p>The pages, API calls and live updates that pass between your browser and your computer go through the relay without being stored. We don't log their contents, cache them or show them to anyone else.</p>
+<p>Server logs record times, account and device ids and IP addresses. They are deleted after 14 days at most. A nightly backup of the account database is kept for 7 days.</p>
+
+<h2>What we don't do</h2>
+<p>We don't sell or share your data, run ads or use trackers. The landing page at codetycoon.dev sets no cookies. The relay sets one sign-in cookie (<code>ct_s</code>) and, during sign-in, one short-lived cookie that protects the GitHub round trip.</p>
+
+<h2>Deleting your data</h2>
+<p>Your account page at <a href="https://app.codetycoon.dev/_/account">app.codetycoon.dev/_/account</a> has "Delete my account". It removes your account, sessions, devices and usage counts at once and disconnects your computers. Backups that still hold them expire within 7 days. To remove the app from a computer, run <code>code-tycoon uninstall</code> there.</p>
+
+<h2>Sign-in</h2>
+<p>Sign-in goes through GitHub, under GitHub's own privacy statement.</p>
+
+<h2>Contact</h2>
+<p>Questions, data requests and abuse reports: <a href="mailto:hello@codetycoon.dev">hello@codetycoon.dev</a>, or an issue on <a href="https://github.com/silverbronze/code-tycoon/issues">GitHub</a>.</p>
+</main>
+</body>
+</html>

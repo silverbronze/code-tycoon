@@ -4,7 +4,8 @@
 // npx code-tycoon autostart install|uninstall - start the server at login
 // npx code-tycoon index [project]       - backfill one project (or all tracked)
 // npx code-tycoon audit | snapshot <target> | restore <source> - back up and rebuild the AI setup
-// npx code-tycoon tunnel connect <relay url> --token <t> | off | status - reach this PC from anywhere
+// npx code-tycoon tunnel login | connect <relay url> --token <t> | off | status - reach this PC from anywhere
+// npx code-tycoon setup [--code <c>] | uninstall [--all] - the whole install in one command, and its undo
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +56,8 @@ if (cmd === 'start') {
   run('setup/cli.mjs', args);
 } else if (cmd === 'tunnel') {
   run('tunnel-cli.mjs', args);
+} else if (cmd === 'setup' || cmd === 'uninstall') {
+  run('setup-cli.mjs', args);
 } else {
   console.log(`Usage:
   npx code-tycoon [--no-open]          start the server on ${url} and open it
@@ -69,8 +72,12 @@ if (cmd === 'start') {
   npx code-tycoon snapshot <target>    save settings, MCP servers, memory, skills and an encrypted
                                        vault of secrets to a folder or your own private git repo
   npx code-tycoon restore <source>     rebuild that setup here (asks before writing; --yes to skip)
+  npx code-tycoon setup [--code <code>] everything at once: hooks, start at login, the server, and
+                                       (with a setup code from app.codetycoon.dev) this PC's account
+  npx code-tycoon tunnel login         reach this PC from anywhere: approve it at app.codetycoon.dev
   npx code-tycoon tunnel connect <relay url> --token <token>
-                                       reach this PC's Code Tycoon from anywhere through a relay
-  npx code-tycoon tunnel off | status`);
+                                       the same with a token made by hand (boxes without a browser)
+  npx code-tycoon tunnel off | status
+  npx code-tycoon uninstall [--all]    remove hooks, start at login and the tunnel (--all: data too)`);
   process.exit(cmd === 'help' ? 0 : 1);
 }
