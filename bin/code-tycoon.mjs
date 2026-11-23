@@ -4,6 +4,7 @@
 // npx code-tycoon autostart install|uninstall - start the server at login
 // npx code-tycoon index [project]       - backfill one project (or all tracked)
 // npx code-tycoon audit | snapshot <target> | restore <source> - back up and rebuild the AI setup
+// npx code-tycoon tunnel connect <relay url> --token <t> | off | status - reach this PC from anywhere
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +53,8 @@ if (cmd === 'start') {
   run('cli.mjs', args);
 } else if (cmd === 'audit' || cmd === 'protect' || cmd === 'snapshot' || cmd === 'restore') {
   run('setup/cli.mjs', args);
+} else if (cmd === 'tunnel') {
+  run('tunnel-cli.mjs', args);
 } else {
   console.log(`Usage:
   npx code-tycoon [--no-open]          start the server on ${url} and open it
@@ -65,6 +68,9 @@ if (cmd === 'start') {
                                        put unpushed projects in private repos and keep them pushed
   npx code-tycoon snapshot <target>    save settings, MCP servers, memory, skills and an encrypted
                                        vault of secrets to a folder or your own private git repo
-  npx code-tycoon restore <source>     rebuild that setup here (asks before writing; --yes to skip)`);
+  npx code-tycoon restore <source>     rebuild that setup here (asks before writing; --yes to skip)
+  npx code-tycoon tunnel connect <relay url> --token <token>
+                                       reach this PC's Code Tycoon from anywhere through a relay
+  npx code-tycoon tunnel off | status`);
   process.exit(cmd === 'help' ? 0 : 1);
 }

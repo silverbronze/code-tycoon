@@ -27,6 +27,7 @@ import { autostartSupported, autostartInstalled, setAutostart } from './autostar
 import { onBoard, listBoard, create as createTask, boardAction, taskOutput } from './board.mjs';
 import { voiceStatus, voiceCommand } from './voice.mjs';
 import { accountLimits, accountLimitsNow } from './limits.mjs';
+import { startTunnel, tunnelStatus } from './tunnel.mjs';
 import { onSync, syncStatus, setSync, syncSoon, syncProject, rebaseNow } from './gitsync.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
@@ -406,6 +407,8 @@ const server = http.createServer(async (req, res) => {
         const days = Math.min(90, Math.max(1, Number(u.searchParams.get('days')) || 7));
         return send(res, 200, coach({ pid: u.searchParams.get('pid') || null, days }), req);
       }
+      // the tunnel to a relay (server/tunnel.mjs): whether this PC is reachable from outside
+      if (parts[1] === 'tunnel') return send(res, 200, tunnelStatus(), req);
       // the task board (server/board.mjs): GET the tasks, POST a new one, POST /<id>/<action>
       if (parts[1] === 'board') {
         if (req.method !== 'POST' && parts[2] && parts[3] === 'output') { const r = taskOutput(parts[2]); return send(res, r.error ? 404 : 200, r, req); }
@@ -579,6 +582,7 @@ server.on('error', e => {
 // still carry a localhost Host header (a reverse proxy in front sets it)
 server.listen(PORT, process.env.CODETYCOON_HOST || '127.0.0.1', () => {
   console.log(`Code Tycoon on http://127.0.0.1:${PORT}`);
+  startTunnel(); // reachable through a relay, when ~/.codetycoon/tunnel.json says where
   // catch up tracked projects that changed while we were down
   setImmediate(() => {
     for (const pid of trackedSet()) {
