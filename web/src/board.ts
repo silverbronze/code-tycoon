@@ -164,7 +164,9 @@ export class BoardPanel {
         if (all.length > 1) { if (all[0].a === a) items.push(this.askItem(t, a, all)); }
         else items.push(this.askItem(t, a));
       }
-      if (t.state === 'done' && t.seen === false) finished.push(this.doneItem(t));
+      // finished, but its work never reached the main folder: that needs the user, it is not done
+      if (stuck(t)) items.push(this.mergeItem(t));
+      else if (t.state === 'done' && t.seen === false) finished.push(this.doneItem(t));
     }
     if (!items.length && !finished.length) return [];
     return [h('div', { class: 'bd-todo-h' }, h('b', {}, 'Your to-do'), items.length ? h('span', {}, items.length) : null,
@@ -182,6 +184,21 @@ export class BoardPanel {
       h('div', { class: 'bd-opts' },
         t.sid ? h('button', { class: 'chip', onclick: () => showOutput(t, this.data?.projects.find(p => p.id === t.pid)?.tracked ?? false) }, 'Full output') : null,
         h('button', { class: 'chip go', disabled: busy, title: 'Take it off the to-do', onclick: () => this.act(t, 'seen', {}, key) }, 'OK')),
+      this.err(key));
+  }
+
+  // a finished task whose branch did not merge: until it does, its work is only on that branch
+  // (a deploy from the main folder would undo anything it put live)
+  private mergeItem(t: BoardTask) {
+    const key = t.id + ':merge', busy = this.busy.has(key);
+    return h('div', { class: 'bd-item' },
+      this.head(t, 'Not merged', 'alarm'),
+      h('div', { class: 'bd-q' }, `The session finished, but its work is only on ${t.wt!.branch}, not in ${t.wt!.base}.`),
+      h('div', { class: 'bd-why' }, mergeLine(t)),
+      t.tldr ? h('div', { class: 'bd-why' }, 'The session said: ' + t.tldr) : null,
+      h('div', { class: 'bd-opts' },
+        h('button', { class: 'chip go', disabled: busy, title: `Merge ${t.wt!.branch} into the branch the main folder is on now`, onclick: () => this.act(t, 'merge', {}, key) }, 'Merge now'),
+        t.sid ? h('button', { class: 'chip', onclick: () => showOutput(t, this.data?.projects.find(p => p.id === t.pid)?.tracked ?? false) }, 'Full output') : null),
       this.err(key));
   }
 
@@ -400,7 +417,7 @@ export class BoardPanel {
       : t.error ? t.error : t.summary || (t.state === 'ready' ? 'Press Run to start a session' : '');
     return h('div', { class: 'bd-task-row ' + t.state + (isOpen ? ' open' : '') },
       h('div', { class: 'bd-main', onclick: () => { if (isOpen) this.open.delete(t.id); else this.open.add(t.id); this.render(); } },
-        h('span', { class: 'bd-state ' + t.state }, STATE[t.state]),
+        stuck(t) ? h('span', { class: 'bd-state needs-you', title: mergeLine(t) || '' }, 'Not merged') : h('span', { class: 'bd-state ' + t.state }, STATE[t.state]),
         h('span', { class: 'bd-proj' }, t.project || '—'),
         h('div', { class: 'bd-body' }, h('div', { class: 'bd-text-1' },
           t.group && !t.group.fan ? h('span', { class: 'bd-part', title: 'Split from: ' + short(t.group.source, 300) }, `${t.group.i + 1}/${t.group.n}`) : null, short(t.text, 160)), line ? h('div', { class: 'bd-line' }, short(line, 240)) : null),
@@ -452,6 +469,9 @@ export class BoardPanel {
 // a task's own branch (git projects): where its merge into the main folder stands
 const unmerged = (t: BoardTask) => !!t.wt?.merge && !['merged', 'nothing'].includes(t.wt.merge.state);
 const canMerge = (t: BoardTask) => t.state === 'done' && !!t.wt?.merge && ['waiting', 'conflict', 'failed'].includes(t.wt.merge.state);
+// a merge that needs the user: a conflict or failure at once, a wait (another task in the
+// main folder, a moment of uncommitted changes) only once it has lasted 15 minutes
+const stuck = (t: BoardTask) => canMerge(t) && (t.wt!.merge!.state !== 'waiting' || Date.now() - (t.runs.at(-1)?.ended || t.updated) > 15 * 60e3);
 function mergeLine(t: BoardTask) {
   const w = t.wt, m = w?.merge;
   if (!w || !m) return null;

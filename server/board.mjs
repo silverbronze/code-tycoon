@@ -39,7 +39,7 @@ import { listProjects } from './indexer.mjs';
 import { runAgent, provider, codexBlocked } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
 import { syncSoon } from './gitsync.mjs';
-import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge } from './worktree.mjs';
+import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, followBase, mergedAlready, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge } from './worktree.mjs';
 
 db.exec('CREATE TABLE IF NOT EXISTS board (id TEXT PRIMARY KEY, created INTEGER, v TEXT)');
 
@@ -589,6 +589,11 @@ async function integrate(t) {
   try {
     const here = fs.existsSync(w.dir);
     if (here) commitAll(w, `${taskTitle(t)}\n\nTask ${t.id} from the Code Tycoon board:\n${t.text.slice(0, 2000)}`);
+    followBase(w); // the main folder is on another branch now: merge into that one
+    if (mergedAlready(w)) {
+      dropWorktree(w, { deleteBranch: true });
+      return setM({ state: 'merged', into: w.base, why: 'Already in ' + w.base });
+    }
     if (!ahead(w)) { dropWorktree(w, { deleteBranch: true }); return setM({ state: 'nothing', why: 'The task changed no tracked files' }); }
     if (rootBusy(t.pid)) return setM({ state: 'waiting', why: 'Another task is working in the main folder' });
     let p = predict(w);

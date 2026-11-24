@@ -151,6 +151,21 @@ export function commitAll(w, message) {
 }
 
 export const ahead = w => Number(tryGit(w.top, ['rev-list', '--count', `${w.base}..${w.branch}`]).out) || 0;
+
+// The main folder moved to another branch while the task ran (the user started a feature
+// branch): the task merges into the branch the user is on now, not the one it began from,
+// or it waits forever for a branch nobody comes back to. Returns the old base, or null.
+export function followBase(w) {
+  const cur = tryGit(w.top, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  if (!cur.ok || !cur.out || cur.out === w.base || cur.out === w.branch) return null;
+  const from = w.base;
+  w.from = w.from || from;
+  w.base = cur.out;
+  return from;
+}
+// the branch's work is already in its base (someone merged it by hand): its own commits,
+// counted from the base it was made from, are all reachable from the current base
+export const mergedAlready = w => !!w.from && !ahead(w) && (Number(tryGit(w.top, ['rev-list', '--count', `${w.from}..${w.branch}`]).out) || 0) > 0;
 export const changedFiles = w => tryGit(w.top, ['diff', '--name-only', `${w.base}...${w.branch}`]).out.split('\n').filter(Boolean);
 
 // would the branch merge into its base cleanly? (nothing is touched)
