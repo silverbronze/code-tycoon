@@ -3,7 +3,8 @@
 // when Claude Code is missing or CODETYCOON_LLM=codex.
 //
 // runAgent({ want, tools, cwd, prompt, budgetUsd, timeoutMs, persist, name, onSpawn })
-//   want:  'small' (titles, recaps), 'map' (the domain map), or a model id (the project's own)
+//   want:  'small' (titles, recaps), 'map' (the domain map), 'route' (the task board's router),
+//          or a model id (the project's own)
 //   tools: 'none' | 'read' | 'edit'
 //   persist: false = no transcript, no hooks (never drawn); true = a real, visible session
 // resolves { res (first JSON object in the reply), text, cost, sid, model }
@@ -58,15 +59,18 @@ export function provider() {
 const CODEX = {
   small: process.env.CODETYCOON_CODEX_SMALL_MODEL || 'gpt-6-luna',
   map: process.env.CODETYCOON_CODEX_MAP_MODEL || 'gpt-6.1-terra',
+  route: process.env.CODETYCOON_CODEX_ROUTE_MODEL || process.env.CODETYCOON_CODEX_MAP_MODEL || 'gpt-6.1-terra',
   def: process.env.CODETYCOON_CODEX_MODEL || 'gpt-6.1-sol',
 };
-const CLAUDE = { small: 'haiku', map: process.env.CODETYCOON_DOMAIN_MODEL || 'sonnet', def: null };
+// the board's router decides where work goes and how it splits: Haiku gave a different
+// answer on each try of the same text, so it runs on Sonnet
+const CLAUDE = { small: 'haiku', map: process.env.CODETYCOON_DOMAIN_MODEL || 'sonnet', route: process.env.CODETYCOON_ROUTE_MODEL || 'sonnet', def: null };
 
 // The model for a job on this provider. A model id that belongs to the other provider
 // (the project's latest session ran on Codex, the CLI is Claude Code) falls back to the default.
 export function modelFor(want, prov = provider()) {
   const t = prov === 'codex' ? CODEX : CLAUDE;
-  if (want === 'small' || want === 'map') return t[want];
+  if (want === 'small' || want === 'map' || want === 'route') return t[want];
   if (prov === 'codex') return isCodexModel(want) ? want : t.def;
   return isClaudeModel(want) ? want : t.def;
 }

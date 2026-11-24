@@ -25,11 +25,16 @@
 // confirm them, then becomes one task per project (group.fan), all started at once. Their
 // asks are shared: one already answered in a sibling project is answered the same way, and
 // open ones that match are answered once for all (shareAsks).
+//
+// A question about the projects themselves ("which projects have no git repo", "which
+// sites still use Stripe v2") is neither: it needs one answer that looks at all of them.
+// It runs as ONE session in a folder of its own (ACROSS_CWD) that can read every project
+// folder (--add-dir) and is told not to change anything (t.across).
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { db } from './db.mjs';
-import { SUMMARIZER_CWD, OWN_DIR_RE, PROJECTS_DIR } from './paths.mjs';
+import { SUMMARIZER_CWD, OWN_DIR_RE, PROJECTS_DIR, DATA_DIR } from './paths.mjs';
 import { listProjects } from './indexer.mjs';
 import { runAgent, provider, codexBlocked } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
@@ -41,6 +46,10 @@ db.exec('CREATE TABLE IF NOT EXISTS board (id TEXT PRIMARY KEY, created INTEGER,
 const RUN_USD = process.env.CODETYCOON_TASK_USD || '10';
 const RUN_MS = Number(process.env.CODETYCOON_TASK_MINUTES || 60) * 60e3;
 const SURE = 0.7; // below this the user picks the project
+// where a question across all projects runs: inside the data folder, so OWN_DIR_RE keeps
+// it out of the project list and the city
+const ACROSS_CWD = path.join(DATA_DIR, 'across');
+const ALL = 'All projects';
 const ASK_KINDS = new Set(['decision', 'secret', 'action', 'info', 'approval']);
 
 const listeners = [];
@@ -91,7 +100,14 @@ function profiles() {
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function setProject(t, p, route) {
-  Object.assign(t, { pid: p.id, project: p.name, root: p.root, route, state: 'ready', fan: null });
+  Object.assign(t, { pid: p.id, project: p.name, root: p.root, route, state: 'ready', fan: null, across: false });
+}
+// the projects a question across all of them can read: the router's list, folders that exist
+const acrossList = () => profiles().filter(p => fs.existsSync(p.root));
+// a question across all projects: no project of its own, it runs in ACROSS_CWD
+function setAcross(t, route) {
+  fs.mkdirSync(ACROSS_CWD, { recursive: true });
+  Object.assign(t, { pid: null, project: ALL, root: ACROSS_CWD, route, state: 'ready', fan: null, across: true });
 }
 
 // several lines, or a list: may hold tasks for several projects
@@ -126,12 +142,13 @@ Splitting rules:
 - "after": the number (1-based) of an earlier task in your list that must be finished first, because this one depends on its result; otherwise null.
 `}
 One change meant for several projects ("in all my projects", "every site", "each repo that uses Stripe", or one change for several named projects) is ONE task with "projects": every project it applies to, judged from what you know of each one (include a project only when the change plausibly fits it), and "project": null. Leave "projects" out otherwise.
-Return ONLY JSON: {"tasks": [{"text": "the task", "project": "p<n> or null", "projects": ["p<n>"], "confidence": 0.0-1.0, "why": "one short sentence", "others": [{"project": "p<n>", "why": "one short sentence"}], "after": null}]}
+A question or check about the projects themselves, whose answer needs a look across several or all of them ("which projects have no git repo", "list the sites that use Stripe", "compare how my apps do auth", "which repos have uncommitted work") and changes nothing, is ONE task with "scope": "all" and "project": null: a single session that can read every project answers it. Not a fan-out: that is for a change made in each project. Leave "scope" out otherwise.
+Return ONLY JSON: {"tasks": [{"text": "the task", "project": "p<n> or null", "projects": ["p<n>"], "scope": "all", "confidence": 0.0-1.0, "why": "one short sentence", "others": [{"project": "p<n>", "why": "one short sentence"}], "after": null}]}
 A project the text names, even misspelled or inside a phrase ("the content factory" → Factory), is strong evidence for it.
 confidence is how sure you are that this is the right project; use null when none fits. "others": up to 3 other likely projects.${t.noSplit ? ' Return exactly one task.' : ' At most 10 tasks.'}`;
   let pieces;
   try {
-    const { res, cost } = await runAgent({ want: 'small', tools: 'none', cwd: SUMMARIZER_CWD, prompt, timeoutMs: 120e3 });
+    const { res, cost } = await runAgent({ want: 'route', tools: 'none', cwd: SUMMARIZER_CWD, prompt, timeoutMs: 180e3 });
     t.cost += cost || 0;
     pieces = (Array.isArray(res.tasks) ? res.tasks : [res]).filter(x => x && typeof x === 'object').slice(0, 10);
   } catch (e) {
@@ -146,11 +163,12 @@ confidence is how sure you are that this is the right project; use null when non
   // one change for several projects: a fan-out, whose projects the user confirms
   for (const x of pieces) {
     const fan = [...new Set((Array.isArray(x.projects) ? x.projects : []).map(v => ps[Number(String(v).replace(/\D/g, '')) - 1]).filter(Boolean))];
-    x.fan = fan.length >= 2 ? fan : null;
+    x.across = x.scope === 'all';
+    x.fan = !x.across && fan.length >= 2 ? fan : null;
   }
   const namedIdx = new Set(named.map(p => ps.indexOf(p)));
   for (const x of pieces) {
-    if (x.fan) continue;
+    if (x.fan || x.across) continue;
     const conf = Number(x.confidence) || 0;
     if (namedIdx.has(idx(x))) x.confidence = Math.max(conf, 0.9);
     else if (conf < SURE && named.length === 1) Object.assign(x, { project: 'p' + (ps.indexOf(named[0]) + 1), confidence: SURE, why: `The text names ${named[0].name}` });
@@ -158,7 +176,7 @@ confidence is how sure you are that this is the right project; use null when non
   // a split is only worth it across projects: pieces for one project are one task again
   const byProject = new Map();
   for (const [i, x] of pieces.entries()) {
-    const k = x.fan ? 'fan:' + i : ps[idx(x)] ? idx(x) : 'none:' + i;
+    const k = x.fan ? 'fan:' + i : x.across ? 'across' : ps[idx(x)] ? idx(x) : 'none:' + i;
     const g = byProject.get(k);
     if (g) { g.text += '\n\n' + x.text; g.confidence = Math.min(Number(g.confidence) || 0, Number(x.confidence) || 0); g.merged.push(i); }
     else byProject.set(k, { ...x, merged: [i] });
@@ -169,6 +187,7 @@ confidence is how sure you are that this is the right project; use null when non
   }
   if (pieces.length <= 1 || byProject.size <= 1 || t.noSplit) {
     if (pieces[0]?.fan) toTargets(t, pieces[0]);
+    else if (pieces[0]?.across) setAcross(t, { how: 'model', why: String(pieces[0].why || '').slice(0, 300), conf: 1, picks: [] });
     else placeOn(t, pieces[0] || {}, ps);
     save(t);
     if (t.state === 'ready' && t.autoRun) start(t.id);
@@ -178,7 +197,9 @@ confidence is how sure you are that this is the right project; use null when non
   pieces.forEach((x, i) => {
     const u = i === 0 ? t : { ...blank(), mode: t.mode, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
     Object.assign(u, { text: String(x.text).trim().slice(0, 8000), group: { id: group, i, n: pieces.length, source } });
-    if (x.fan) toTargets(u, x); else placeOn(u, x, ps);
+    if (x.fan) toTargets(u, x);
+    else if (x.across) setAcross(u, { how: 'model', why: String(x.why || '').slice(0, 300), conf: 1, picks: [] });
+    else placeOn(u, x, ps);
     tasks.set(u.id, u);
     all.push(u);
   });
@@ -217,7 +238,11 @@ function firstPrompt(t) {
 
 Task:
 ${t.text}
-${t.group?.fan ? `
+${t.across ? `
+This is a question about the user's projects as a whole, so you are not in any one of them: you run in a scratch folder and can read every project folder below. Look at each project the question is about (files, git state, configs; read-only commands such as \`git -C <folder> status\` are fine), then answer the question itself in your reply: the list, the names, the comparison, with the project names the user knows. Change nothing: do not edit, create or delete files in any project, and do not commit, install or push. A project whose folder can't be read: say so, don't guess.
+The user's projects (name: folder):
+${acrossList().map(p => `- ${p.name}: ${p.root}`).join('\n')}
+` : ''}${t.group?.fan ? `
 The user asked for this same change in ${t.group.n} projects (${t.group.names.join(', ')}); each gets a session of its own, and you do it in this one, ${t.project}. Fit the change to this project. The user's whole message, for context:
 """
 ${t.group.source.slice(0, 6000)}
@@ -436,7 +461,8 @@ function run(t, retry = true) {
   save(t);
   let goOn = false, autoAnswered = false;
   const dep = depOf(t);
-  runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, dirs: dep && fs.existsSync(dep.root) ? [dep.root] : [], name: 'Task: ' + t.text.replace(/\s+/g, ' ').slice(0, 50),
+  const dirs = t.across ? acrossList().map(p => p.root) : dep && fs.existsSync(dep.root) ? [dep.root] : [];
+  runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, dirs, name: 'Task: ' + t.text.replace(/\s+/g, ' ').slice(0, 50),
     budgetUsd: RUN_USD, cwd: t.wt ? t.wt.cwd : t.root, prompt, timeoutMs: RUN_MS, onSpawn: p => procs.set(t.id, p) })
     .then(({ text, cost, sid, denials }) => {
       const { j, prose } = report(text);
@@ -653,7 +679,7 @@ const get = id => tasks.get(id);
 function blank() {
   return { id: newId(), text: '', created: Date.now(), updated: Date.now(), pid: null, project: null, root: null, route: null,
     mode: 'full', autoRun: false, state: 'routing', runs: [], sid: null, provider: null,
-    cost: 0, asks: [], allow: [], summary: null, error: null, group: null, after: null, noSplit: false, steps: [], pause: false, fan: null };
+    cost: 0, asks: [], allow: [], summary: null, error: null, group: null, after: null, noSplit: false, steps: [], pause: false, fan: null, across: false };
 }
 
 export function create({ text, pid, mode, autoRun, pause }) {
@@ -663,9 +689,13 @@ export function create({ text, pid, mode, autoRun, pause }) {
   // tasks bypass permissions unless the user picks "ask me"
   const t = { ...blank(), text, mode: mode === 'ask' ? 'ask' : 'full', autoRun: !!autoRun, pause: !!pause };
   tasks.set(t.id, t);
-  const p = pid && profiles().find(x => x.id === pid);
-  if (pid && !p) { tasks.delete(t.id); return { error: 'unknown project' }; }
-  if (p) {
+  const p = pid && pid !== '*' && profiles().find(x => x.id === pid);
+  if (pid && pid !== '*' && !p) { tasks.delete(t.id); return { error: 'unknown project' }; }
+  if (pid === '*') {
+    setAcross(t, { how: 'you', why: 'Picked by you', conf: 1, picks: [] });
+    save(t);
+    if (t.autoRun) start(t.id);
+  } else if (p) {
     setProject(t, p, { how: 'you', why: 'Picked by you', conf: 1, picks: [] });
     save(t);
     if (t.autoRun) start(t.id);
@@ -678,6 +708,11 @@ export function setRoute(id, pid) {
   if (!t) return { error: 'unknown task' };
   if (t.state === 'running') return { error: 'busy' };
   if (t.runs.length) return { error: 'this task already ran in ' + t.project };
+  if (pid === '*') {
+    setAcross(t, { ...(t.route || {}), how: 'you', why: 'Picked by you', conf: 1 });
+    save(t);
+    return t.autoRun ? start(id) : { task: view(t) };
+  }
   const p = profiles().find(x => x.id === pid);
   if (!p) return { error: 'unknown project' };
   setProject(t, p, { ...(t.route || {}), how: 'you', why: 'Picked by you', conf: 1 });
@@ -719,7 +754,8 @@ export function start(id) {
   const t = get(id);
   if (!t) return { error: 'unknown task' };
   if (t.state === 'running' || t.state === 'queued') return { task: view(t) };
-  if (!t.pid || !t.root) return { error: 'pick a project first' };
+  if (!(t.pid || t.across) || !t.root) return { error: 'pick a project first' };
+  if (t.across) fs.mkdirSync(t.root, { recursive: true });
   if (!fs.existsSync(t.root)) return { error: 'folder not found: ' + t.root };
   const blocked = codexBlocked('task');
   if (blocked) return { error: blocked };

@@ -133,8 +133,9 @@ export class BoardPanel {
     const focus = this.saveFocus();
     // project picker: keep the choice across refreshes
     const want = this.pick.value;
-    if (this.pick.options.length !== d.projects.length + 1) {
-      this.pick.replaceChildren(h('option', { value: '' }, 'Find the project for me'), ...d.projects.map(p => h('option', { value: p.id }, p.name)));
+    if (this.pick.options.length !== d.projects.length + 2) {
+      this.pick.replaceChildren(h('option', { value: '' }, 'Find the project for me'), h('option', { value: '*', title: 'A question about all your projects, answered by one session that reads them all' }, 'All projects (a question)'),
+        ...d.projects.map(p => h('option', { value: p.id }, p.name)));
       this.pick.value = want;
     }
     this.todoEl.replaceChildren(...this.todo(d));
@@ -201,6 +202,7 @@ export class BoardPanel {
       t.route?.why ? h('div', { class: 'bd-why' }, t.route.why, t.route.conf ? ` (${Math.round(t.route.conf * 100)}% sure)` : '') : null,
       h('div', { class: 'bd-opts' },
         ...picks.map(p => h('button', { class: 'chip', disabled: busy, title: p.why, onclick: () => this.act(t, 'route', { pid: p.pid }, key) }, p.name)),
+        h('button', { class: 'chip', disabled: busy, title: 'A question about all your projects: one session reads them all and answers', onclick: () => this.act(t, 'route', { pid: '*' }, key) }, 'All projects'),
         sel, h('button', { class: 'chip', disabled: busy, onclick: () => { if (sel.value) this.act(t, 'route', { pid: sel.value }, key); } }, 'Use'),
         h('button', { class: 'chip ghost', disabled: busy, onclick: () => this.act(t, 'delete', {}, key) }, 'Drop task')),
       this.err(key));
