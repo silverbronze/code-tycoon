@@ -34,7 +34,8 @@ import { listProjects } from './indexer.mjs';
 import { runAgent, provider, codexBlocked } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
 import { syncSoon } from './gitsync.mjs';
-import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge } from './worktree.mjs';
+import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge, revertMerges } from './worktree.mjs';
+import { shipInfo, setShip, detect, onShip, stepsFor, runCmd, killTree, verifyLive, screenshot, restartSelf, devWatch, headSha } from './ship.mjs';
 
 db.exec('CREATE TABLE IF NOT EXISTS board (id TEXT PRIMARY KEY, created INTEGER, v TEXT)');
 
@@ -59,8 +60,11 @@ function save(t, pub = true) {
 }
 
 export function listBoard() {
-  return { tasks: [...tasks.values()].sort((a, b) => b.created - a.created).map(view),
-    projects: profiles().map(p => ({ id: p.id, name: p.name, root: p.root, tracked: p.tracked })) };
+  const list = [...tasks.values()];
+  return { tasks: list.sort((a, b) => b.created - a.created).map(view),
+    projects: profiles().map(p => ({ id: p.id, name: p.name, root: p.root, tracked: p.tracked })),
+    // how each project with tasks goes live (ship.mjs)
+    ships: Object.fromEntries([...new Set(list.map(t => t.pid).filter(Boolean))].map(pid => [pid, shipInfo(pid)])) };
 }
 
 // ------------------------------------------------------------------ routing
@@ -235,9 +239,9 @@ This task builds on another task, done first in the project ${d.project} at ${d.
 Do as much of the task as you can on your own, and make sensible choices on small things (say which in your summary). Leave a question for the user only for what you cannot or must not decide or do alone:
 - a choice between real alternatives that changes the result, where a wrong guess wastes the work
 - credentials, API keys, accounts, payments, or facts only the user knows
-- anything irreversible or outward-facing: deploying, publishing, pushing, sending messages or email, deleting data, spending money
+- anything irreversible or outward-facing: ${ships(t) ? '' : 'deploying, publishing, pushing, '}sending messages or email, deleting data, spending money
 - a manual step outside this machine (a dashboard setting, a phone, a purchase)
-First do everything that does not depend on the answers. If a command you need is blocked, do not look for a way around it and do not add it to asks: blocked commands are shown to the user to allow on their own. ${t.wt ? `You work in a git worktree of your own (branch ${t.wt.branch}, made from ${t.wt.base}), so other tasks can work in this project at the same time. When the task is done the board commits your changes and merges them into ${t.wt.base}: do not commit, switch branches or merge yourself. Files git ignores (node_modules, .env, data folders) are linked from the main folder ${t.wt.top}, so changes to those are shared with it at once. Uncommitted work in the main folder is not in your worktree; you can read it there.` : 'Do not commit unless the task says so.'} Never write secrets into files tracked by git.
+First do everything that does not depend on the answers. If a command you need is blocked, do not look for a way around it and do not add it to asks: blocked commands are shown to the user to allow on their own.${shipNote(t)} ${t.wt ? `You work in a git worktree of your own (branch ${t.wt.branch}, made from ${t.wt.base}), so other tasks can work in this project at the same time. When the task is done the board commits your changes and merges them into ${t.wt.base}: do not commit, switch branches or merge yourself. Files git ignores (node_modules, .env, data folders) are linked from the main folder ${t.wt.top}, so changes to those are shared with it at once. Uncommitted work in the main folder is not in your worktree; you can read it there.` : 'Do not commit unless the task says so.'} Never write secrets into files tracked by git.
 ${planning ? `
 Work in steps when the task has distinct stages, where a later one builds on what an earlier one produces (for example: gather material, then design options, then build), or separate parts the user would want to check one at a time. Then read just enough to plan, write a plan of 2 to 6 steps into the report, do ONLY step 1, and stop with the report: you will be told to go on with the next step in this same session. The user sees the plan as a checklist. In the plan, "after" lists the steps whose result a step needs, so one step can go ahead while another waits for the user. A task that is one piece of work (a fix, a small feature, a question) needs no plan: do it whole and leave "plan" and "step" out.
 ` : ''}
@@ -311,7 +315,7 @@ function afterStep(t) {
 function answers(t) {
   const xs = t.asks.filter(a => a.answer != null && !a.sent && a.answer !== '(closed)');
   for (const a of xs) a.sent = true;
-  return xs.map(a => a.kind === 'permission'
+  return xs.map(a => a.board ? `- From the board: ${a.answer}` : a.kind === 'permission'
     ? `- ${a.cmd ? `Command \`${a.cmd}\`` : `Tool ${a.tool}`}: ${/^deny/i.test(a.answer) ? 'denied. Do not use it; do without it or say what is left.' : 'allowed. It will run if you try again.'}`
     : `- You asked (${a.kind}): ${a.question}\n  The user answered${a.auto ? ` (to the same question from the session doing this in ${a.auto})` : ''}: ${a.answer}`).join('\n');
 }
@@ -491,7 +495,7 @@ function run(t, retry = true) {
       next(t.pid);
       if (t.state === 'done') {
         if (t.wt) integrate(t).finally(() => settled(t));
-        else settled(t);
+        else { settled(t); queueShip(t); } // no branch to merge: ship the main folder as it is
       }
       if (!t.wt) retryMerges(t.pid); // the main folder is free again
       // every question was already answered in a sibling project: carry on with those answers
@@ -563,7 +567,13 @@ async function integrate(t) {
   try {
     const here = fs.existsSync(w.dir);
     if (here) commitAll(w, `${taskTitle(t)}\n\nTask ${t.id} from the Code Tycoon board:\n${t.text.slice(0, 2000)}`);
-    if (!ahead(w)) { dropWorktree(w, { deleteBranch: true }); return setM({ state: 'nothing', why: 'The task changed no tracked files' }); }
+    if (!ahead(w)) {
+      dropWorktree(w, { deleteBranch: true });
+      setM({ state: 'nothing', why: 'The task changed no tracked files' });
+      // a fix after a failed ship may change nothing in git (a setting, a login): ship again
+      if (t.ship?.state === 'fixing') queueShip(t); else if (t.ship) setShipState(t, { state: 'nothing' });
+      return;
+    }
     if (rootBusy(t.pid)) return setM({ state: 'waiting', why: 'Another task is working in the main folder' });
     let p = predict(w);
     if (!p.clean) {
@@ -577,8 +587,9 @@ async function integrate(t) {
     const r = mergeIntoBase(w, `Merge task: ${taskTitle(t)}`);
     if (!r.ok) return setM({ state: 'waiting', why: r.why, files: r.files });
     dropWorktree(w, { deleteBranch: true });
-    setM({ state: 'merged', sha: r.sha, files: files.slice(0, 50), into: w.base });
+    setM({ state: 'merged', sha: r.sha, files: files.slice(0, 50), into: w.base, many: files.length > 50 });
     syncSoon(t.pid, 1000); // pushed right away where git sync is on
+    queueShip(t, { sha: r.sha, files: files.length > 50 ? null : files });
   } catch (e) {
     setM({ state: 'failed', why: e.message });
   } finally { merging.delete(t.id); }
@@ -618,6 +629,192 @@ function retryMerges(pid) {
   for (const t of tasks.values()) if ((!pid || t.pid === pid) && t.state === 'done' && t.wt && t.wt.merge?.state === 'waiting') integrate(t).finally(() => settled(t));
 }
 setInterval(() => retryMerges(null), 3 * 60e3).unref();
+
+// ------------------------------------------------------------------ shipping
+// Merged is not done: the user can't see the output, so a task is done when it is live and
+// checked. After the merge the board runs the project's ship recipe (ship.mjs) in the main
+// folder, one task per project at a time: check, ship, verify, a screenshot for the card.
+// A failure goes back to the same session with the output, FIX_TRIES times; after that the
+// task's merges are reverted (and shipped again, when anything went out) and it needs the user.
+// A project whose recipe the user has not confirmed yet ships nothing: the task waits
+// ('unconfirmed') and the to-do asks once how that project goes live.
+const FIX_TRIES = 2;
+const SHIP_BUSY = new Set(['queued', 'checking', 'shipping', 'restarting', 'verifying']);
+const shipChain = new Map(); // pid -> the ship running there (one at a time per project)
+const shipProcs = new Map(); // task id -> the command it runs
+const ships = t => { const s = t.pid && shipInfo(t.pid); return !!(s && s.recipe && s.confirmed && !s.off); };
+function shipNote(t) {
+  if (!ships(t)) return '';
+  const r = shipInfo(t.pid).recipe, list = xs => xs.map(s => '`' + s.run + '`' + (s.when ? ` (when a changed file matches ${s.when})` : '')).join(', ');
+  return `\nWhen you finish, the board ships your work by itself: ${r.check.length ? `it runs the checks ${list(r.check)}, then ` : ''}${r.ship.length ? `the ship steps ${list(r.ship)}` : 'nothing goes out (this project only gets checked)'}${r.verify?.url ? `, then checks ${r.verify.url}` : ''}. So do not deploy, publish, push or restart anything yourself, and do not ask about it: the user approved this once for the project. Make sure the checks would pass (run the quick ones in your folder). If shipping fails, you get its output back to fix.`;
+}
+function setShipState(t, m) {
+  t.ship = { tries: 0, shas: [], files: [], ...(t.ship || {}), ...m, at: Date.now() };
+  save(t);
+}
+
+// a task finished and merged (sha, files: what the merge brought in; files null = too many to list)
+function queueShip(t, { sha = null, files = null } = {}) {
+  const info = shipInfo(t.pid);
+  // a new round (not a fix of the last one) starts its counts afresh
+  const fresh = !t.ship || !['fixing', 'unconfirmed'].includes(t.ship.state);
+  const prev = fresh ? { tries: 0, shas: [], files: [] } : t.ship;
+  const shas = sha ? [...prev.shas, sha] : prev.shas;
+  const all = prev.files === null || (sha && files === null) ? null : [...new Set([...(prev.files || []), ...(files || [])])];
+  if (fresh) t.ship = null;
+  if (info.off) return setShipState(t, { state: 'off', shas, files: all, proof: null });
+  if (!info.recipe || !info.confirmed) {
+    setShipState(t, { state: 'unconfirmed', shas, files: all, proof: null });
+    if (!info.recipe && t.root) detect(t.pid, t.root).catch(() => {});
+    return;
+  }
+  setShipState(t, { state: 'queued', shas, files: all, why: null, log: null, proof: null, stopped: false });
+  const before = shipChain.get(t.pid) || Promise.resolve();
+  const p = before.then(() => shipTask(t)).catch(e => { console.error('[board] ship:', e); setShipState(t, { state: 'failed', why: e.message }); })
+    .finally(() => { if (shipChain.get(t.pid) === p) shipChain.delete(t.pid); });
+  shipChain.set(t.pid, p);
+}
+
+const shipTop = t => t.wt?.top || repoOf(t.root)?.top || t.root;
+async function shipTask(t) {
+  if (!tasks.has(t.id) || t.ship?.state !== 'queued') return; // deleted or stopped meanwhile
+  const r = shipInfo(t.pid).recipe, top = shipTop(t), changed = t.ship.files;
+  setShipState(t, { state: 'checking', sha: headSha(top), started: Date.now(), restarted: false, stage: null, step: null });
+  const steps = async (list, stage) => {
+    for (const s of stepsFor(list, changed)) {
+      if (s.run === '@restart') {
+        if (devWatch()) continue; // npm run dev restarts the server itself when its files change
+        setShipState(t, { state: 'restarting', step: s.run, restarted: true, why: null });
+        await quietForRestart(t);
+        if (t.ship.stopped) return 'stopped';
+        restartSelf(); // the server comes back and goes on with verify (startup, below)
+        return 'restart';
+      }
+      setShipState(t, { step: s.run });
+      const x = await runCmd(s.run, top, { onSpawn: p => shipProcs.set(t.id, p) });
+      shipProcs.delete(t.id);
+      if (t.ship.stopped) return 'stopped';
+      if (!x.ok) { await shipFailed(t, stage, s.run, x.out || `exited with code ${x.code}`); return 'failed'; }
+    }
+    return 'ok';
+  };
+  const stopped = () => setShipState(t, { state: 'stopped', step: null, why: 'Stopped by you' });
+  let k = await steps(r.check, 'check');
+  if (k === 'stopped') return stopped();
+  if (k !== 'ok') return;
+  setShipState(t, { state: 'shipping', step: null });
+  k = await steps(r.ship, 'ship');
+  if (k === 'stopped') return stopped();
+  if (k !== 'ok') return;
+  return verifyTask(t);
+}
+
+// before restarting this server, let the other tasks finish (a restart cuts their sessions off)
+async function quietForRestart(t) {
+  for (;;) {
+    const busy = [...tasks.values()].filter(x => x !== t && (x.state === 'running' || merging.has(x.id) || SHIP_BUSY.has(x.ship?.state) && x.ship.state !== 'queued')).length;
+    if (!busy || t.ship.stopped) return;
+    if (!/^Waits/.test(t.ship.why || '')) setShipState(t, { why: `Waits for ${busy} running task${busy > 1 ? 's' : ''} before restarting Code Tycoon` });
+    await new Promise(r => setTimeout(r, 15e3));
+  }
+}
+
+async function verifyTask(t) {
+  const r = shipInfo(t.pid).recipe;
+  setShipState(t, { state: 'verifying', step: r.verify?.url || null, why: null });
+  const v = await verifyLive(r.verify, { sha: t.ship.sha, since: t.ship.started, restarted: t.ship.restarted });
+  if (t.ship.stopped) return setShipState(t, { state: 'stopped', step: null, why: 'Stopped by you' });
+  if (!v.ok) return shipFailed(t, 'verify', r.verify?.url || 'the live check', v.why);
+  const url = r.live || r.verify?.url || null;
+  const shot = r.screenshot && url ? await screenshot(url, t.id) : null;
+  setShipState(t, { state: 'live', step: null, why: null, log: null, tries: 0, proof: { why: v.why, url, sha: t.ship.sha, shot: !!shot, checked: !!r.verify, at: Date.now() } });
+  t.seen = false; // its one line, now with the proof, waits in the to-do
+  save(t);
+}
+
+// a step failed: back to the session with the output, or (after FIX_TRIES) undo and ask the user
+async function shipFailed(t, stage, step, out) {
+  const tries = (t.ship.tries || 0) + 1, log = String(out).slice(-3000);
+  if (tries <= FIX_TRIES && t.runs.length) {
+    setShipState(t, { state: 'fixing', stage, step, log, tries, why: `${stage} failed` });
+    const note = `Shipping your work failed at the ${stage} step \`${step}\` (attempt ${tries} of ${FIX_TRIES}). Its output ends with:\n\`\`\`\n${log.slice(-2500)}\n\`\`\`\nFind the cause and fix it in the code (or, if it is outside the code, say exactly what the user must do in asks). The step ran in the main folder ${shipTop(t)}, which may hold other people's work in progress: if the failure comes from files your task did not change, do not edit them; leave an ask that says so. The board ships again when you finish.`;
+    const r = addFollowUp(t, 'Fix: shipping failed at ' + stage, note);
+    if (!r.error) return;
+  }
+  // give up: take the task's change out of the main branch, and ship that if anything went out
+  let back = null;
+  if (t.wt && t.ship.shas.length) {
+    const top = shipTop(t);
+    const rv = revertMerges(top, t.ship.shas);
+    back = rv.ok ? { ok: true, sha: rv.sha } : { ok: false, why: rv.why };
+    if (rv.ok && stage !== 'check') {
+      const r = shipInfo(t.pid).recipe;
+      for (const s of stepsFor(r.ship, t.ship.files)) {
+        if (s.run === '@restart') { if (!devWatch()) { setTimeout(restartSelf, 2000); } continue; }
+        const x = await runCmd(s.run, top);
+        if (!x.ok) { back.reship = `\`${s.run}\` failed too`; break; }
+      }
+    }
+  }
+  setShipState(t, { state: 'failed', stage, step, log, tries, why: `${stage} failed`, back });
+  const undo = back?.ok ? ` Your change was taken back out of the main branch (revert ${back.sha}${stage !== 'check' ? ', and the previous version shipped again' : ''}); \`git revert ${back.sha}\` brings it back.` : back ? ` It could not be rolled back: ${back.why}.` : '';
+  t.asks.push({ id: newId(), run: t.runs.length - 1, step: null, kind: 'decision', shipAsk: true,
+    question: `Shipping failed ${tries > 1 ? tries + ' times ' : ''}at the ${stage} step \`${step}\`.${undo} What now?`,
+    why: log.split('\n').filter(l => l.trim()).slice(-4).join('\n').slice(0, 400),
+    options: ['Try again', 'Leave it'], answer: null });
+  t.state = 'needs-you';
+  save(t);
+}
+
+// one more run of the same session, with a note from the board (a step of its own in a plan)
+function addFollowUp(t, title, note) {
+  if (t.state === 'running') return { error: 'busy' };
+  let step = null;
+  if (t.steps.length) {
+    step = t.steps.length + 1;
+    t.steps.push({ n: step, title: title.slice(0, 160), after: [], state: 'todo', summary: null, cost: 0, runs: [] });
+  }
+  t.asks.push({ id: newId(), run: t.runs.length - 1, step, kind: 'info', board: true, question: title, why: '', options: [], answer: note, answeredAt: Date.now() });
+  t.state = 'ready';
+  return start(t.id);
+}
+
+// ship a finished task again by hand (after fixing something outside the code, or confirming the recipe)
+export function shipNow(id) {
+  const t = get(id);
+  if (!t) return { error: 'unknown task' };
+  if (t.state === 'running') return { error: 'busy' };
+  if (SHIP_BUSY.has(t.ship?.state)) return { error: 'shipping already' };
+  if (t.wt && !MERGED.has(t.wt.merge?.state)) return { error: 'merge it first' };
+  for (const a of openAsks(t)) if (a.shipAsk) Object.assign(a, { answer: '(closed)', answeredAt: Date.now(), sent: true });
+  if (t.state === 'needs-you' && !openAsks(t).length) t.state = 'done';
+  if (t.state !== 'done') return { error: 'the task is not done yet' };
+  if (t.ship) Object.assign(t.ship, { state: 'unconfirmed', tries: 0 }); // keeps its merges and files
+  queueShip(t);
+  return { task: view(t) };
+}
+
+// the ship recipe of a project: read, edit/confirm, work out again
+export function getShip(pid) { return shipInfo(pid); }
+export function putShip(pid, b) {
+  if (!profiles().some(p => p.id === pid)) return { error: 'unknown project' };
+  return setShip(pid, b);
+}
+export function detectShip(pid) {
+  const p = profiles().find(x => x.id === pid);
+  if (!p) return { error: 'unknown project' };
+  detect(pid, p.root, { force: true }).catch(() => {});
+  return shipInfo(pid);
+}
+onShip((pid, info) => {
+  for (const l of listeners) l({ type: 'ship', pid, info });
+  // confirmed: the tasks that waited for it ship now; switched off: they are done as they are
+  for (const t of tasks.values()) {
+    if (t.pid !== pid || t.ship?.state !== 'unconfirmed' || t.state !== 'done') continue;
+    if (info.off) setShipState(t, { state: 'off' });
+    else if (info.confirmed && info.recipe) queueShip(t);
+  }
+});
 
 // the task this one waits for (it needs that one's result), while it is not done and merged
 function blockedBy(t) {
@@ -744,6 +941,13 @@ export function answer(id, askId, value, all = false) {
 function answerOne(t, a, v) {
   Object.assign(a, { answer: v, answeredAt: Date.now() });
   grant(t, a);
+  // shipping gave up and the user leaves it so: done, without another session
+  if (a.shipAsk && /^leave/i.test(v)) {
+    a.sent = true;
+    if (t.state === 'needs-you' && !openAsks(t).length) t.state = 'done';
+    save(t);
+    return { task: view(t) };
+  }
   save(t);
   // the last answer sends them all back to the session; in a plan, the last answer a
   // step waits for sends that step back (other steps may still wait for the user)
@@ -781,6 +985,14 @@ export function setPause(id, on) {
 export function stop(id) {
   const t = get(id);
   if (t?.state === 'queued') { t.state = 'ready'; save(t); return { task: view(t) }; }
+  // shipping: stop the command it runs (or the wait before it)
+  if (t && SHIP_BUSY.has(t.ship?.state) && !procs.get(id)) {
+    if (t.ship.state === 'queued') return setShipState(t, { state: 'stopped', why: 'Stopped by you' }), { task: view(t) };
+    t.ship.stopped = true;
+    const sp = shipProcs.get(id);
+    if (sp) killTree(sp);
+    return { ok: true };
+  }
   const p = procs.get(id);
   if (!p && planning.delete(id)) { t.state = 'stopped'; save(t); next(t.pid); return { task: view(t) }; } // still planning
   if (!p) return { error: 'not running' };
@@ -838,7 +1050,7 @@ export function join(id) {
 export function remove(id) {
   const t = get(id);
   if (!t) return { error: 'unknown task' };
-  if (t.state === 'running' || merging.has(id)) return { error: 'stop it first' };
+  if (t.state === 'running' || merging.has(id) || SHIP_BUSY.has(t.ship?.state)) return { error: 'stop it first' };
   // its worktree folder goes; an unmerged branch stays, so the work can still be found
   if (t.wt && fs.existsSync(t.wt.dir)) { try { commitAll(t.wt, `${taskTitle(t)} (task deleted from the board)`); } catch {} dropWorktree(t.wt); }
   tasks.delete(id);
@@ -870,6 +1082,7 @@ export function boardAction(id, action, b = {}) {
     case 'mode': return setMode(id, b.mode);
     case 'close': return close(id);
     case 'merge': return mergeNow(id);
+    case 'ship': return shipNow(id);
     case 'join': return join(id);
     case 'seen': { const t = get(id); if (!t) return { error: 'unknown task' }; t.seen = true; save(t); return { task: view(t) }; }
     case 'delete': return remove(id);
@@ -907,6 +1120,15 @@ for (const t of tasks.values()) {
 }
 setTimeout(() => {
   for (const t of tasks.values()) if (t.state === 'done' && t.wt && !MERGED.has(t.wt.merge?.state) && t.wt.merge?.state !== 'conflict') integrate(t).finally(() => settled(t));
+  // shipping cut off by a restart: a restart it asked for goes on with verify; anything else ships again
+  for (const t of tasks.values()) {
+    const s = t.ship?.state;
+    if (s === 'restarting' && !t.ship.stopped) {
+      const p = (shipChain.get(t.pid) || Promise.resolve()).then(() => verifyTask(t)).catch(e => setShipState(t, { state: 'failed', why: e.message }));
+      shipChain.set(t.pid, p);
+    } else if (SHIP_BUSY.has(s) && t.state === 'done') { t.ship.state = 'unconfirmed'; queueShip(t); }
+    else if (SHIP_BUSY.has(s)) setShipState(t, { state: 'stopped', why: 'interrupted by a restart' });
+  }
 }, 5000).unref();
 setImmediate(() => {
   for (const t of tasks.values()) if (t.state === 'routing') route(t);

@@ -24,7 +24,8 @@ import { hooksInstalled, setHooks } from './hooks-install.mjs';
 import { modelFor } from './llm.mjs';
 import { onDomain, domainView, domainModel, build as buildDomain, stop as stopDomain, brief, dropBrief, settleInterrupted, watchCommits, checkCommits, setAuto } from './domain.mjs';
 import { autostartSupported, autostartInstalled, setAutostart } from './autostart.mjs';
-import { onBoard, listBoard, create as createTask, boardAction, taskOutput } from './board.mjs';
+import { onBoard, listBoard, create as createTask, boardAction, taskOutput, getShip, putShip, detectShip } from './board.mjs';
+import { shotFile, headSha, SELF_ROOT } from './ship.mjs';
 import { voiceStatus, voiceCommand } from './voice.mjs';
 import { accountLimits, accountLimitsNow } from './limits.mjs';
 import { startTunnel, tunnelStatus, reloadTunnel } from './tunnel.mjs';
@@ -47,6 +48,8 @@ function allowed(req) {
   return !o || LOCAL_ORIGIN.test(o);
 }
 
+// the commit this server runs (the board checks it after restarting Code Tycoon on new code)
+const VERSION = { sha: headSha(SELF_ROOT), started: Date.now() };
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 let discovered = discover();
 const cities = new Map(); // pid -> city (with resolveTarget)
@@ -414,7 +417,23 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ...tunnelStatus(), update: updateStatus() }, req);
       }
       // the task board (server/board.mjs): GET the tasks, POST a new one, POST /<id>/<action>
+      if (parts[1] === 'version') return send(res, 200, VERSION, req);
       if (parts[1] === 'board') {
+        // a project's ship recipe (ship.mjs): GET it, POST {recipe, confirmed, off}, POST .../detect
+        if (parts[2] === 'ship' && parts[3]) {
+          if (req.method !== 'POST') return send(res, 200, getShip(parts[3]), req);
+          if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
+          const b = JSON.parse(await readBody(req) || '{}');
+          const r = parts[4] === 'detect' ? detectShip(parts[3]) : putShip(parts[3], b);
+          return send(res, r.error ? 400 : 200, r, req);
+        }
+        // the screenshot of a shipped task's live page
+        if (req.method !== 'POST' && parts[2] && parts[3] === 'shot') {
+          const f = shotFile(parts[2]);
+          if (!f) return send(res, 404, { error: 'no screenshot' }, req);
+          res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache' });
+          return fs.createReadStream(f).pipe(res);
+        }
         if (req.method !== 'POST' && parts[2] && parts[3] === 'output') { const r = taskOutput(parts[2]); return send(res, r.error ? 404 : 200, r, req); }
         if (req.method !== 'POST') return send(res, 200, listBoard(), req);
         if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, { error: 'json only' }, req);
