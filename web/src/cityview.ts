@@ -14,6 +14,7 @@ import { applyLayout, hasLayout, resetLayout } from './city/layout';
 import { Pulse } from './pulse';
 import { HealthChip } from './health';
 import { h, put, ago, dur, clock, shortTime, bytes, tail, money } from './util';
+import { settingsButton } from './settings';
 
 const SPEEDS = [1, 10, 60, 300, 1800, 7200];
 const ACTIVE_WINDOW = 15 * 60e3;   // replay: a session with no event for this long goes home
@@ -251,6 +252,7 @@ export class CityView {
         totalCost ? h('span', { class: 'chip', title: 'All sessions at API list prices. A subscription is not billed per token; this shows relative spend.' }, h('b', {}, money(totalCost)), ' API-equiv.') : null),
       h('div', { class: 'spacer' }),
       h('span', { class: 'vc-slot' }), // the voice mic docks here (voice.ts)
+      settingsButton(),
       e.modeBadge,
       e.bell,
       c.project.isGit ? e.changesBtn : null,

@@ -4,6 +4,7 @@
 // follow a session) it hands back to be done here.
 import { h } from './util';
 import './voice.css';
+import { SETTINGS_EVENT } from './settings';
 
 type Lang = 'auto' | 'en' | 'ru' | 'he';
 type UiAction = { do: 'overview' } | { do: 'open' | 'follow'; pid: string; sid: string | null; layer: string | null } | { do: 'layer'; layer: string };
@@ -35,6 +36,7 @@ export class Voice {
     this.lang = h('select', { class: 'vc-lang', title: 'The language you speak. Auto detects it.', onchange: () => lsSet(LANG_KEY, this.lang.value) },
       ...(Object.keys(LANG_LABEL) as Lang[]).map(l => h('option', { value: l }, LANG_LABEL[l])));
     this.lang.value = (lsGet(LANG_KEY) as Lang) || 'auto';
+    window.addEventListener(SETTINGS_EVENT, () => { this.lang.value = (lsGet(LANG_KEY) as Lang) || 'auto'; }); // changed in Settings
     this.panel = h('div', { class: 'vc-panel' });
     this.el = h('div', { class: 'vc' }, h('div', { class: 'vc-bar' }, this.lang, this.btn));
     // the replies live on <body>: docked in a header, they would sit under the map's own layers
