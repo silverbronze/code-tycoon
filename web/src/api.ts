@@ -243,6 +243,8 @@ export interface BoardTask {
   asks: BoardAsk[]; summary: string | null; error: string | null; open: number;
   // tldr: one line on what was done; seen: false while a finished task's TL;DR waits in the to-do
   tldr?: string | null; seen?: boolean;
+  // answer: the full answer when the task asked a question (kept across later runs)
+  answer?: string | null;
   // group: the text it was split from (i of n); after/wait: the task it waits for, while that one isn't done
   group: { id: string; i: number; n: number; source: string; fan?: boolean; names?: string[] } | null; after: string | null;
   // fan: one change for several projects, waiting (state 'targets') for the user to confirm them
@@ -269,7 +271,7 @@ export interface BoardTree {
   dir: string; branch: string; base: string; top: string;
   merge?: { state: 'working' | 'waiting' | 'resolving' | 'conflict' | 'merged' | 'nothing' | 'failed'; why?: string; files?: string[]; sha?: string; into?: string; at?: number };
 }
-export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean }[]; ships: Record<string, ShipInfo> }
+export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean }[]; ships: Record<string, ShipInfo>; models?: { id: string; label: string }[] }
 
 const enc = encodeURIComponent;
 const post = (url: string, body?: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -297,12 +299,12 @@ export const api = {
   setSync: async (pid: string, b: { pull?: boolean; push?: boolean }) => { const r = await post(`/api/projects/${enc(pid)}/sync`, b), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as SyncStatus; },
   syncNow: async (pid: string, how: 'now' | 'rebase') => { const r = await post(`/api/projects/${enc(pid)}/sync/${how}`, {}), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d; },
   board: () => get<Board>('/api/board'),
-  addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean }) => {
+  addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean; model?: string | null }) => {
     const r = await post('/api/board', b), d = await r.json();
     if (!r.ok) throw new Error(d.error || String(r.status));
     return d as { task: BoardTask };
   },
-  taskOutput: (id: string) => get<{ sid: string; pid: string | null; project: string | null; tldr: string | null; summary: string | null; text: string | null }>(`/api/board/${enc(id)}/output`),
+  taskOutput: (id: string) => get<{ sid: string; pid: string | null; project: string | null; tldr: string | null; summary: string | null; answer: string | null; text: string | null }>(`/api/board/${enc(id)}/output`),
   taskAction: async (id: string, action: 'route' | 'run' | 'again' | 'answer' | 'stop' | 'mode' | 'close' | 'delete' | 'join' | 'pause' | 'seen' | 'merge' | 'fan' | 'ship', b: Record<string, unknown> = {}) => {
     const r = await post(`/api/board/${enc(id)}/${action}`, b), d = await r.json();
     if (!r.ok) throw new Error(d.error || String(r.status));

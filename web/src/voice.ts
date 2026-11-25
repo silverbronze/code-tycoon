@@ -123,8 +123,10 @@ export class Voice {
   private query() {
     const m = /^#\/p\/([^/]+)/.exec(location.hash);
     const v = this.view();
-    const q = new URLSearchParams({ lang: this.lang.value, mode: lsGet('vz-board-mode2') === 'ask' ? 'ask' : 'full',
-      auto: lsGet('vz-board-auto') === '0' ? '0' : '1', pause: lsGet('vz-board-pause') === '1' ? '1' : '0' });
+    // tasks start with the task form's defaults (all commands, start right away, no pauses) and its model
+    const q = new URLSearchParams({ lang: this.lang.value, mode: 'full', auto: '1', pause: '0' });
+    const model = lsGet('vz-board-model');
+    if (model) q.set('model', model);
     if (m) { q.set('pid', decodeURIComponent(m[1])); if (typeof v?.layer === 'string') q.set('layer', v.layer); }
     return q;
   }

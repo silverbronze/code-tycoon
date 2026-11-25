@@ -31,7 +31,7 @@ import crypto from 'node:crypto';
 import { db } from './db.mjs';
 import { SUMMARIZER_CWD, OWN_DIR_RE, PROJECTS_DIR } from './paths.mjs';
 import { listProjects } from './indexer.mjs';
-import { runAgent, provider, codexBlocked } from './llm.mjs';
+import { runAgent, provider, codexBlocked, modelChoices, isModelFor } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
 import { syncSoon } from './gitsync.mjs';
 import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge, revertMerges } from './worktree.mjs';
@@ -63,6 +63,8 @@ export function listBoard() {
   const list = [...tasks.values()];
   return { tasks: list.sort((a, b) => b.created - a.created).map(view),
     projects: profiles().map(p => ({ id: p.id, name: p.name, root: p.root, tracked: p.tracked })),
+    // the models a task can be started on (empty choice = the project's own model)
+    models: modelChoices(db.prepare('SELECT model FROM sessions WHERE model IS NOT NULL GROUP BY model ORDER BY MAX(last_ts) DESC LIMIT 20').all().map(r => r.model)),
     // how each project with tasks goes live (ship.mjs)
     ships: Object.fromEntries([...new Set(list.map(t => t.pid).filter(Boolean))].map(pid => [pid, shipInfo(pid)])) };
 }
@@ -180,7 +182,7 @@ confidence is how sure you are that this is the right project; use null when non
   }
   const group = t.id, source = t.text, all = [];
   pieces.forEach((x, i) => {
-    const u = i === 0 ? t : { ...blank(), mode: t.mode, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
+    const u = i === 0 ? t : { ...blank(), mode: t.mode, model: t.model, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
     Object.assign(u, { text: String(x.text).trim().slice(0, 8000), group: { id: group, i, n: pieces.length, source } });
     if (x.fan) toTargets(u, x); else placeOn(u, x, ps);
     tasks.set(u.id, u);
@@ -246,8 +248,9 @@ ${planning ? `
 Work in steps when the task has distinct stages, where a later one builds on what an earlier one produces (for example: gather material, then design options, then build), or separate parts the user would want to check one at a time. Then read just enough to plan, write a plan of 2 to 6 steps into the report, do ONLY step 1, and stop with the report: you will be told to go on with the next step in this same session. The user sees the plan as a checklist. In the plan, "after" lists the steps whose result a step needs, so one step can go ahead while another waits for the user. A task that is one piece of work (a fix, a small feature, a question) needs no plan: do it whole and leave "plan" and "step" out.
 ` : ''}
 End your reply with this JSON report as the very last thing:
-{"status": "done" | "needs-you" | "failed", ${planning ? '"plan": [{"title": "short step title", "after": [1]}], ' : ''}"step": 1, "tldr": "the result in one plain line, 12 words at most, no hedging (e.g. 'Fixed the login redirect.')", "summary": "what you did and what is left, 3 sentences at most", "asks": [{"kind": "decision" | "secret" | "action" | "info" | "approval", "question": "one clear question", "why": "what it blocks", "options": ["short choice"], "step": 1}]}
-"status" and "summary" are about the step you just did${planning ? ' (or the whole task, without a plan)' : ''}; "step" is its number, and an ask's "step" is the step it blocks. Use "needs-you" when asks is not empty, and give options when the answer is a choice. For a secret, ask the user to put it somewhere (an .env file, an environment variable) and reply "done"; never ask them to paste a secret.`;
+{"status": "done" | "needs-you" | "failed", ${planning ? '"plan": [{"title": "short step title", "after": [1]}], ' : ''}"step": 1, "tldr": "the result in one plain line, 12 words at most, no hedging (e.g. 'Fixed the login redirect.')", "summary": "what you did and what is left, 3 sentences at most", "answer": "only when the task asks you something", "asks": [{"kind": "decision" | "secret" | "action" | "info" | "approval", "question": "one clear question", "why": "what it blocks", "options": ["short choice"], "step": 1}]}
+"status" and "summary" are about the step you just did${planning ? ' (or the whole task, without a plan)' : ''}; "step" is its number, and an ask's "step" is the step it blocks.
+When the task asks a question (a status, how much, why, what is, compare, explain, tell me...), "answer" is your full answer to it, written to the user: the facts, numbers and names they asked for, as long as it needs (short lines or a list are fine), with no account of how you found it. The board shows it to the user as the result, so it must stand on its own. "tldr" is then the answer in one line. In a later turn, give "answer" again only if the answer changed, and then in full. Leave "answer" out when the task asks for no answer. Use "needs-you" when asks is not empty, and give options when the answer is a choice. For a secret, ask the user to put it somewhere (an .env file, an environment variable) and reply "done"; never ask them to paste a secret.`;
 }
 
 // ------------------------------------------------------------------ steps
@@ -349,7 +352,7 @@ export function taskOutput(id) {
       }
     } catch {}
   }
-  const base = { sid: t.sid, pid: t.pid, project: t.project, tldr: t.tldr || tldrOf(null, t.summary), summary: t.summary };
+  const base = { sid: t.sid, pid: t.pid, project: t.project, tldr: t.tldr || tldrOf(null, t.summary), summary: t.summary, answer: t.answer || null };
   if (!file || !fs.existsSync(file)) return { ...base, text: null };
   // the last assistant message with text (its blocks come one per line, sharing message.id)
   let parts = [], msg = null;
@@ -440,7 +443,7 @@ function run(t, retry = true) {
   save(t);
   let goOn = false, autoAnswered = false;
   const dep = depOf(t);
-  runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, dirs: dep && fs.existsSync(dep.root) ? [dep.root] : [], name: 'Task: ' + t.text.replace(/\s+/g, ' ').slice(0, 50),
+  runAgent({ want: taskModel(t), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, dirs: dep && fs.existsSync(dep.root) ? [dep.root] : [], name: 'Task: ' + t.text.replace(/\s+/g, ' ').slice(0, 50),
     budgetUsd: RUN_USD, cwd: t.wt ? t.wt.cwd : t.root, prompt, timeoutMs: RUN_MS, onSpawn: p => procs.set(t.id, p) })
     .then(({ text, cost, sid, denials }) => {
       const { j, prose } = report(text);
@@ -462,9 +465,13 @@ function run(t, retry = true) {
       t.asks.push(...asks);
       const summary = String(j?.summary || prose.slice(-700) || '').slice(0, 1200);
       const status = asks.length ? 'needs-you' : j?.status === 'failed' ? 'failed' : 'done';
-      const tldr = tldrOf(j?.tldr, summary);
-      Object.assign(rec, { sid, cost, summary, tldr, status });
-      Object.assign(t, { sid: sid || t.sid, cost: t.cost + (cost || 0), summary, tldr });
+      // the answer to a question the task asked: kept across later runs (an approval or a fix
+      // must not replace it), replaced only by a new one
+      const ans = typeof j?.answer === 'string' && j.answer.trim() ? j.answer.trim().slice(0, 8000) : null;
+      // an answered question keeps its one-liner too, unless this run gave a new answer
+      const tldr = t.answer && !ans && t.tldr && !t.steps.length ? t.tldr : tldrOf(j?.tldr, summary);
+      Object.assign(rec, { sid, cost, summary, tldr, status, answer: ans });
+      Object.assign(t, { sid: sid || t.sid, cost: t.cost + (cost || 0), summary, tldr, answer: ans || t.answer || null });
       if (!t.steps.length) { t.state = status; return; }
       for (const n of did) {
         const s = t.steps.find(x => x.n === n);
@@ -607,7 +614,7 @@ Resolve every conflict so the result keeps both sides' intent: your task's chang
 End with this JSON report as the very last thing: {"status": "done" | "failed", "summary": "what you kept from each side, 2 sentences at most"}`;
   const resume = provider() === 'claude' && t.provider === 'claude' && t.sid ? t.sid : null;
   try {
-    const { text, cost, sid } = await runAgent({ want: projectModel(t.pid), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, name: 'Merge: ' + taskTitle(t).slice(0, 50),
+    const { text, cost, sid } = await runAgent({ want: taskModel(t), tools: 'task', perm: t.mode, allow: t.allow, resume, persist: true, name: 'Merge: ' + taskTitle(t).slice(0, 50),
       budgetUsd: RUN_USD, cwd: w.cwd, prompt, timeoutMs: 30 * 60e3, onSpawn: p => procs.set(t.id, p) });
     t.cost += cost || 0; t.sid = sid || t.sid;
     const { j } = report(text);
@@ -850,15 +857,17 @@ const get = id => tasks.get(id);
 function blank() {
   return { id: newId(), text: '', created: Date.now(), updated: Date.now(), pid: null, project: null, root: null, route: null,
     mode: 'full', autoRun: false, state: 'routing', runs: [], sid: null, provider: null,
-    cost: 0, asks: [], allow: [], summary: null, error: null, group: null, after: null, noSplit: false, steps: [], pause: false, fan: null };
+    cost: 0, asks: [], allow: [], summary: null, error: null, group: null, after: null, noSplit: false, steps: [], pause: false, fan: null, model: null, answer: null };
 }
+// the model picked for the task, else the one the project's sessions use now
+const taskModel = t => t.model && isModelFor(t.model) ? t.model : projectModel(t.pid);
 
-export function create({ text, pid, mode, autoRun, pause }) {
+export function create({ text, pid, mode, autoRun, pause, model }) {
   text = String(text || '').trim();
   if (!text) return { error: 'write a task first' };
   if (text.length > 8000) return { error: 'task is too long (8000 characters at most)' };
   // tasks bypass permissions unless the user picks "ask me"
-  const t = { ...blank(), text, mode: mode === 'ask' ? 'ask' : 'full', autoRun: !!autoRun, pause: !!pause };
+  const t = { ...blank(), text, mode: mode === 'ask' ? 'ask' : 'full', autoRun: !!autoRun, pause: !!pause, model: isModelFor(model) ? model : null };
   tasks.set(t.id, t);
   const p = pid && profiles().find(x => x.id === pid);
   if (pid && !p) { tasks.delete(t.id); return { error: 'unknown project' }; }
@@ -901,7 +910,7 @@ export function fanOut(id, pids, go = true) {
   }
   const group = { id: t.id, n: targets.length, source: t.group?.source || t.text, fan: true, names: targets.map(p => p.name) };
   const all = targets.map((p, i) => {
-    const u = i === 0 ? t : { ...blank(), text: t.text, mode: t.mode, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
+    const u = i === 0 ? t : { ...blank(), text: t.text, mode: t.mode, model: t.model, autoRun: t.autoRun, pause: t.pause, created: t.created + i };
     Object.assign(u, { group: { ...group, i }, after: null, fan: null });
     setProject(u, p, route);
     tasks.set(u.id, u);

@@ -77,6 +77,18 @@ export function modelLabel(want) {
   return /^(haiku|sonnet|opus|fable)$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m.replace(/^claude-/, '');
 }
 
+// The models a task can run on with this provider: the current families plus any model a
+// session has used (`seen`, newest first). [{ id, label }]
+const CLAUDE_MODELS = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+export function modelChoices(seen = [], prov = provider()) {
+  const ok = prov === 'codex' ? isCodexModel : isClaudeModel;
+  const base = prov === 'codex' ? [CODEX.def, CODEX.map, CODEX.small] : CLAUDE_MODELS;
+  const ids = [...new Set([...base, ...seen.filter(ok)])];
+  const pretty = m => { const c = m.match(/^claude-([a-z]+)-(\d+)-(\d+)/); return c ? `${c[1][0].toUpperCase()}${c[1].slice(1)} ${c[2]}.${c[3]}` : m.replace(/^claude-/, ''); };
+  return ids.map(id => ({ id, label: pretty(id) }));
+}
+export function isModelFor(m, prov = provider()) { return typeof m === 'string' && m.length <= 80 && /^[\w.:\-\[\]]+$/.test(m) && (prov === 'codex' ? isCodexModel(m) : isClaudeModel(m)); }
+
 // ------------------------------------------------------------------ run
 const firstJson = text => { const m = String(text || '').match(/\{[\s\S]*\}/); try { return m ? JSON.parse(m[0]) : {}; } catch { return {}; } };
 

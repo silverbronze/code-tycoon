@@ -451,7 +451,7 @@ const server = http.createServer(async (req, res) => {
         const body = json ? JSON.parse(await readBody(req) || '{}') : null;
         try {
           return send(res, 200, await voiceCommand({ audio: json ? null : await readBytes(req), type: ct, text: json ? String(body.text || '') : null, lang: q.get('lang') || 'auto',
-            page: { pid: q.get('pid') || null, layer: q.get('layer') || null }, prefs: { mode: q.get('mode') === 'ask' ? 'ask' : 'full', autoRun: q.get('auto') !== '0', pause: q.get('pause') === '1' } }), req);
+            page: { pid: q.get('pid') || null, layer: q.get('layer') || null }, prefs: { mode: q.get('mode') === 'ask' ? 'ask' : 'full', autoRun: q.get('auto') !== '0', pause: q.get('pause') === '1', model: q.get('model') || null } }), req);
         } catch (e) { return send(res, 502, { error: e.message }, req); }
       }
       if (parts[1] === 'alerts') {
