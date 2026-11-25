@@ -1,11 +1,10 @@
 import { api, live, type Project, type OpenSession, type Weekly, type Setup, type SyncStatus } from './api';
 import { h, put, ago, bytes, dur, tail, money } from './util';
-import { notify } from './notify';
 import { Pulse } from './pulse';
 import { CoachPanel } from './coach';
 import { BoardPanel } from './board';
 import { SetupAuditPanel } from './setupaudit';
-import { AccountChip } from './account';
+import { settings, settingsButton } from './settings';
 
 const VERB: Record<string, string> = { write: 'Editing', read: 'Reading', search: 'Searching', touch: 'Touching', cmd: 'Running', remote: 'Calling', skill: 'Using skill', spawn: 'Spawning agent', ask: 'Asking you', other: 'Using' };
 const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Working'], ['waiting', 'Your turn'], ['idle', 'Idle']];
@@ -21,7 +20,6 @@ export class Overview {
   private coach = new CoachPanel();
   private board = new BoardPanel();
   private setupAudit = new SetupAuditPanel();
-  private account = new AccountChip();
   private setup: Setup | null = null;
   private setupBusy = false;
   private setupError = '';
@@ -34,7 +32,11 @@ export class Overview {
     this.timer = window.setInterval(() => this.render(), 5000);
     live.subscribe(null);
     this.off = live.on(m => { if (m.type === 'session' || m.type === 'indexed' || m.type === 'sync') this.render(); });
+    settings.onSetupChange.push(this.onSetup);
   }
+
+  // a switch flipped in Settings: the setup box follows at once
+  private onSetup = (s: Setup) => { this.setup = s; this.render(); };
 
   async render() {
     let res;
@@ -52,13 +54,8 @@ export class Overview {
     put(this.root,
       h('div', { class: 'ov-hero' },
         h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-light.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
-        // settings, as switches, not numbers
-        h('div', { class: 'ov-switches' },
-          this.account.el,
-          notify.supported ? this.switch(notify.on, 'Desktop alerts', 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
-            async () => { await notify.toggle(); this.render(); }) : null,
-          this.setupToggle('hooks', 'Live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
-          this.setupToggle('autostart', 'Start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
+        // the account and every switch live in Settings (settings.ts)
+        h('div', { class: 'ov-switches' }, settingsButton(true))),
       this.pulse.el,
       this.setupBanner(),
       // Tasks for any project, and the to-do of what their sessions need from you
@@ -79,17 +76,6 @@ export class Overview {
     this.setupBusy = true; this.setupError = ''; this.render();
     try { this.setup = await api.setSetup(change); } catch (e) { this.setupError = (e as Error).message; }
     this.setupBusy = false; this.render();
-  }
-
-  private setupToggle(k: 'hooks' | 'autostart', label: string, tip: string) {
-    const on = this.setup?.[k];
-    if (on == null) return null;
-    return this.switch(on, label, tip, () => this.changeSetup({ [k]: !on }), this.setupBusy);
-  }
-
-  private switch(on: boolean, label: string, tip: string, onclick: () => void, busy = false) {
-    return h('button', { class: 'ov-switch' + (on ? ' on' : ''), role: 'switch', 'aria-checked': String(on), title: tip, disabled: busy, onclick },
-      h('i', {}), label);
   }
 
   // First run: both switches in one place, until they are on or put off for later.
@@ -227,7 +213,7 @@ export class Overview {
       cell('wait', w.waitMedian ? dur(w.waitMedian) : '–', w.waitMedian, p.waitMedian, 'down', 'Median time a finished turn waited for your next prompt'));
   }
 
-  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.setupAudit.dispose(); this.root.remove(); }
+  dispose() { clearInterval(this.timer); settings.onSetupChange = settings.onSetupChange.filter(f => f !== this.onSetup); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.setupAudit.dispose(); this.root.remove(); }
 }
 
 function spark(v: number[]) {
