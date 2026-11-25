@@ -26,6 +26,12 @@ export class Pulse {
   private openKey: string | null = null;
   private last: PulseT | null = null;
   private flash = ''; // what the last stop did, shown until the popover closes
+  // idle-list state that outlives a rebuild of the popover (all reset when it closes)
+  private gone = new Set<number>();     // pids stopped here; a stale rescan must not bring them back
+  private stopping = new Set<number>(); // pids with a stop request in flight
+  private armed: { key: string; until: number } | null = null; // 'all' or a pid, armed by the first tap
+  private freed = 0;
+  private nStopped = 0;
 
   constructor(private variant: 'big' | 'strip') {
     this.el = h('div', { class: 'pulse ' + variant + (variant === 'strip' ? ' glass' : '') });
@@ -119,6 +125,7 @@ export class Pulse {
 
   private close() {
     this.pop?.remove(); this.pop = null; this.openKey = null; this.flash = '';
+    this.gone.clear(); this.armed = null; this.freed = 0; this.nStopped = 0; // `stopping` empties itself as requests return
     this.el.querySelectorAll('.sel').forEach(x => x.classList.remove('sel'));
     document.removeEventListener('pointerdown', this.outside, true);
     document.removeEventListener('keydown', this.esc);
@@ -215,46 +222,85 @@ export class Pulse {
 
   // Sessions whose process (with its MCP servers and shells) outlived its use. "Stop all"
   // takes only sessions; a stray helper with no session is stopped one at a time.
+  //
+  // The list redraws itself from local state: a stopped row leaves at once, "Stop all" always
+  // means the rows still shown, and an armed button stays armed when the slow rescan after a
+  // stop lands and the popover is rebuilt (before, that rebuild reset the armed "Stop all"
+  // under the finger and it took another two taps; a failed request left a dead button).
   private idleList(idle: IdleScan, now: number) {
-    const sess = idle.items.filter(i => i.kind === 'session');
+    const box = h('div', { class: 'pp-idle' });
     const sum = (xs: IdleProc[]) => xs.reduce((a, i) => a + i.mem, 0);
-    const stop = async (items: IdleProc[], btn: HTMLButtonElement) => {
-      btn.disabled = true; btn.textContent = 'Stopping…';
-      let r: StopResult;
-      try { r = await api.stopProcs(items.map(i => i.pid)); } catch { btn.textContent = 'Could not stop'; return; }
-      this.flash = `Stopped ${r.stopped.length} process${r.stopped.length === 1 ? '' : 'es'}, freed ${mb(r.freed)}.`
-        + (r.failed.length ? ` ${r.failed.length} would not stop.` : '') + (r.skipped.length ? ` ${r.skipped.length} became active and were left running.` : '');
-      this.refresh();
-      if (this.openKey) this.load(this.openKey);
-    };
-    // the first click arms the button, the second one stops
-    const confirmBtn = (label: string, items: IdleProc[], cls = '') => {
-      const b = h('button', { class: 'pp-stop' + cls, title: 'Ends the process and everything it started. The session stays in history; resume it from the Claude panel.' }, label);
-      let armed = false;
-      b.onclick = (e: Event) => {
-        e.stopPropagation();
-        if (!armed) { armed = true; b.classList.add('armed'); b.textContent = items.length > 1 ? `Stop ${items.length}? Click again` : 'Sure?'; setTimeout(() => { if (armed && !b.disabled) { armed = false; b.classList.remove('armed'); b.textContent = label; } }, 4000); return; }
-        stop(items, b);
-      };
-      return b;
-    };
     const why = (i: IdleProc) => i.reason === 'ended' ? `session ended ${ago(i.seen, now)}, process kept running`
       : i.reason === 'unseen' ? `no session since it started ${ago(i.born, now)}`
       : i.reason === 'orphan' ? `its session is gone; running since ${ago(i.born, now)}`
       : `last active ${ago(i.seen, now)}`;
-    return h('div', { class: 'pp-idle' },
-      h('div', { class: 'pp-idle-head' },
-        h('div', {}, h('b', {}, `${idle.n} idle, holding ${mb(idle.mem)}`),
-          h('div', { class: 'pp-sub' }, `Claude Code processes nobody has used for ${IDLE_HOURS}+ hours, with the MCP servers and shells they started.`)),
-        sess.length > 1 ? confirmBtn(`Stop all · free ${mb(sum(sess))}`, sess, ' all') : null),
-      idle.items.map(i => h('div', { class: 'pp-row' },
-        h('div', { class: 'pp-main' },
-          h('div', { class: 'pp-t' }, i.session?.project ? h('span', { class: 'pp-proj' }, i.session.project) : null, ' ',
-            i.session?.title || i.label || (i.session ? 'Untitled session' : 'Claude Code panel')),
-          h('div', { class: 'pp-sub' }, why(i), i.helpers ? ` · +${i.helpers} helper${i.helpers === 1 ? '' : 's'}` : '',
-            i.helperNames.length ? h('span', { class: 'dim' }, ` (${i.helperNames.join(', ')})`) : null, i.ver ? h('span', { class: 'dim' }, ` · v${i.ver}`) : null)),
-        h('span', { class: 'pp-n' }, mb(i.mem)),
-        confirmBtn('Stop', [i]))));
+    const draw = () => {
+      const items = idle.items.filter(i => !this.gone.has(i.pid));
+      const allSess = items.filter(i => i.kind === 'session');
+      const sess = allSess.filter(i => !this.stopping.has(i.pid));
+      if (!items.length) { box.replaceChildren(); box.style.display = 'none'; return; }
+      // the first click arms the button, the second one stops
+      const confirmBtn = (key: string, label: string, pick: () => IdleProc[], cls = '') => {
+        const busy = key === 'all' ? !sess.length : this.stopping.has(Number(key));
+        const n = pick().length;
+        const armed = !busy && this.armed?.key === key && this.armed.until > Date.now();
+        const b = h('button', { class: 'pp-stop' + cls + (armed ? ' armed' : ''), title: 'Ends the process and everything it started. The session stays in history; resume it from the Claude panel.' },
+          busy ? 'Stopping…' : armed ? (n > 1 ? `Stop ${n}? Tap again` : 'Sure?') : label) as HTMLButtonElement;
+        b.disabled = busy;
+        b.onclick = (e: Event) => {
+          e.stopPropagation();
+          const targets = pick();
+          if (!targets.length) return;
+          if (!(this.armed?.key === key && this.armed.until > Date.now())) {
+            this.armed = { key, until: Date.now() + 4000 };
+            setTimeout(() => { if (this.armed?.key === key && this.armed.until <= Date.now()) { this.armed = null; draw(); } }, 4050);
+            return draw();
+          }
+          this.armed = null;
+          stop(targets);
+        };
+        return b;
+      };
+      box.style.display = '';
+      box.replaceChildren(
+        h('div', { class: 'pp-idle-head' },
+          h('div', {}, h('b', {}, `${items.length} idle, holding ${mb(sum(items))}`),
+            h('div', { class: 'pp-sub' }, `Claude Code processes nobody has used for ${IDLE_HOURS}+ hours, with the MCP servers and shells they started.`)),
+          allSess.length > 1 ? confirmBtn('all', `Stop all · free ${mb(sum(sess))}`, () => items.filter(i => i.kind === 'session' && !this.stopping.has(i.pid) && !this.gone.has(i.pid)), ' all') : null),
+        ...items.map(i => h('div', { class: 'pp-row' },
+          h('div', { class: 'pp-main' },
+            h('div', { class: 'pp-t' }, i.session?.project ? h('span', { class: 'pp-proj' }, i.session.project) : null, ' ',
+              i.session?.title || i.label || (i.session ? 'Untitled session' : 'Claude Code panel')),
+            h('div', { class: 'pp-sub' }, why(i), i.helpers ? ` · +${i.helpers} helper${i.helpers === 1 ? '' : 's'}` : '',
+              i.helperNames.length ? h('span', { class: 'dim' }, ` (${i.helperNames.join(', ')})`) : null, i.ver ? h('span', { class: 'dim' }, ` · v${i.ver}`) : null)),
+          h('span', { class: 'pp-n' }, mb(i.mem)),
+          confirmBtn(String(i.pid), 'Stop', () => this.gone.has(i.pid) || this.stopping.has(i.pid) ? [] : [i]))));
+    };
+    const stop = async (items: IdleProc[]) => {
+      const pids = items.map(i => i.pid);
+      pids.forEach(p => this.stopping.add(p));
+      draw();
+      let r: StopResult | null = null;
+      try { r = await api.stopProcs(pids); } catch {}
+      pids.forEach(p => this.stopping.delete(p));
+      const note = this.pop?.querySelector('.pp-note.ok');
+      if (!r) this.flash = `Could not reach Code Tycoon to stop ${pids.length === 1 ? 'that process' : `${pids.length} processes`}. Try again.`;
+      else {
+        // stopped, or already gone: either way not worth showing again
+        for (const p of r.stopped) this.gone.add(p);
+        for (const p of pids) if (!r.failed.includes(p) && !r.skipped.includes(p)) this.gone.add(p);
+        this.freed += r.freed; this.nStopped += r.stopped.length;
+        this.flash = `Stopped ${this.nStopped} process${this.nStopped === 1 ? '' : 'es'}, freed ${mb(this.freed)}.`
+          + (r.failed.length ? ` ${r.failed.length} would not stop.` : '') + (r.skipped.length ? ` ${r.skipped.length} became active and were left running.` : '');
+      }
+      if (note) note.textContent = this.flash; else if (this.pop) box.before(h('div', { class: 'pp-note ok' }, this.flash));
+      draw();
+      this.refresh();
+      // rebuild from a fresh scan only when no other stop is still running, or it would wipe its "Stopping…"
+      if (this.openKey && !this.stopping.size) this.load(this.openKey);
+    };
+    draw();
+    return box;
   }
 
   dispose() { this.close(); clearInterval(this.timer); clearTimeout(this.pending); this.off(); this.el.remove(); }
