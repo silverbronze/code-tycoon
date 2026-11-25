@@ -1298,7 +1298,7 @@ export class DomainMap {
     else fill(this.body, this.tab === 'start' && m.world.length ? this.startTab() : this.tab === 'task' || this.tab === 'start' ? this.taskTab() : this.tab === 'flows' ? this.flowsTab() : this.tab === 'drift' ? this.driftTab() : this.mapTab());
     this.body.scrollTop = scroll;
     const ta = caret >= 0 ? this.body.querySelector<HTMLTextAreaElement>('.dm-ta') : null;
-    if (ta) { ta.focus(); ta.setSelectionRange(caret, caret); }
+    if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(caret, caret); } // a plain focus() scrolls the panel back to the box
   }
 
   // What a thing in the real world reaches: flows it starts or ends, isles that stand for it, drift on them.

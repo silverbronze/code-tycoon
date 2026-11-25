@@ -71,7 +71,8 @@ export class Overview {
       res.sessions.length ? this.openSessions(res.sessions) : null,
       tracked.length ? this.coach.el : null,
     );
-    this.root.scrollTop = scroll;
+    // only when it moved: writing scrollTop cancels a smooth scroll in progress (Page Down, Space)
+    if (this.root.scrollTop !== scroll) this.root.scrollTop = scroll;
     this.board.restoreFocus(focus);
   }
 
