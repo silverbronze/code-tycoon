@@ -25,7 +25,7 @@ export class Overview {
   private setupError = '';
 
   constructor(parent: HTMLElement) {
-    this.root = h('div', { class: 'overview' });
+    this.root = h('div', { class: 'overview', role: 'main' });
     parent.appendChild(this.root);
     this.render();
     api.setup().then(s => { this.setup = s; this.render(); }).catch(() => {});

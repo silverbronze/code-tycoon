@@ -33,7 +33,7 @@ export class Voice {
   constructor(private view: () => any) {
     this.btn = h('button', { class: 'vc-btn', title: 'Speak a command (Alt+V)', 'aria-label': 'Voice command', onclick: () => this.toggle() });
     this.btn.innerHTML = MIC;
-    this.lang = h('select', { class: 'vc-lang', title: 'The language you speak. Auto detects it.', onchange: () => lsSet(LANG_KEY, this.lang.value) },
+    this.lang = h('select', { class: 'vc-lang', title: 'The language you speak. Auto detects it.', 'aria-label': 'Voice language', onchange: () => lsSet(LANG_KEY, this.lang.value) },
       ...(Object.keys(LANG_LABEL) as Lang[]).map(l => h('option', { value: l }, LANG_LABEL[l])));
     this.lang.value = (lsGet(LANG_KEY) as Lang) || 'auto';
     window.addEventListener(SETTINGS_EVENT, () => { this.lang.value = (lsGet(LANG_KEY) as Lang) || 'auto'; }); // changed in Settings

@@ -20,7 +20,7 @@
 .co-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 12px; }
 .co-cols.one { grid-template-columns: minmax(0, 1fr); }
 .co-box { border: 1px solid var(--line); border-radius: 14px; background: rgba(0, 0, 0, 0.02); padding: 6px; min-width: 0; }
-.co-bh { display: flex; gap: 10px; align-items: baseline; font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 6px; }
+.co-bh { display: flex; gap: 10px; align-items: baseline; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 6px; }
 .co-bh .co-n { letter-spacing: 0; text-transform: none; font-weight: 400; }
 .co-clear { margin-left: auto; background: none; border: 0; color: var(--cyan); font: 11.5px var(--ui); cursor: pointer; text-transform: none; letter-spacing: 0; }
 .co-habit { padding: 8px 10px; border-radius: 9px; cursor: pointer; }
@@ -50,13 +50,13 @@
 .co-pr .co-pn { color: var(--text); font-weight: 500; }
 .co-pr .co-ph { color: var(--muted); }
 .co-pr.hd { cursor: default; padding-top: 0; }
-.co-pr.hd span { font: 10.5px var(--ui); color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+.co-pr.hd span { font: 11px var(--ui); color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
 .co-pr:not(.hd):hover { background: rgba(0, 0, 0, 0.04); }
 .co-pr .co-save { margin-left: 0; }
 .co-srow { display: grid; grid-template-columns: 100px minmax(140px, 1.2fr) minmax(0, 1.5fr) 62px 52px 66px 64px; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 9px; font-size: 13px; cursor: pointer; }
 .co-srow:not(.hd):hover, .co-srow.open { background: rgba(0, 0, 0, 0.04); }
 .co-srow.hd { cursor: default; padding-top: 0; }
-.co-srow.hd span { font: 10.5px var(--ui); color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.co-srow.hd span { font: 11px var(--ui); color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .co-sp { color: var(--muted); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .co-st { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .co-kinds { display: flex; gap: 4px; overflow: hidden; }
@@ -72,7 +72,7 @@
 .co-chart { width: 100%; height: auto; display: block; }
 .co-chart .co-grid { stroke: rgba(0, 0, 0, 0.08); stroke-width: 1; }
 .co-chart .co-thr { stroke: var(--red); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.6; }
-.co-chart .co-ax { fill: var(--dim); font: 10px var(--mono); }
+.co-chart .co-ax { fill: var(--dim); font: 11px var(--mono); }
 .co-chart .co-line { fill: none; stroke: var(--cyan); stroke-width: 2; stroke-linejoin: round; }
 .co-chart .co-area { fill: rgba(0, 0, 0, 0.05); stroke: none; }
 .co-chart .co-cross { stroke: rgba(0, 0, 0, 0.4); stroke-width: 1; }
