@@ -242,6 +242,14 @@ select.ctl { background: var(--panel-solid); }
 .ov-switch.on { color: var(--text); } .ov-switch.on i { background: var(--text); } .ov-switch.on i::after { transform: translateX(12px); }
 .ov-switch:hover { color: var(--text); }
 .ov-switch:disabled { opacity: 0.6; cursor: wait; }
+/* account: sign in / signed in as … / sign out (account.ts), its own row above the switches */
+.acct { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px; color: var(--text); }
+.acct:empty { display: none; }
+.acct a { color: var(--text); }
+.acct-dim, .acct a.acct-dim { color: var(--muted); }
+.acct-code { font-family: ui-monospace, monospace; letter-spacing: 0.06em; padding: 1px 6px; border: 1px solid var(--text); border-radius: 4px; }
+.acct-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--muted); }
+.acct-dot.on { background: var(--text); border-color: var(--text); }
 /* pulse on the overview: a headline of work, then meters for the machine and the plan */
 .pulse.big { margin: -8px 0 36px; }
 .pu-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); font-size: 16px; color: var(--muted); }

@@ -5,6 +5,7 @@ import { Pulse } from './pulse';
 import { CoachPanel } from './coach';
 import { BoardPanel } from './board';
 import { SetupAuditPanel } from './setupaudit';
+import { AccountChip } from './account';
 
 const VERB: Record<string, string> = { write: 'Editing', read: 'Reading', search: 'Searching', touch: 'Touching', cmd: 'Running', remote: 'Calling', skill: 'Using skill', spawn: 'Spawning agent', ask: 'Asking you', other: 'Using' };
 const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Working'], ['waiting', 'Your turn'], ['idle', 'Idle']];
@@ -20,6 +21,7 @@ export class Overview {
   private coach = new CoachPanel();
   private board = new BoardPanel();
   private setupAudit = new SetupAuditPanel();
+  private account = new AccountChip();
   private setup: Setup | null = null;
   private setupBusy = false;
   private setupError = '';
@@ -52,6 +54,7 @@ export class Overview {
         h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-light.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
         // settings, as switches, not numbers
         h('div', { class: 'ov-switches' },
+          this.account.el,
           notify.supported ? this.switch(notify.on, 'Desktop alerts', 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
             async () => { await notify.toggle(); this.render(); }) : null,
           this.setupToggle('hooks', 'Live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),

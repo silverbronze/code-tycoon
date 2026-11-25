@@ -30,6 +30,7 @@ import { voiceStatus, voiceCommand } from './voice.mjs';
 import { accountLimits, accountLimitsNow } from './limits.mjs';
 import { startTunnel, tunnelStatus, reloadTunnel } from './tunnel.mjs';
 import { startUpdates, updateStatus } from './update.mjs';
+import { startSignin, signinState, savedAccount, signOut, DEFAULT_RELAY } from './connect.mjs';
 import { onSync, syncStatus, setSync, syncSoon, syncProject, rebaseNow } from './gitsync.mjs';
 
 // Shared secret the hook sends, so no web page can post fake activity to /hook.
@@ -414,7 +415,12 @@ const server = http.createServer(async (req, res) => {
       // the tunnel to a relay (server/tunnel.mjs): whether this PC is reachable from outside
       if (parts[1] === 'tunnel') {
         if (req.method === 'POST' && parts[2] === 'reload') return send(res, 200, reloadTunnel(), req);
-        return send(res, 200, { ...tunnelStatus(), update: updateStatus() }, req);
+        // sign in / sign out from the app: the account token stays in ~/.codetycoon/tunnel.json, so
+        // signing in once lasts across restarts until Sign out (or the relay disconnects this PC)
+        if (req.method === 'POST' && parts[2] === 'signin') startSignin(DEFAULT_RELAY, () => reloadTunnel());
+        if (req.method === 'POST' && parts[2] === 'signout') { await signOut(); reloadTunnel(); }
+        const fromEnv = !!(process.env.CODETYCOON_TUNNEL_URL && process.env.CODETYCOON_TUNNEL_TOKEN);
+        return send(res, 200, { ...tunnelStatus(), update: updateStatus(), saved: savedAccount(), signin: signinState(), fromEnv, relay: DEFAULT_RELAY }, req);
       }
       // the task board (server/board.mjs): GET the tasks, POST a new one, POST /<id>/<action>
       if (parts[1] === 'version') return send(res, 200, VERSION, req);
