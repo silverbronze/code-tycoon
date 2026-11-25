@@ -163,13 +163,22 @@ export class DomainMap {
   setFrame(r: { left: number; top: number; right: number; bottom: number }) {
     this.frame = r;
     const box = this.el.getBoundingClientRect();
-    Object.assign(this.panel.style, { left: `${r.left - box.left + 14}px`, top: `${r.top - box.top + 14}px`, bottom: `${box.bottom - r.bottom + 14}px` });
+    Object.assign(this.panel.style, { left: `${r.left - box.left + 14}px`, right: `${box.right - r.right + 14}px`, top: `${r.top - box.top + 14}px`, bottom: `${box.bottom - r.bottom + 14}px` });
     const pw = this.panel.offsetWidth || 340;
     Object.assign(this.empty.style, { left: `${(r.left + pw + 28 + r.right) / 2 - box.left}px`, top: `${(r.top + r.bottom) / 2 - box.top}px` });
   }
   // The whole archipelago in the open part of the screen: right of the panel, inside the frame.
   // How much of the frame's left the panel takes (0 while there is nothing to show in it).
-  panelWidth() { return this.panel.style.display === 'none' ? 0 : (this.panel.offsetWidth || 340) + 14; }
+  panelWidth() { return this.panel.style.display === 'none' || this.sheet() ? 0 : (this.panel.offsetWidth || 340) + 14; }
+  // On a narrow screen the panel is a sheet along the bottom (domain.css), so the map keeps the width above it.
+  // Where the bottom sheet starts (client y), or null when the panel sits on the left.
+  sheetTop(): number | null { return this.sheet() ? this.panel.getBoundingClientRect().top : null; }
+  private sheet() { return this.panel.style.display !== 'none' && matchMedia('(max-width: 1100px)').matches; }
+  // The open part of the screen in client coordinates: right of the panel, or above it when it is a sheet.
+  private openBox() {
+    const pr = this.panel.getBoundingClientRect(), hidden = this.panel.style.display === 'none', sheet = this.sheet();
+    return { left: Math.max(this.frame.left, hidden || sheet ? 0 : pr.right), right: this.frame.right, top: this.frame.top, bottom: sheet ? Math.min(this.frame.bottom, pr.top) : this.frame.bottom };
+  }
   fit(animate = true) {
     if (!this.isles.length) return;
     const pts: { p: THREE.Vector3; r: number }[] = [];
@@ -183,9 +192,9 @@ export class DomainMap {
   // part of the screen: right of the panel, inside the frame, less padTop/padX pixels for what hangs off
   // them. Exact for the orthographic camera at the goal angle: points are measured on the screen's axes.
   private frameAll(pts: { p: THREE.Vector3; r: number }[], padTop = 0, padX = 0) {
-    const st = this.stage, cb = this.canvasBox.getBoundingClientRect(), pr = this.panel.getBoundingClientRect();
-    const left = Math.max(this.frame.left, this.panel.style.display === 'none' ? 0 : pr.right) + 10 + padX, right = this.frame.right - 10 - padX;
-    const top = this.frame.top + 10 + padTop, bottom = this.frame.bottom - 10;
+    const st = this.stage, cb = this.canvasBox.getBoundingClientRect(), o = this.openBox();
+    const left = o.left + 10 + padX, right = o.right - 10 - padX;
+    const top = o.top + 10 + padTop, bottom = o.bottom - 10;
     const openW = Math.max(200, right - left), openH = Math.max(160, bottom - top);
     // the camera's right and up axes (lookAt from azimuth/elevation, up = +y)
     const az = st.goal.azimuth, el = st.goal.elevation, ca = Math.cos(az), sa = Math.sin(az), ce = Math.cos(el), se = Math.sin(el);
@@ -991,9 +1000,9 @@ export class DomainMap {
   }
   // Whether all these points (with their radius) are on screen now, right of the panel and inside the frame.
   private inView(pts: { p: THREE.Vector3; r: number }[]) {
-    const cb = this.canvasBox.getBoundingClientRect(), pr = this.panel.getBoundingClientRect();
-    const left = Math.max(this.frame.left, this.panel.style.display === 'none' ? 0 : pr.right) - cb.left, right = this.frame.right - cb.left;
-    const top = this.frame.top - cb.top, bottom = this.frame.bottom - cb.top, px = cb.height / this.stage.viewSize;
+    const cb = this.canvasBox.getBoundingClientRect(), o = this.openBox();
+    const left = o.left - cb.left, right = o.right - cb.left;
+    const top = o.top - cb.top, bottom = o.bottom - cb.top, px = cb.height / this.stage.viewSize;
     const out = { x: 0, y: 0, visible: false };
     return pts.every(({ p, r }) => {
       this.stage.project(p, out);

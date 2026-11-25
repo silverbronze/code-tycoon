@@ -87,7 +87,7 @@ export class CityView {
   private disposed = false;
 
   constructor(parent: HTMLElement, public pid: string, follow: string | null = null) {
-    this.root = h('div', { class: 'cityview' });
+    this.root = h('div', { class: 'cityview', role: 'main' });
     parent.appendChild(this.root);
     this.pendingFollow = follow;
     this.load();
@@ -238,7 +238,7 @@ export class CityView {
     e.modeBadge = h('span', { class: 'mode live' }, 'LIVE');
     const totalCost = this.data.sessions.reduce((s, x) => s + (x.cost || 0), 0);
     const header = h('header', { class: 'topbar glass' },
-      h('a', { class: 'back', href: '#/' }, '←'),
+      h('a', { class: 'back', href: '#/', 'aria-label': 'All projects', title: 'All projects' }, '←'),
       h('div', { class: 'ttl' }, h('h1', {}, c.project.name), h('div', { class: 'path' }, c.project.root)),
       h('div', { class: 'chips' },
         (this.health = new HealthChip(this.pid, { onData: (d, prev) => this.onHealth(d, prev), onFactor: k => this.openFactor(k) })).el,
@@ -256,9 +256,9 @@ export class CityView {
       c.project.isGit ? e.changesBtn : null,
       e.colorSel,
       e.levelChip = h('span', { class: 'chip ghost', title: 'Zoom out for modules, in for files' }, 'Level: ', e.lod),
-      h('button', { class: 'chip icon', title: 'Rotate left (Q)', onclick: () => this.viewStage().rotate(-1) }, '⟲'),
-      h('button', { class: 'chip icon', title: 'Rotate right (E)', onclick: () => this.viewStage().rotate(1) }, '⟳'),
-      h('button', { class: 'chip icon', title: 'Fit the map', onclick: () => this.layer === 'domain' ? this.domain.fit() : this.stage.flyTo(0, 0, (c.project.w + c.project.h) * 0.55) }, '⤢'));
+      h('button', { class: 'chip icon rot', title: 'Rotate left (Q)', 'aria-label': 'Rotate left', onclick: () => this.viewStage().rotate(-1) }, '⟲'),
+      h('button', { class: 'chip icon rot', title: 'Rotate right (E)', 'aria-label': 'Rotate right', onclick: () => this.viewStage().rotate(1) }, '⟳'),
+      h('button', { class: 'chip icon', title: 'Fit the map', 'aria-label': 'Fit the map', onclick: () => this.layer === 'domain' ? this.domain.fit() : this.stage.flyTo(0, 0, (c.project.w + c.project.h) * 0.55) }, '⤢'));
     e.header = header;
 
     e.drawer = h('div', { class: 'drawer glass' });
@@ -288,8 +288,8 @@ export class CityView {
     e.right = right;
     e.inspect.style.display = 'none'; e.digest.style.display = 'none'; e.reviewList.style.display = 'none'; e.insights.style.display = 'none';
 
-    e.play = h('button', { class: 'ctl play', title: 'Play / pause (space)', onclick: () => this.togglePlay() }, '▶');
-    e.speed = h('select', { class: 'ctl', title: 'Playback speed', onchange: (ev: Event) => { this.speed = Number((ev.target as HTMLSelectElement).value); } },
+    e.play = h('button', { class: 'ctl play', title: 'Play / pause (space)', 'aria-label': 'Play or pause', onclick: () => this.togglePlay() }, '▶');
+    e.speed = h('select', { class: 'ctl', title: 'Playback speed', 'aria-label': 'Playback speed', onchange: (ev: Event) => { this.speed = Number((ev.target as HTMLSelectElement).value); } },
       ...SPEEDS.map(s => h('option', { value: s, selected: s === this.speed }, s === 1 ? 'Real time' : `${s}×`)));
     e.clock = h('div', { class: 'clock' });
     e.goLive = h('button', { class: 'ctl golive', onclick: () => this.goLive() }, '● Live');
@@ -305,7 +305,7 @@ export class CityView {
     e.tl = h('div', { class: 'tlhost' });
     const bottom = h('footer', { class: 'bottombar glass' },
       h('div', { class: 'controls' },
-        h('button', { class: 'ctl', title: 'Replay from the first session', onclick: () => { this.setMode('replay'); this.seek(this.tl.t0); this.speed = Math.max(this.speed, 1800); (e.speed as HTMLSelectElement).value = String(this.speed); this.play(true); } }, '⏮'),
+        h('button', { class: 'ctl', title: 'Replay from the first session', 'aria-label': 'Replay from the first session', onclick: () => { this.setMode('replay'); this.seek(this.tl.t0); this.speed = Math.max(this.speed, 1800); (e.speed as HTMLSelectElement).value = String(this.speed); this.play(true); } }, '⏮'),
         e.play, e.speed, e.clock, e.gap, h('div', { class: 'spacer' }), rangeSeg, histSeg, legend, e.goLive),
       e.tl);
     e.bottom = bottom;
@@ -339,12 +339,16 @@ export class CityView {
     this.frameRect = frame;
     // on the domain layer its panel takes the left of that part; the floating bits move right of it
     const left = this.layer === 'domain' ? Math.min(frame.left + this.domain.panelWidth(), frame.right - 200) : frame.left;
-    // the machine/session pulse floats at the top of that open part
+    // the machine/session pulse floats at the top of that open part; where that part is too narrow
+    // (tablets, phones) it would wrap into a block over the panels, and the overview shows the same numbers
+    e.pulse.style.display = frame.right - left < 520 ? 'none' : '';
     Object.assign(e.pulse.style, { top: `${frame.top - box.top + 10}px`, left: `${(left + frame.right) / 2 - box.left}px`, transform: 'translateX(-50%)', maxWidth: `${Math.max(200, frame.right - left - 28)}px` });
     this.world.occluders = [e.header, e.left, e.right, e.bottom, e.drawer, e.pulse]
       .filter(x => x && x.offsetParent && x.style.display !== 'none').map(x => x.getBoundingClientRect());
-    Object.assign(e.layers.style, { left: `${left - box.left + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
-    Object.assign(e.compass.style, { right: `${box.right - frame.right + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
+    // the layer switch and compass sit on the open map's bottom edge: the domain panel's top when it is a bottom sheet
+    const sheet = this.layer === 'domain' ? this.domain?.sheetTop() ?? null : null, floor = sheet == null ? frame.bottom : Math.min(frame.bottom, sheet);
+    Object.assign(e.layers.style, { left: `${left - box.left + 14}px`, bottom: `${box.bottom - floor + 14}px` });
+    Object.assign(e.compass.style, { right: `${box.right - frame.right + 14}px`, bottom: `${box.bottom - floor + 14}px` });
     this.schem?.setFrame(frame);
     if (this.domain) this.domain.occluders = [e.pulse, e.layers, e.compass].filter(Boolean);
     this.domain?.setFrame(frame);
