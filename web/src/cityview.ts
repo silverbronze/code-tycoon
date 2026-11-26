@@ -665,7 +665,7 @@ export class CityView {
   private async loadReview(quiet = false) {
     if (!this.city.project.isGit || this.disposed) return;
     const e = this.els.reviewList;
-    if (!this.review && !quiet) { e.innerHTML = ''; e.appendChild(h('div', { class: 'loading-sm' }, 'Checking uncommitted changes…')); }
+    if (!this.review && !quiet) morph(e, h('div', { class: 'loading-sm' }, 'Checking uncommitted changes…'));
     const r = await api.review(this.pid).catch(() => null);
     if (!r || this.disposed) return;
     this.review = r; this.reviewAt = Date.now();
@@ -675,17 +675,17 @@ export class CityView {
   }
   private renderReview() {
     const r = this.review!, e = this.els.reviewList;
-    e.innerHTML = '';
-    if (!r.isGit) { e.appendChild(h('div', { class: 'empty' }, 'Not a git repository, so there is nothing to review before a commit.')); return; }
-    if (!r.files.length) { e.appendChild(h('div', { class: 'empty' }, 'Working tree clean. Nothing waits for review.')); return; }
+    // morph() (util.ts): unchanged rows stay the same elements, so a refresh keeps hover and scroll
+    if (!r.isGit) { morph(e, h('div', { class: 'empty' }, 'Not a git repository, so there is nothing to review before a commit.')); return; }
+    if (!r.files.length) { morph(e, h('div', { class: 'empty' }, 'Working tree clean. Nothing waits for review.')); return; }
     const need = r.files.filter(f => f.level !== 'low').length;
     const icon = { high: '▲', medium: '●', low: '○' };
-    put(e,
+    morph(e,
       h('div', { class: 'rv-head' }, h('b', {}, need ? `${need} of ${r.files.length} files need a look` : `${r.files.length} uncommitted files, none risky`),
         h('div', { class: 'sub' }, 'Ranked by what the area holds, size of the change, whether the writing session tested after it, and leftovers.')),
       r.files.map(f => {
         const ws = f.sessions.map(s => this.sIndex.get(s)).filter((x): x is number => x != null);
-        return h('div', { class: 'rv-row ' + f.level, onclick: () => { if (f.ti != null) this.select({ tt: 0, ti: f.ti }, true); },
+        return h('div', { class: 'rv-row ' + f.level, 'data-key': 'rv:' + f.p, onclick: () => { if (f.ti != null) this.select({ tt: 0, ti: f.ti }, true); },
           onmouseenter: () => { if (f.ti != null) this.world.setMarks([{ tt: 0, ti: f.ti, color: ws.length ? this.colors[ws[0]] : NOBODY }]); } },
           h('div', { class: 'row' }, h('span', { class: 'rv-lv' }, icon[f.level]), h('span', { class: 'fp' }, f.p),
             h('span', { class: 'n' }, f.st === '??' ? 'new' : f.add || f.del ? `+${f.add} −${f.del}` : f.st)),
@@ -698,7 +698,7 @@ export class CityView {
 
   private async loadInsights() {
     const e = this.els.insights;
-    if (!this.insightsData) { e.innerHTML = ''; e.appendChild(h('div', { class: 'loading-sm' }, 'Reading this week…')); }
+    if (!this.insightsData) morph(e, h('div', { class: 'loading-sm' }, 'Reading this week…'));
     const r = await api.insights(this.pid).catch(() => null);
     if (!r || this.disposed) return;
     this.insightsData = r;
@@ -718,9 +718,9 @@ export class CityView {
       }
       return h('div', { class: 'kpi', title: tip }, h('div', { class: 'k' }, label), h('div', { class: 'v' }, cur, delta));
     };
-    const fileRow = (i: number, p: string, n: string) => h('div', { class: 'frow link', onclick: () => this.select({ tt: 0, ti: i }, true) }, h('span', { class: 'fp' }, p), h('span', { class: 'n' }, n));
-    e.innerHTML = '';
-    put(e,
+    const fileRow = (i: number, p: string, n: string) => h('div', { class: 'frow link', 'data-key': 'f:' + p, onclick: () => this.select({ tt: 0, ti: i }, true) }, h('span', { class: 'fp' }, p), h('span', { class: 'n' }, n));
+    // morph() (util.ts): unchanged rows stay the same elements, so a refresh keeps hover and scroll
+    morph(e,
       h('div', { class: 'sect' }, h('h3', {}, 'This week vs last week'),
         h('div', { class: 'kpis' },
           kpi('Cost per landed task', w.perLanded == null ? '–' : money(w.perLanded), w.perLanded, p.perLanded, 'down', 'API-equivalent spend divided by tasks whose edits reached a commit'),
@@ -736,16 +736,16 @@ export class CityView {
         d.untested ? h('div', { class: 'ptext' }, `${d.untested} code files were changed without a passing test, type check or build by the session that changed them (30 days). Colour: tested shows where.`) : null),
       d.suggestions.length ? h('div', { class: 'sect' }, h('h3', {}, 'Rules for CLAUDE.md'),
         h('div', { class: 'sub' }, 'Things you told sessions that are not in CLAUDE.md yet. Written there once, every session follows them.'),
-        d.suggestions.map(s => h('div', { class: 'sugg' }, h('div', { class: 'ptext' }, '“' + s.text + '”'),
+        d.suggestions.map(s => h('div', { class: 'sugg', 'data-key': 'sg:' + s.text }, h('div', { class: 'ptext' }, '“' + s.text + '”'),
           h('div', { class: 'row' }, h('span', { class: 'dim' }, s.n > 1 ? `said in ${s.n} tasks` : 'stated as a rule'),
             h('button', { class: 'chip mini', onclick: (ev: Event) => { navigator.clipboard?.writeText('- ' + s.text); (ev.target as HTMLElement).textContent = 'Copied'; } }, 'Copy line'))))) : null,
       d.hot.length ? h('div', { class: 'sect' }, h('h3', { class: 'warn' }, 'Rewritten again and again (30 days)'),
         h('div', { class: 'sub' }, 'Where sessions keep going back. Worth settling the design once, or a CLAUDE.md note.'),
         d.hot.map(x => fileRow(x.i, x.p, `${x.tasks} tasks`)),
-        h('button', { class: 'chip mini', onclick: () => this.openFactor('stability') }, 'Show on map')) : null,
+        h('button', { class: 'chip mini', 'data-key': 'map', onclick: () => this.openFactor('stability') }, 'Show on map')) : null,
       d.growing.length ? h('div', { class: 'sect' }, h('h3', {}, 'Growing fast (30 days)'),
         d.growing.map(x => fileRow(x.i, x.p, `+${x.g} lines · ${bytes(x.size)}`)),
-        h('button', { class: 'chip mini', onclick: () => { this.colorMode = 'growth'; (this.els.colorSel as HTMLSelectElement).value = 'growth'; this.applyColorMode(); } }, 'Show on map')) : null,
+        h('button', { class: 'chip mini', 'data-key': 'map', onclick: () => { this.colorMode = 'growth'; (this.els.colorSel as HTMLSelectElement).value = 'growth'; this.applyColorMode(); } }, 'Show on map')) : null,
       d.prompts ? this.promptSection(d.prompts) : null,
       this.depSection(d.deps),
       h('div', { class: 'sub dim' }, `Updated ${ago(d.at)}. Advice only: none of these numbers feed the health score.`));
@@ -756,7 +756,7 @@ export class CityView {
     const s = p.stats;
     const ex = (x: { id: string; prompt: string; cost: number; why?: string }, cls: string) => {
       const ti = this.taskIndex.get(x.id);
-      return h('div', { class: 'pex ' + cls + (ti != null ? ' link' : ''), onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
+      return h('div', { class: 'pex ' + cls + (ti != null ? ' link' : ''), 'data-key': 'px:' + x.id, onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
         h('div', { class: 'ptext' }, '“' + x.prompt + (x.prompt.length >= 220 ? '…' : '') + '”'),
         h('div', { class: 'dim' }, (x.why ? x.why + ' · ' : 'landed · ') + money(x.cost)));
     };
@@ -781,7 +781,7 @@ export class CityView {
       weeks.map(w => h('div', { class: 'dep-wk' }, h('div', { class: 'dim' }, wk(w.week)),
         w.added.map(a => {
           const ti = a.task ? this.taskIndex.get(a.task.id) : undefined;
-          return h('div', { class: 'frow' + (ti != null ? ' link' : ''), title: `${a.file} · commit ${a.commit}`, onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
+          return h('div', { class: 'frow' + (ti != null ? ' link' : ''), 'data-key': 'dep:' + a.name + ':' + a.commit, title: `${a.file} · commit ${a.commit}`, onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
             h('span', { class: 'dep add' }, '+ ' + a.name), h('span', { class: 'n' }, a.task ? a.task.title.slice(0, 40) : a.file));
         }),
         w.removed.map(a => h('div', { class: 'frow', title: `${a.file} · commit ${a.commit}` }, h('span', { class: 'dep del' }, '− ' + a.name), h('span', { class: 'n' }, a.file))))));
@@ -1259,11 +1259,8 @@ export class CityView {
     const q = this.logQuery;
     const tasks = this.data.tasks;
     const out: HTMLElement[] = [];
-    e.filterChip.innerHTML = '';
-    if (this.focusSession) {
-      const si = this.sIndex.get(this.focusSession)!;
-      e.filterChip.append(h('span', { class: 'fchip', style: { '--c': this.colorStr[si] } }, 'Session: ' + (this.data.sessions[si]?.title || ''), h('button', { onclick: () => this.focusOn(null) }, '×')));
-    }
+    const si0 = this.focusSession ? this.sIndex.get(this.focusSession)! : -1;
+    morph(e.filterChip, this.focusSession ? h('span', { class: 'fchip', 'data-key': 'fchip', style: { '--c': this.colorStr[si0] } }, 'Session: ' + (this.data.sessions[si0]?.title || ''), h('button', { onclick: () => this.focusOn(null) }, '×')) : null);
     const limitT = this.mode === 'live' ? Infinity : this.t;
     // live: each open session's current task leads the log, marked with what the session is doing
     // (the sessions column is hidden on the domain map, so this is where they show there)
@@ -1281,9 +1278,10 @@ export class CityView {
       if (q && !((t.title || '') + ' ' + t.prompt).toLowerCase().includes(q)) continue;
       out.push(this.taskRow(t));
     }
-    e.log.innerHTML = '';
-    if (!out.length) e.log.appendChild(h('div', { class: 'empty' }, q ? 'No task matches.' : 'No tasks yet.'));
-    e.log.append(...out);
+    // morph() (util.ts): unchanged rows stay the same elements, so the log keeps hover and
+    // scroll while sessions work
+    if (!out.length) out.push(h('div', { class: 'empty' }, q ? 'No task matches.' : 'No tasks yet.'));
+    morph(e.log, ...out);
   }
 
   // The open sessions' current tasks (live only), the ones that need you first, then working, then your turn.
@@ -1309,7 +1307,7 @@ export class CityView {
     const active = t.ts <= this.t && this.t <= (t.end || t.ts) + 60e3;
     const [r, w, c, x, a] = t.n;
     const st = L ? (L.state !== 'needs-you' && isStuck(L) ? 'stuck' : L.state) : null, act = L ? this.liveAction(L) : '';
-    return h('div', { class: 'task' + (active ? ' active' : '') + (L ? ' live ' + st : ''), 'data-sid': L ? L.id : null, style: { '--c': si >= 0 ? this.colorStr[si] : '#888' }, onclick: () => this.openTask(t) },
+    return h('div', { class: 'task' + (active ? ' active' : '') + (L ? ' live ' + st : ''), 'data-key': 't:' + t.id, 'data-sid': L ? L.id : null, style: { '--c': si >= 0 ? this.colorStr[si] : '#888' }, onclick: () => this.openTask(t) },
       h('div', { class: 'row' }, h('span', { class: 'dot' }),
         L ? h('span', { class: 'state ' + (st === 'stuck' ? 'needs-you' : st), title: st === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, st === 'stuck' ? 'Stuck?' : stateLabel(st!)) : null,
         h('span', { class: 'when' }, shortTime(t.ts)), h('span', { class: 'len' }, L ? dur(Date.now() - L.since) : dur((t.end || t.ts) - t.ts))),
@@ -1435,7 +1433,7 @@ export class CityView {
   private async loadDigest(summarize = false, error?: string) {
     const e = this.els.digest;
     const from = this.digestDay, to = from + DAY - 1;
-    if (!this.digestData || this.digestData.from !== from) { e.innerHTML = ''; e.appendChild(h('div', { class: 'loading-sm' }, 'Loading…')); }
+    if (!this.digestData || this.digestData.from !== from) morph(e, h('div', { class: 'loading-sm' }, 'Loading…'));
     const d = await api.digest(this.pid, from, to, summarize).catch(() => null);
     if (!d || this.disposed || from !== this.digestDay) return;
     this.digestData = d;
@@ -1449,11 +1447,11 @@ export class CityView {
     const tieList = (list: Tie[], which: 'day' | 'week') => list.length ? h('div', { class: 'sect' },
       h('h3', {}, which === 'day' ? `New connections (${list.length})` : `New connections this week (${list.length})`,
         h('button', { class: 'chip mini' + (this.tiesShown === which ? ' on' : ''), onclick: () => { this.tiesShown = this.tiesShown === which ? null : which; this.world.showTies(this.tiesShown ? list : null); this.renderDigest(); } }, this.tiesShown === which ? 'Hide on map' : 'Show on map')),
-      ...list.map(t => h('div', { class: 'frow link tie', onclick: () => this.select({ tt: t.a[0], ti: t.a[1] }, true) },
+      ...list.map(t => h('div', { class: 'frow link tie', 'data-key': 'tie:' + t.an + '>' + t.bn, onclick: () => this.select({ tt: t.a[0], ti: t.a[1] }, true) },
         h('span', { class: 'fp' }, `${t.an} → ${t.bn}`), h('span', { class: 'n' }, `${t.why} · ${shortTime(t.born)}`)))) : null;
-    e.innerHTML = '';
-    put(e,
-      h('div', { class: 'dg-nav' }, h('button', { class: 'chip icon', onclick: () => go(-1) }, '‹'), h('b', {}, label),
+    // morph() (util.ts): unchanged rows stay the same elements, so a refresh keeps hover and scroll
+    morph(e,
+      h('div', { class: 'dg-nav', 'data-key': 'dg-nav' }, h('button', { class: 'chip icon', onclick: () => go(-1) }, '‹'), h('b', {}, label),
         h('button', { class: 'chip icon', disabled: d.from >= today, onclick: () => go(1) }, '›')),
       h('div', { class: 'stats' }, stat('Tasks', d.tasks.length), stat('Sessions', d.sessions.length), stat('Commits', d.commits.length), stat('API-equiv.', money(d.cost))),
       this.dayHealth(d.from),
@@ -1463,11 +1461,11 @@ export class CityView {
           : d.summarizing ? h('div', { class: 'loading-sm' }, 'Writing the recap…')
           : h('div', {}, error ? h('div', { class: 'empty' }, 'Could not write the recap: ' + error) : null,
             h('button', { class: 'chip', onclick: () => this.loadDigest(true) }, '✎ Write a recap'))),
-      d.modules.length ? h('div', { class: 'sect' }, h('h3', {}, 'Busiest modules'), ...d.modules.map(m => h('div', { class: 'frow link', onclick: () => this.select({ tt: 1, ti: m.i }, true) }, h('span', { class: 'fp ltr' }, m.name), h('span', { class: 'n' }, `✎ ${m.n}`)))) : null,
+      d.modules.length ? h('div', { class: 'sect' }, h('h3', {}, 'Busiest modules'), ...d.modules.map(m => h('div', { class: 'frow link', 'data-key': 'm:' + m.i, onclick: () => this.select({ tt: 1, ti: m.i }, true) }, h('span', { class: 'fp ltr' }, m.name), h('span', { class: 'n' }, `✎ ${m.n}`)))) : null,
       d.shared.length ? h('div', { class: 'sect' }, h('h3', { class: 'warn' }, `Edited by several sessions (${d.shared.length})`),
-        ...d.shared.map(x => h('div', { class: 'frow link', onclick: () => this.select({ tt: 0, ti: x.i }, true) }, h('span', { class: 'fp' }, x.p), h('span', { class: 'n' }, `${x.sessions.length} sessions`)))) : null,
+        ...d.shared.map(x => h('div', { class: 'frow link', 'data-key': 'sh:' + x.p, onclick: () => this.select({ tt: 0, ti: x.i }, true) }, h('span', { class: 'fp' }, x.p), h('span', { class: 'n' }, `${x.sessions.length} sessions`)))) : null,
       tieList(d.ties, 'day'), tieList(d.tiesWeek.filter(t => !d.ties.some(x => x.an === t.an && x.bn === t.bn)), 'week'),
-      d.commits.length ? h('div', { class: 'sect' }, h('h3', {}, 'Commits'), ...d.commits.map(c => h('div', { class: 'frow link', onclick: () => this.openCommit(c.h) }, h('span', { class: 'fp ltr' }, c.s), h('span', { class: 'n' }, shortTime(c.ts))))) : null,
+      d.commits.length ? h('div', { class: 'sect' }, h('h3', {}, 'Commits'), ...d.commits.map(c => h('div', { class: 'frow link', 'data-key': 'c:' + c.h, onclick: () => this.openCommit(c.h) }, h('span', { class: 'fp ltr' }, c.s), h('span', { class: 'n' }, shortTime(c.ts))))) : null,
       d.tasks.length ? h('div', { class: 'sect' }, h('h3', {}, 'Tasks'), ...d.tasks.slice().reverse().map(t => { const ti = this.taskIndex.get(t.id); return ti != null ? this.taskRow(this.data.tasks[ti]) : null; })) : null);
   }
 
