@@ -247,6 +247,7 @@ First do everything that does not depend on the answers. If a command you need i
 ${planning ? `
 Work in steps when the task has distinct stages, where a later one builds on what an earlier one produces (for example: gather material, then design options, then build), or separate parts the user would want to check one at a time. Then read just enough to plan, write a plan of 2 to 6 steps into the report, do ONLY step 1, and stop with the report: you will be told to go on with the next step in this same session. The user sees the plan as a checklist. In the plan, "after" lists the steps whose result a step needs, so one step can go ahead while another waits for the user. A task that is one piece of work (a fix, a small feature, a question) needs no plan: do it whole and leave "plan" and "step" out.
 ` : ''}
+The end of your turn is the end of the run: nothing wakes you up later. If you start subagents or background commands, wait for every result within this turn and check each one did its part (redo a part yourself if it came back empty); never end a turn with "waiting for…".
 End your reply with this JSON report as the very last thing:
 {"status": "done" | "needs-you" | "failed", ${planning ? '"plan": [{"title": "short step title", "after": [1]}], ' : ''}"step": 1, "tldr": "the result in one plain line, 12 words at most, no hedging (e.g. 'Fixed the login redirect.')", "summary": "what you did and what is left, 3 sentences at most", "answer": "only when the task asks you something", "asks": [{"kind": "decision" | "secret" | "action" | "info" | "approval", "question": "one clear question", "why": "what it blocks", "options": ["short choice"], "step": 1}]}
 "status" and "summary" are about the step you just did${planning ? ' (or the whole task, without a plan)' : ''}; "step" is its number, and an ask's "step" is the step it blocks.
@@ -322,6 +323,12 @@ function answers(t) {
     ? `- ${a.cmd ? `Command \`${a.cmd}\`` : `Tool ${a.tool}`}: ${/^deny/i.test(a.answer) ? 'denied. Do not use it; do without it or say what is left.' : 'allowed. It will run if you try again.'}`
     : `- You asked (${a.kind}): ${a.question}\n  The user answered${a.auto ? ` (to the same question from the session doing this in ${a.auto})` : ''}: ${a.answer}`).join('\n');
 }
+// how often a run that ended without its JSON report is resumed before the task counts as failed
+const CUT_SHORT_TRIES = 2;
+function cutShortPrompt(cut) {
+  return `Your last turn ended without the JSON report, so the task is not finished${cut.said ? ` (your last words: "${cut.said.replace(/\s+/g, ' ').trim()}")` : ''}. Nothing wakes you up between turns: subagents or background commands you were waiting for have either finished or been dropped. Collect their results now (read their output; redo any missing part yourself, in the foreground), finish the task, and end with the JSON report. Do not end this turn waiting for anything.`;
+}
+
 function followUp(t) {
   const a = answers(t);
   return `${a ? `The user answered what you left for them:\n${a}\n\n` : `You were cut short${t.error ? ` (${t.error})` : ''}.\n\n`}Carry on with the task from where you stopped. End with the same JSON report as before.`;
@@ -433,8 +440,12 @@ function run(t, retry = true) {
   const prov = provider();
   const last = t.runs.length - 1;
   const resume = prov === 'claude' && t.provider === 'claude' && t.sid ? t.sid : null;
-  const step = pickStep(t, retry);
-  const prompt = step ? stepPrompt(t, step, resume) : last < 0 ? firstPrompt(t) : resume ? followUp(t)
+  // a run that ended without its report goes on in the same session, on the same step
+  const cut = resume && t.cutShort;
+  t.cutShort = null;
+  const step = cut ? t.steps.find(s => s.n === cut.step) || null : pickStep(t, retry);
+  const prompt = cut ? cutShortPrompt(cut)
+    : step ? stepPrompt(t, step, resume) : last < 0 ? firstPrompt(t) : resume ? followUp(t)
     : `${firstPrompt(t)}\n\nThis task was started before; the files already hold that work, so check them first.\nLast report: ${t.summary || '(none)'}\n${answers(t)}`;
   const rec = { n: last + 1, step: step?.n ?? null, started: Date.now(), ended: null, sid: null, cost: 0, status: 'running', summary: null, error: null };
   t.runs.push(rec);
@@ -447,6 +458,20 @@ function run(t, retry = true) {
     budgetUsd: RUN_USD, cwd: t.wt ? t.wt.cwd : t.root, prompt, timeoutMs: RUN_MS, onSpawn: p => procs.set(t.id, p) })
     .then(({ text, cost, sid, denials }) => {
       const { j, prose } = report(text);
+      // No JSON report: the turn ended mid-work ("I'm waiting for group A" with its agents still
+      // out; nothing wakes a finished session up). That is never "done": resume the session and
+      // tell it to finish, then give up as failed, so the user doesn't get a progress line as the result.
+      if (!j) {
+        let tries = 0;
+        for (let i = t.runs.length - 2; i >= 0 && t.runs[i].status === 'cut-short'; i--) tries++;
+        Object.assign(rec, { sid, cost, summary: prose.slice(-700) || null, status: 'cut-short' });
+        Object.assign(t, { sid: sid || t.sid, cost: t.cost + (cost || 0) });
+        if (tries < CUT_SHORT_TRIES && prov === 'claude' && t.sid) { t.cutShort = { step: rec.step, said: prose.slice(-300) }; goOn = true; return; }
+        Object.assign(t, { state: 'failed', error: 'The session stopped without finishing its work (no report). Its last words: ' + (prose.slice(-300) || '(none)') });
+        const s = rec.step != null && t.steps.find(x => x.n === rec.step);
+        if (s) s.state = 'failed';
+        return;
+      }
       // the plan: written by the first run, or rewritten later (done steps keep their state)
       const plan = Array.isArray(j?.plan) ? j.plan : null;
       if (plan && (plan.length >= 2 || t.steps.length)) t.steps = toSteps(plan, t.steps);
