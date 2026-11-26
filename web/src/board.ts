@@ -3,7 +3,7 @@
 // alone (questions, secrets, manual steps, commands it was not allowed to run) shows up
 // in "Your to-do"; answering the last one sends the answers back and the session carries on.
 import { api, live, type Board, type BoardTask, type BoardAsk, type BoardStep, type ShipInfo, type ShipRecipe, type ShipStep } from './api';
-import { h, ago, dur, money, autoGrow } from './util';
+import { h, heldBy, ago, dur, money, autoGrow } from './util';
 import { notify } from './notify';
 import './board.css';
 
@@ -42,7 +42,7 @@ export class BoardPanel {
     this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', 'aria-label': 'New task', placeholder: 'A task for any of your projects, a list of them, or one change for many (“in all my sites…”). Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.add(); } } });
     this.fitText = autoGrow(this.text);
-    this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for', 'aria-label': 'Project' }, h('option', { value: '' }, 'Find the project for me'));
+    this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for', 'aria-label': 'Project', onchange: () => this.nameDefault() }, h('option', { value: '' }, 'Find the project for me'));
     this.model = h('select', { class: 'bd-sel', title: 'The model the session runs on', 'aria-label': 'Model', onchange: () => lsSet(MODEL_KEY, this.model.value) },
       h('option', { value: '' }, 'Project’s model'));
     this.addBtn = h('button', { class: 'chip go', onclick: () => this.add() }, 'Add task');
@@ -123,6 +123,7 @@ export class BoardPanel {
   private render() {
     const d = this.data;
     if (!d) return;
+    if (heldBy(this.el, () => this.render())) return; // a click in progress
     const focus = this.saveFocus();
     // project picker: keep the choice across refreshes
     const want = this.pick.value;
@@ -137,9 +138,27 @@ export class BoardPanel {
       this.model.replaceChildren(h('option', { value: '' }, 'Project’s model'), ...models.map(m => h('option', { value: m.id }, m.label)));
       this.model.value = models.some(m => m.id === keep) ? keep : '';
     }
+    this.nameDefault();
     this.todoEl.replaceChildren(...this.todo(d));
     this.listEl.replaceChildren(...this.list(d));
     this.restoreFocus(focus);
+  }
+
+  // The empty model choice names the model the task will run on: the picked project's latest
+  // session's model, or (project still to be found) the one most tracked projects use.
+  private nameDefault() {
+    const d = this.data, opt = this.model.options[0];
+    if (!d || !opt) return;
+    const p = d.projects.find(x => x.id === this.pick.value);
+    let text = 'Project’s model';
+    if (p?.model) text += ` (${p.model.label})`;
+    else {
+      const count = new Map<string, number>();
+      for (const x of d.projects) if (x.tracked && x.model) count.set(x.model.label, (count.get(x.model.label) || 0) + 1);
+      const top = [...count].sort((a, b) => b[1] - a[1]);
+      if (top.length) text += top.length === 1 ? ` (${top[0][0]})` : ` (mostly ${top[0][0]})`;
+    }
+    if (opt.textContent !== text) opt.textContent = text;
   }
 
   // ---------------------------------------------------------------- your to-do

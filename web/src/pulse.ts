@@ -1,5 +1,5 @@
 import { api, live, type PulseT, type PulseDetail, type ProcBreakdown, type IdleScan, type IdleProc, type StopResult } from './api';
-import { h, put, ago, dur } from './util';
+import { h, put, heldBy, ago, dur } from './util';
 
 const GB = 1024 ** 3;
 const gb = (n: number) => (n / GB).toFixed(n < 10 * GB ? 1 : 0);
@@ -43,6 +43,7 @@ export class Pulse {
   async refresh() {
     let p: PulseT;
     try { p = await api.pulse(); } catch { return; }
+    if (heldBy(this.el, () => this.refresh())) return; // a click in progress
     this.last = p;
     this.el.innerHTML = '';
     const its = this.items(p);

@@ -15,6 +15,7 @@ import { scanProject, countFiles, scanRefs } from './codescan.mjs';
 import { key, rel, norm, HOME, isTempPath, CLAUDE_DIR } from './paths.mjs';
 import { roleResolver, styleOf } from './roles.mjs';
 import { traitsOf, kindOf } from './traits.mjs';
+import { entriesOf } from './entries.mjs';
 
 const MAX_MODULES = 90, MAX_EXT = 24, MAX_LOCAL = 6, MAX_STORES = 20;
 const PAD = 0.5, GAP = 3.4; // lot border inside a block, street between blocks
@@ -608,6 +609,8 @@ export function buildCity(pid) {
     imp: e.imp, task: +e.task.toFixed(1), commit: +e.commit.toFixed(1), ref: e.ref }));
   const fileEdges = [];
   for (const [a, b] of scan.edges) { const i = fIdx.get(a), j = fIdx.get(b); if (i != null && j != null) fileEdges.push([i, j]); }
+  // where people, programs and the clock come in: one entry per kind and module
+  const entries = entriesOf(scan.root, inv, p => files[fIdx.get(p)]?.m);
 
   const resolveTarget = (row) => {
     // returns [type, index]: 0 file, 1 module, 3 outside system, -1 none
@@ -624,7 +627,7 @@ export function buildCity(pid) {
 
   return {
     project: { id: pid, name: proj.name, root, isGit: scan.isGit, depth: D, w: maxX - minX, h: maxZ - minZ, t0: T0 },
-    districts, modules: modulesOut, files, externals, links, fileEdges,
+    districts, modules: modulesOut, files, externals, entries, links, fileEdges,
     commits: scan.commits.map(({ files, ...c }) => c), resolveTarget,
     describe: { modules: [...modFiles].map(([id, files]) => ({ id, label: nodes[mainBlock.get(id)].label, files: files.length, sample: files.slice(0, 8).map(p => p.split('/').pop()), all: files })),
       places: nodes.filter(nd => nd.kind !== 'module').map(nd => ({ id: nd.key, label: nd.label, kind: nd.kind === 'store' ? 'data store' : nd.kind === 'local' ? 'local folder' : 'outside system',

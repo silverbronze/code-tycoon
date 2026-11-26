@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { api, live, type Prop, type City, type Timeline, type LiveSession, type LiveEvent, type Alert, type TaskT, type Changes, type Digest, type Tie, type Health, type Review, type Insights, type WeekStats, type OptJob } from './api';
 import { Mood } from './city/mood';
-import type { TaskFlags, FileHist } from './api';
+import type { TaskFlags, FileHist, Entry } from './api';
 import { Sky } from './city/sky';
 import { ENV } from './city/env';
 import { Stage } from './city/scene';
@@ -13,10 +13,18 @@ import { DomainMap } from './domain';
 import { applyLayout, hasLayout, resetLayout } from './city/layout';
 import { Pulse } from './pulse';
 import { HealthChip } from './health';
-import { h, put, ago, dur, clock, shortTime, bytes, tail, money } from './util';
+import { h, put, heldBy, ago, dur, clock, shortTime, bytes, tail, money } from './util';
 import { settingsButton } from './settings';
 
 const SPEEDS = [1, 10, 60, 300, 1800, 7200];
+// entry points (schematic top band): what each kind is, in the inspector and tooltip
+const ENTRY_TEXT: Record<Entry['kind'], { kind: string; unit: string; desc: string }> = {
+  page: { kind: 'Pages', unit: 'Pages', desc: 'Pages a person opens in a browser. Requests start here and go down into the code below.' },
+  http: { kind: 'HTTP API', unit: 'Routes', desc: 'Routes other programs (or the app\'s own pages) call over HTTP.' },
+  cli: { kind: 'Command line', unit: 'Commands', desc: 'Commands a person or a script runs in a terminal.' },
+  hook: { kind: 'Hooks & webhooks', unit: 'Hooks', desc: 'Events another program sends in: webhooks, Claude Code hooks.' },
+  schedule: { kind: 'Schedules', unit: 'Schedules', desc: 'Work the clock starts: cron jobs, timers, scheduled workflows.' },
+};
 const ACTIVE_WINDOW = 15 * 60e3;   // replay: a session with no event for this long goes home
 const WARM_TAU = 20 * 60e3;
 const DAY = 86400e3;
@@ -439,7 +447,7 @@ export class CityView {
   // The module or outside system a selection stands in (a file stands in its module).
   private placeRef(s: { tt: number; ti: number }): [number, number] | null {
     if (s.tt === 0) { const f = this.city.files[s.ti]; return f ? [1, f.m] : null; }
-    return s.tt === 1 || s.tt === 3 ? [s.tt, s.ti] : null;
+    return s.tt === 1 || s.tt === 3 || s.tt === 4 ? [s.tt, s.ti] : null;
   }
 
   private onKey = (ev: KeyboardEvent) => {
@@ -1128,6 +1136,7 @@ export class CityView {
 
   renderSessions() {
     if (!this.els.sessions) return;
+    if (heldBy(this.els.sessions, () => this.renderSessions())) return; // a click in progress
     const list = this.sessionsAt();
     const e = this.els;
     e.sessHead.innerHTML = '';
@@ -1244,6 +1253,7 @@ export class CityView {
   renderLog() {
     const e = this.els;
     if (!e.log) return;
+    if (heldBy(e.log, () => this.renderLog())) return; // a click in progress
     const q = this.logQuery;
     const tasks = this.data.tasks;
     const out: HTMLElement[] = [];
@@ -1475,14 +1485,15 @@ export class CityView {
   // keepTab: a click on the map leaves Review / Insights / Digest open; Inspect fills behind it.
   private async select(s: { tt: number; ti: number } | null, fly = false, keepTab = false) {
     this.selected = s;
-    this.world.showSelection(s);
+    const en = s?.tt === 4 ? this.city.entries?.[s.ti] : undefined; // an entry point (schematic only): the city shows its module
+    this.world.showSelection(en ? { tt: 1, ti: en.m } : s);
     this.schem?.setSelected(s ? this.placeRef(s) : null);
     if (!s) return;
     if (!keepTab || this.curTab === 'log') this.tab('inspect');
     const e = this.els.inspect;
     e.innerHTML = '';
     const c = this.city;
-    const pos = this.world.position(s.tt, s.ti);
+    const pos = en ? this.world.position(1, en.m) : this.world.position(s.tt, s.ti);
     if (fly && pos) this.stage.flyTo(pos.x, pos.z, Math.min(this.stage.viewSize, 40));
     if (s.tt === 0) {
       const f = c.files[s.ti]; const m = c.modules[f.m];
@@ -1545,6 +1556,20 @@ export class CityView {
         this.tiesSection(3, s.ti),
         x.top?.length ? h('div', { class: 'sect' }, h('h3', {}, 'Most visited sites'), ...x.top.map(([site, n]) => h('div', { class: 'frow' }, h('span', { class: 'fp' }, site), h('span', { class: 'n' }, '×' + n)))) : null,
         x.refs.length ? h('div', { class: 'sect' }, h('h3', {}, `Code that names it (${x.refCount})`), ...x.refs.slice(0, 25).map(fileRow)) : null);
+    } else if (s.tt === 4 && en) {
+      const m = c.modules[en.m];
+      const what = ENTRY_TEXT[en.kind], dn = c.districts[m.district]?.name;
+      let name = m.title || m.label;
+      if (dn && name.endsWith(' · ' + dn)) name = name.slice(0, -3 - dn.length);
+      const fileRow = (p: string) => { const fi = this.fileIndex.get(p.toLowerCase()); return h('div', { class: 'frow' + (fi != null ? ' link' : ''), onclick: fi != null ? () => this.select({ tt: 0, ti: fi }, true) : null }, h('span', { class: 'fp' }, p)); };
+      put(e, h('div', { class: 'ihead' }, h('div', { class: 'kicker' }, 'Entry point · ', what.kind),
+          h('h2', {}, name), h('div', { class: 'sub mono' }, m.id || '(root)')),
+        h('div', { class: 'sect' }, h('div', { class: 'ptext' }, what.desc)),
+        h('div', { class: 'stats' }, stat(what.unit, en.n), stat('Files', en.files.length)),
+        h('div', { class: 'sect' }, h('h3', {}, en.n > en.items.length ? `${what.unit} (first ${en.items.length} of ${en.n})` : what.unit),
+          ...en.items.map(t => h('div', { class: 'frow' }, h('span', { class: 'fp ltr' }, t)))),
+        h('div', { class: 'sect' }, h('h3', {}, 'Declared in'), ...en.files.map(fileRow),
+          h('div', { class: 'frow link', onclick: () => this.select({ tt: 1, ti: en.m }, true) }, h('span', { class: 'fp ltr' }, `Open the module ${name}`))));
     }
   }
 
@@ -1705,6 +1730,7 @@ export class CityView {
     }
     else if (hit.tt === 1) { const m = c.modules[hit.ti]; html = `<b>${esc(m.title || m.label)}</b><span class="mono">${esc(m.id.replace('#wh:', ''))}</span><span>${m.warehouse ? (m.onDisk || m.files) + ' data files' : m.files + ' files'}</span>`; }
     else if (hit.tt === 3) { const x = c.externals[hit.ti]; html = `<b>${esc(x.label)}</b><span>${x.n} calls${x.refCount ? ` · named in ${x.refCount} files` : ''}</span>`; }
+    else if (hit.tt === 4) { const en = c.entries?.[hit.ti]; if (!en) return; const m = c.modules[en.m], w = ENTRY_TEXT[en.kind]; html = `<b>${esc(w.kind)} · ${esc(m?.title || m?.label || '')}</b><span>${en.n} ${esc(w.unit.toLowerCase())}</span>${en.items.slice(0, 4).map(t => `<span class="mono">${esc(t)}</span>`).join('')}`; }
     else if (hit.tt === 2) { const d = c.districts[hit.ti]; html = `<b>${esc(d.name)}</b><span>District · click for its properties</span>${d.props.filter(p => !p.basic).slice(0, 3).map(p => `<span>${esc(p.k)}: ${esc(p.v.slice(0, 4).map(v => v.t).join(', '))}</span>`).join('')}`; }
     tip.innerHTML = html;
     tip.style.opacity = '1';

@@ -18,6 +18,33 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<s
   return el;
 }
 
+// A click is a press and a release on the same element. Panels that rebuild their DOM on a
+// timer or a live message replaced the button between the two, and the browser dropped the
+// click (the "have to click twice" bug). heldBy(root, redo) returns true while a press that
+// started inside root is still down, and runs redo once after the release (the click has
+// fired by then), so a render just returns when it is held.
+// A press is held for 2 s at most: a native <select> list can swallow the release.
+let pressed: Element | null = null, pressedAt = 0, giveUp = 0;
+const held = new Map<Element, () => void>();
+addEventListener('pointerdown', e => { pressed = e.target as Element; pressedAt = Date.now(); }, true);
+const release = () => {
+  pressed = null; clearTimeout(giveUp);
+  if (!held.size) return;
+  const fns = [...held.values()]; held.clear();
+  setTimeout(() => fns.forEach(f => f()), 0); // after the click event of this release
+};
+addEventListener('pointerup', release, true);
+addEventListener('pointercancel', release, true);
+addEventListener('blur', release);
+export function heldBy(root: Element, redo: () => void) {
+  if (!pressed || !root.contains(pressed)) return false;
+  const left = 2000 - (Date.now() - pressedAt);
+  if (left <= 0) return false;
+  if (!held.size) giveUp = window.setTimeout(release, left);
+  held.set(root, redo);
+  return true;
+}
+
 // A textarea that grows with its text up to its CSS max-height, then scrolls.
 // Returns a fit() to call after setting .value from code.
 export function autoGrow(ta: HTMLTextAreaElement) {

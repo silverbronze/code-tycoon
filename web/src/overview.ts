@@ -1,5 +1,5 @@
 import { api, live, type Project, type OpenSession, type Weekly, type Setup, type SyncStatus } from './api';
-import { h, put, ago, bytes, dur, tail, money } from './util';
+import { h, put, heldBy, ago, bytes, dur, tail, money } from './util';
 import { Pulse } from './pulse';
 import { CoachPanel } from './coach';
 import { BoardPanel } from './board';
@@ -12,6 +12,7 @@ const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Wor
 export class Overview {
   root: HTMLDivElement;
   private timer = 0;
+  private soon = 0;
   private off: (() => void) | null = null;
   private showAll = false;
   private confirmUntrack: string | null = null;
@@ -31,7 +32,8 @@ export class Overview {
     api.setup().then(s => { this.setup = s; this.render(); }).catch(() => {});
     this.timer = window.setInterval(() => this.render(), 5000);
     live.subscribe(null);
-    this.off = live.on(m => { if (m.type === 'session' || m.type === 'indexed' || m.type === 'sync') this.render(); });
+    // live messages come in bursts while sessions work: one rebuild per burst
+    this.off = live.on(m => { if ((m.type === 'session' || m.type === 'indexed' || m.type === 'sync') && !this.soon) this.soon = window.setTimeout(() => { this.soon = 0; this.render(); }, 400); });
     settings.onSetupChange.push(this.onSetup);
   }
 
@@ -41,6 +43,7 @@ export class Overview {
   async render() {
     let res;
     try { res = await api.projects(this.showAll); } catch { return; }
+    if (heldBy(this.root, () => this.render())) return; // a click in progress
     const ps = res.projects as (Project & { spark: number[] | null })[];
     const tracked = ps.filter(p => p.tracked), other = ps.filter(p => !p.tracked);
     const scroll = this.root.scrollTop;

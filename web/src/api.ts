@@ -27,12 +27,16 @@ export interface External {
   id: string; label: string; type: 'host' | 'service' | 'web' | 'local'; n: number; x: number; z: number; w: number; h: number;
   district: number; born: number; first?: number; last?: number; refs: string[]; refCount: number; top: [string, number][] | null;
 }
+// An entry point, one per kind and module: `m` is the module that declares it, `items` what it
+// lists (routes, commands, pages, hook events, schedules), at most 40 of `n`.
+export interface Entry { kind: 'page' | 'http' | 'cli' | 'hook' | 'schedule'; m: number; n: number; items: string[]; files: string[] }
 // A tie between two places ([tt, ti]: 1 module/store, 3 outside system): imports,
 // files changed in the same task or commit, and code that names a system.
 export interface Link { a: [number, number]; b: [number, number]; w: number; born: number; road: boolean; imp: number; task: number; commit: number; ref: number }
 export interface City {
   project: { id: string; name: string; root: string; isGit: boolean; depth: number; w: number; h: number; t0: number };
   districts: District[]; modules: Module[]; files: FileB[]; externals: External[];
+  entries?: Entry[]; // where people, programs and the clock come into the code; absent from servers before 2026-11-26
   links: Link[]; fileEdges: [number, number][];
   commits: { h: string; ts: number; s: string; n: number }[];
 }
@@ -271,7 +275,7 @@ export interface BoardTree {
   dir: string; branch: string; base: string; top: string;
   merge?: { state: 'working' | 'waiting' | 'resolving' | 'conflict' | 'merged' | 'nothing' | 'failed'; why?: string; files?: string[]; sha?: string; into?: string; at?: number };
 }
-export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean }[]; ships: Record<string, ShipInfo>; models?: { id: string; label: string }[] }
+export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean; model?: { id: string | null; label: string } }[]; ships: Record<string, ShipInfo>; models?: { id: string; label: string }[] }
 
 const enc = encodeURIComponent;
 const post = (url: string, body?: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });

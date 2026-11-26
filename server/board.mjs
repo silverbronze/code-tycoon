@@ -31,7 +31,7 @@ import crypto from 'node:crypto';
 import { db } from './db.mjs';
 import { SUMMARIZER_CWD, OWN_DIR_RE, PROJECTS_DIR } from './paths.mjs';
 import { listProjects } from './indexer.mjs';
-import { runAgent, provider, codexBlocked, modelChoices, isModelFor } from './llm.mjs';
+import { runAgent, provider, codexBlocked, modelChoices, isModelFor, effectiveModel } from './llm.mjs';
 import { projectModel } from './optimize.mjs';
 import { syncSoon } from './gitsync.mjs';
 import { repoOf, makeWorktree, dropWorktree, commitAll, ahead, changedFiles, predict, mergeIntoBase, mergeBaseIn, unresolved, finishMerge, abortMerge, revertMerges } from './worktree.mjs';
@@ -62,7 +62,8 @@ function save(t, pub = true) {
 export function listBoard() {
   const list = [...tasks.values()];
   return { tasks: list.sort((a, b) => b.created - a.created).map(view),
-    projects: profiles().map(p => ({ id: p.id, name: p.name, root: p.root, tracked: p.tracked })),
+    // model: what a task here runs on when no model is picked (the project's latest session's)
+    projects: profiles().map(p => ({ id: p.id, name: p.name, root: p.root, tracked: p.tracked, model: effectiveModel(projectModel(p.id)) })),
     // the models a task can be started on (empty choice = the project's own model)
     models: modelChoices(db.prepare('SELECT model FROM sessions WHERE model IS NOT NULL GROUP BY model ORDER BY MAX(last_ts) DESC LIMIT 20').all().map(r => r.model)),
     // how each project with tasks goes live (ship.mjs)
