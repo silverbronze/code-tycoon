@@ -94,7 +94,9 @@ export class BoardPanel {
     if (!f) return;
     const el = this.el.querySelector<HTMLTextAreaElement>(`[data-k="${CSS.escape(f.k)}"]`);
     if (!el) return;
-    el.focus();
+    // preventScroll: the box keeps focus while the user scrolls the page with the wheel, and a
+    // plain focus() on every 5 s refresh scrolled the overview back up to it
+    el.focus({ preventScroll: true });
     try { if (f.s != null) el.setSelectionRange(f.s, f.e ?? f.s); } catch {}
   }
 

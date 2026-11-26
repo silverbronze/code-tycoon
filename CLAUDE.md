@@ -66,6 +66,7 @@ This repo is public (AGPL): the local, single-user app only. Anything for the ho
 - The `kv` table's columns are `k` and `v` (not key/value) — `SELECT k, v FROM kv WHERE k LIKE 'domain:%'`.
 - Domain map cost: builds and updates run on `MAP_MODEL` (Sonnet), not the session's model (Opus updates cost dollars each). Updates default to the original full re-read; `CODETYCOON_DOMAIN_UPDATE=patch` switches to one tool-less turn over the diff returning a patch (`applyPatch()`, ~$0.17).
 - The domain-map route is `/api/projects/<encoded pid>/domain` (not `/api/p/`) and reads the action from the path (`POST .../domain/update`, `/domain/stop`), not the body — a POST to `/domain` with `{"step":"update"}` starts a full rebuild (paid).
+- Restoring the caret after a re-render with a plain `focus()` scrolls the page back to that box (the overview jumped to the top every 5 s while the task box kept focus) — use `focus({ preventScroll: true })`.
 - `put(el, ...)` in util.ts appends, it does not replace — clear first (`el.replaceChildren()`) when re-rendering a panel, or every refresh stacks another copy.
 - Toggling `material.transparent` on a live material does nothing until `material.needsUpdate = true` (the shader is recompiled) — opacity fades silently stay opaque.
 - Snow was removed on purpose (it whitened roofs and lots until districts ran together); don't bring it back. Fog near/far follow the zoom in `Stage.updateCamera()` — a fixed fog paled the far half of the city.
