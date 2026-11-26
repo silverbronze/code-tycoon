@@ -62,10 +62,11 @@ card fills: timestamps, paths, costs, hints, table headers. Floor 4.5:1. Heurist
 Fix: `--dim` is now #6b6b6b (5.3:1 on white, 4.9:1 on #f6f6f6). The red `LIVE` badge (4.3:1 on its
 pink fill) is now #b01d23.
 
-**F-05 · Medium · Fixed (partly).** About 48 declarations set text at 9–10.5 px (state tags,
+**F-05 · Medium · Fixed.** About 48 declarations set text at 9–10.5 px (state tags,
 section kickers, drift pills, table headers). Floor is 12 px. Heuristic: type floor.
-Fix: all of them are 11 px now. Not fixed: 11–11.5 px text is still widespread in this dense desktop
-layout. Raising it to 12 px needs a layout pass of its own.
+Fix: first pass raised them to 11 px; a follow-up raised every 10.5–11.5 px declaration (139, in
+styles, board, coach, domain, settings and voice CSS) to 12 px. A recount in the live overview at
+1280 and 390 px finds no visible text under 12 px; the board and city view keep their layout.
 
 **F-06 · Medium · Fixed.** Overview at 1280 px: the floating mic widget covered a task row's Stop
 button, and the page ended only 64 px below the last row, so it could not always scroll clear.
@@ -79,8 +80,9 @@ screens it could never be found, and keyboard users tabbed onto an invisible con
 Heuristic: signifiers. Fix: it shows on keyboard focus and stays visible (60%) on touch screens.
 
 **F-09 · Low · Fixed.** Controls with no accessible name: voice language select, playback speed select,
-replay and play buttons, back arrow, rotate/fit icons. Fix: `aria-label`s. Not fixed: the task board's
-task box, answer box and two selects (`board.ts` was being edited by another session at the time).
+replay and play buttons, back arrow, rotate/fit icons. Fix: `aria-label`s. Follow-up: the task
+board's task box, project and model selects, route select, answer and note boxes, ship recipe fields,
+and the backup folder field in the setup audit are labelled too; the overview has no unnamed field left.
 
 **F-10 · Low · Fixed.** `prefers-reduced-motion` did not stop the blinking live dots (the rule left
 `::after` and the iteration count alone). Fix: reduced motion now also covers `::after` and runs
@@ -89,9 +91,12 @@ each animation once.
 **F-11 · Low · Fixed.** No `main` landmark. Fix: `role="main"` on the overview and city view roots.
 A skip link is not needed: neither view has a nav bar to skip.
 
-**Not fixed, by choice.** Touch targets under 44 px: most chips and toggles are 28–30 px. That's
-deliberate for a desktop dashboard, and phone use is secondary. If phone use grows, start with the
-city header (F-02) and the timeline controls.
+**F-12 · Medium · Fixed.** Touch targets under 44 px: most chips and toggles are 28–30 px.
+Fix: on touch screens (`pointer: coarse`) chips, timeline controls, segment buttons, board selects,
+the back arrow and the mic are 44 px; mouse users keep the dense 30 px layout. To make room in the
+phone header the live badge shrinks to its dot (the word stays for screen readers), and the timeline
+controls scroll sideways instead of running off the bar. Measured at 390 px with touch: every visible
+header and timeline control is 44 px.
 
 **Good.** The overview has one clear focal point at every width (the stat line, then the task box).
 Nothing scrolls sideways at any width. The black-and-white palette keeps red for things that need you,

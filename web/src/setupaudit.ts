@@ -52,7 +52,7 @@ export class SetupAuditPanel {
         h('div', { class: 'sa-acts' },
           gh.login ? h('button', { class: 'chip go', onclick: () => run('github') }, `Protect to GitHub (${gh.login})`)
             : gh.canLogin ? h('button', { class: 'chip go', disabled: login?.state === 'waiting', onclick: () => this.loadProtect(api.githubLogin()) }, 'Sign in to GitHub') : null,
-          h('input', { class: 'sa-input', placeholder: 'or a folder for backups (NAS, USB disk)', value: this.folder, oninput: (e: Event) => { this.folder = (e.target as HTMLInputElement).value; } }),
+          h('input', { class: 'sa-input', 'aria-label': 'Backup folder', placeholder: 'or a folder for backups (NAS, USB disk)', value: this.folder, oninput: (e: Event) => { this.folder = (e.target as HTMLInputElement).value; } }),
           h('button', { class: 'chip', onclick: () => { if (this.folder.trim()) run(this.folder.trim()); } }, 'Protect to folder')),
       login?.state === 'waiting' ? h('p', { class: 'sa-code' }, 'Open ', h('a', { href: login.url, target: '_blank', rel: 'noopener' }, login.url), ' and enter ', h('code', {}, login.code)) : null,
       login?.state === 'failed' ? h('p', { class: 'sa-err' }, login.error) : null,

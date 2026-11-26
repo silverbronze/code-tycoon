@@ -39,11 +39,11 @@ export class BoardPanel {
   private timer = 0;
 
   constructor() {
-    this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', placeholder: 'A task for any of your projects, a list of them, or one change for many (“in all my sites…”). Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
+    this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', 'aria-label': 'New task', placeholder: 'A task for any of your projects, a list of them, or one change for many (“in all my sites…”). Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.add(); } } });
     this.fitText = autoGrow(this.text);
-    this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for' }, h('option', { value: '' }, 'Find the project for me'));
-    this.model = h('select', { class: 'bd-sel', title: 'The model the session runs on', onchange: () => lsSet(MODEL_KEY, this.model.value) },
+    this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for', 'aria-label': 'Project' }, h('option', { value: '' }, 'Find the project for me'));
+    this.model = h('select', { class: 'bd-sel', title: 'The model the session runs on', 'aria-label': 'Model', onchange: () => lsSet(MODEL_KEY, this.model.value) },
       h('option', { value: '' }, 'Project’s model'));
     this.addBtn = h('button', { class: 'chip go', onclick: () => this.add() }, 'Add task');
     this.addErr = h('div', { class: 'bd-err' });
@@ -217,7 +217,7 @@ export class BoardPanel {
 
   private routeItem(t: BoardTask, d: Board) {
     const key = t.id + ':route', busy = this.busy.has(key);
-    const sel = h('select', { class: 'bd-sel' }, h('option', { value: '' }, 'Another project…'), ...d.projects.map(p => h('option', { value: p.id }, p.name)));
+    const sel = h('select', { class: 'bd-sel', 'aria-label': 'Another project' }, h('option', { value: '' }, 'Another project…'), ...d.projects.map(p => h('option', { value: p.id }, p.name)));
     const picks = t.route?.picks || [];
     return h('div', { class: 'bd-item' },
       this.head(t, 'Project?', 'alarm'),
@@ -278,7 +278,7 @@ export class BoardPanel {
           h('button', { class: 'chip', disabled: busy, onclick: () => send('Deny') }, 'Deny'), apart),
         this.err(key));
     }
-    const box = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: a.kind === 'secret' ? 'Never paste the secret here. Put it where asked, then press Done.' : 'Your answer',
+    const box = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, 'aria-label': a.question ? 'Answer: ' + a.question : 'Your answer', placeholder: a.kind === 'secret' ? 'Never paste the secret here. Put it where asked, then press Done.' : 'Your answer',
       oninput: () => this.drafts.set(key, box.value),
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && box.value.trim()) { e.preventDefault(); send(box.value); } } });
     box.value = this.drafts.get(key) || ''; autoGrow(box);
@@ -341,10 +341,10 @@ export class BoardPanel {
     const dd = d;
     const edit = (k: 'check' | 'ship' | 'url' | 'expect' | 'live') => (e: Event) => { dd[k] = (e.target as HTMLInputElement).value; this.dirty.add(pid); };
     const area = (k: 'check' | 'ship', ph: string) => {
-      const a = h('textarea', { class: 'bd-ans', rows: 2, 'data-k': key + ':' + k, placeholder: ph, oninput: edit(k) });
+      const a = h('textarea', { class: 'bd-ans', rows: 2, 'data-k': key + ':' + k, 'aria-label': k === 'check' ? 'Check steps' : 'Ship steps', placeholder: ph, oninput: edit(k) });
       a.value = dd[k]; autoGrow(a); return a;
     };
-    const field = (k: 'url' | 'expect' | 'live', ph: string) => h('input', { class: 'bd-ans bd-in', 'data-k': key + ':' + k, placeholder: ph, value: dd[k], oninput: edit(k) });
+    const field = (k: 'url' | 'expect' | 'live', ph: string) => h('input', { class: 'bd-ans bd-in', 'data-k': key + ':' + k, 'aria-label': ({ url: 'Check URL', expect: 'Expected response', live: 'Live URL' } as const)[k], placeholder: ph, value: dd[k], oninput: edit(k) });
     const recipe = (): ShipRecipe => ({
       check: parseSteps(dd.check), ship: parseSteps(dd.ship),
       verify: dd.url.trim() ? { url: dd.url.trim(), expect: dd.expect.trim() || 'ok', within: r?.verify?.within || 180 } : r?.verify?.self ? { self: true } : null,
@@ -517,7 +517,7 @@ export class BoardPanel {
 
   private detail(t: BoardTask, busy: boolean) {
     const key = t.id + ':note';
-    const note = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: t.state === 'done' ? 'A follow-up for the same session' : 'Anything to add before it continues',
+    const note = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, 'aria-label': t.state === 'done' ? 'Follow-up' : 'Note before it continues', placeholder: t.state === 'done' ? 'A follow-up for the same session' : 'Anything to add before it continues',
       oninput: () => this.drafts.set(key, note.value) });
     note.value = this.drafts.get(key) || ''; autoGrow(note);
     const answered = t.asks.filter(a => a.answer != null && a.answer !== '(closed)');
