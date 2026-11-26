@@ -279,11 +279,14 @@ select.ctl { background: var(--panel-solid); flex: none; }
 .showall { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; align-items: center; cursor: pointer; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 .grid.small { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-.pcard { position: relative; padding: 16px 16px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(0, 0, 0, 0.02); transition: border-color .2s, transform .2s, background .2s; display: flex; flex-direction: column; gap: 6px; }
+/* hover marks the border only, with no transition: the cards are rebuilt every 5 s, so a
+   lift (translateY) or a fade restarted each time and the cards bobbed under the cursor */
+.ov-slot { display: contents; }
+.pcard { position: relative; padding: 16px 16px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(0, 0, 0, 0.02); display: flex; flex-direction: column; gap: 6px; }
 .pcard.tracked { cursor: pointer; background: var(--panel-solid); border-color: var(--line-2); }
-.pcard.tracked:hover { border-color: var(--text); transform: translateY(-2px); }
+.pcard.tracked:hover { border-color: var(--text); }
 .pcard.openable { cursor: pointer; }
-.pcard.openable:hover { border-color: var(--text); transform: translateY(-2px); }
+.pcard.openable:hover { border-color: var(--text); }
 .pcard.live { border-color: var(--text); }
 .pcard .row { display: flex; align-items: center; gap: 8px; }
 .pcard h3 { margin: 0; font-size: 16.5px; font-weight: 600; flex: 1; letter-spacing: -0.01em; }

@@ -13,7 +13,7 @@ import { DomainMap } from './domain';
 import { applyLayout, hasLayout, resetLayout } from './city/layout';
 import { Pulse } from './pulse';
 import { HealthChip } from './health';
-import { h, put, heldBy, ago, dur, clock, shortTime, bytes, tail, money } from './util';
+import { h, put, morph, heldBy, ago, dur, clock, shortTime, bytes, tail, money } from './util';
 import { settingsButton } from './settings';
 
 const SPEEDS = [1, 10, 60, 300, 1800, 7200];
@@ -1139,10 +1139,11 @@ export class CityView {
     if (heldBy(this.els.sessions, () => this.renderSessions())) return; // a click in progress
     const list = this.sessionsAt();
     const e = this.els;
-    e.sessHead.innerHTML = '';
-    e.sessHead.append(h('span', {}, this.mode === 'live' ? 'Open sessions' : 'At this moment'), h('span', { class: 'count' }, list.length));
-    e.sessions.innerHTML = '';
-    if (!list.length) e.sessions.appendChild(h('div', { class: 'empty' }, this.mode === 'live' ? 'No open sessions in this project. Start Claude Code here and it will appear.' : 'No session active at this moment.'));
+    morph(e.sessHead, h('span', {}, this.mode === 'live' ? 'Open sessions' : 'At this moment'), h('span', { class: 'count' }, list.length));
+    // built off-page, then morph(): unchanged cards stay the same elements (util.ts), so the
+    // hovered card and its mouseenter survive a refresh
+    const out: HTMLElement[] = [];
+    if (!list.length) out.push(h('div', { class: 'empty' }, this.mode === 'live' ? 'No open sessions in this project. Start Claude Code here and it will appear.' : 'No session active at this moment.'));
     if (this.mode === 'live') {
       // grouped by what they need from you; the longest wait first. Sessions going in
       // circles (edit loop, a check failing again and again, cost far over the usual)
@@ -1152,10 +1153,11 @@ export class CityView {
         const g = list.filter(s => state === 'stuck' ? stuck.has(s.id) : s.live!.state === state && !stuck.has(s.id))
           .sort((a, b) => state === 'working' || state === 'stuck' ? b.lastTs - a.lastTs : a.live!.since - b.live!.since);
         if (!g.length) continue;
-        e.sessions.appendChild(h('div', { class: 'sgroup ' + state, title: state === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, label, h('span', {}, g.length)));
-        for (const s of g) e.sessions.appendChild(this.sessionCard(s));
+        out.push(h('div', { class: 'sgroup ' + state, title: state === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, label, h('span', {}, g.length)));
+        for (const s of g) out.push(this.sessionCard(s));
       }
-    } else for (const s of list) e.sessions.appendChild(this.sessionCard(s));
+    } else for (const s of list) out.push(this.sessionCard(s));
+    morph(e.sessions, ...out);
     if (this.hoverSid && this.world) { if (list.some(s => s.id === this.hoverSid)) this.markSession(this.hoverSid); else { this.hoverSid = null; this.world.setMarks([]); } }
   }
 
@@ -1175,7 +1177,7 @@ export class CityView {
       if (last) actionText = last.label ? `${VERB[last.kind] || last.kind} ${last.label}` : last.kind === 'cmd' ? 'Running a command' : VERB[last.kind] || last.kind;
     }
     const fp = L ? this.footprint(s.id) : [];
-    const card = h('div', { class: 'scard' + (this.focusSession === s.id ? ' focus' : ''), style: { '--c': color },
+    const card = h('div', { class: 'scard' + (this.focusSession === s.id ? ' focus' : ''), 'data-key': 's:' + s.id, style: { '--c': color },
       onclick: () => this.focusOn(this.focusSession === s.id ? null : s.id),
       onmouseenter: () => { this.hoverSid = s.id; this.markSession(s.id); } },
       h('div', { class: 'stitle' }, meta?.title || L?.title || s.id.slice(0, 8)),

@@ -1,5 +1,5 @@
 import { api, live, type PulseT, type PulseDetail, type ProcBreakdown, type IdleScan, type IdleProc, type StopResult } from './api';
-import { h, put, heldBy, ago, dur } from './util';
+import { h, put, morph, heldBy, ago, dur } from './util';
 
 const GB = 1024 ** 3;
 const gb = (n: number) => (n / GB).toFixed(n < 10 * GB ? 1 : 0);
@@ -45,13 +45,13 @@ export class Pulse {
     try { p = await api.pulse(); } catch { return; }
     if (heldBy(this.el, () => this.refresh())) return; // a click in progress
     this.last = p;
-    this.el.innerHTML = '';
     const its = this.items(p);
+    // morph(): unchanged buttons stay the same elements, so hover survives the 5 s refresh
     const btn = (it: Item, base: string, ...kids: Parameters<typeof h>[2][]) => h('button', {
       class: base + ' tap' + (it.cls ? ' ' + it.cls : '') + (this.openKey === it.key ? ' sel' : ''),
-      title: it.title, 'data-k': it.key, onclick: (e: Event) => { e.stopPropagation(); this.toggle(it.key, e.currentTarget as HTMLElement); } }, ...kids);
-    if (this.variant === 'strip') put(this.el, ...its.map(it => btn(it, 'pu', h('b', {}, it.value), ' ', it.short ?? it.label)));
-    else put(this.el,
+      title: it.title, 'data-k': it.key, 'data-key': 'pu:' + it.key + ':' + (it.meter || base), onclick: (e: Event) => { e.stopPropagation(); this.toggle(it.key, e.currentTarget as HTMLElement); } }, ...kids);
+    if (this.variant === 'strip') morph(this.el, ...its.map(it => btn(it, 'pu', h('b', {}, it.value), ' ', it.short ?? it.label)));
+    else morph(this.el,
       // the numbers you act on, as one line
       h('div', { class: 'pu-head' }, its.filter(it => WORK.has(it.key)).map((it, i) => [
         i ? h('span', { class: 'pu-sep' }, '·') : null,

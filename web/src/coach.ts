@@ -1,6 +1,6 @@
 import './coach.css';
 import { api, type Coach, type CoachSession, type CoachKind, type CoachRoll, type CoachHabit } from './api';
-import { h, put, ago, dur, money } from './util';
+import { h, put, morph, ago, dur, money } from './util';
 
 // How sessions use context and cache, for the whole machine or one project, with
 // the sessions behind each number and what would have saved money in each.
@@ -41,17 +41,18 @@ export class CoachPanel {
 
   render() {
     const d = this.data;
-    this.el.innerHTML = '';
-    const head = h('div', { class: 'co-head' },
+    // morph(): unchanged rows stay the same elements (util.ts), so the 60 s refresh and every
+    // click keep hover, an open session and the chart where they were
+    const head = h('div', { class: 'co-head', 'data-key': 'co-head' },
       h('div', {}, h('h2', { class: 'ov-h' }, 'Working with Claude'),
         h('p', { class: 'co-sub' }, 'How your sessions use context and the prompt cache, and what a different habit would have saved.')),
       h('div', { class: 'co-ctl' },
         seg([['7 days', 7], ['30 days', 30]], this.days, v => this.set({ days: v }))));
-    if (!d) return put(this.el, head, h('div', { class: 'co-empty' }, 'Reading sessions…'));
+    if (!d) return morph(this.el, head, h('div', { class: 'co-empty' }, 'Reading sessions…'));
     const t = d.totals;
     const proj = this.pid ? d.projects.find(p => p.id === this.pid) : null;
-    put(this.el, head,
-      h('div', { class: 'co-scope' },
+    morph(this.el, head,
+      h('div', { class: 'co-scope', 'data-key': 'co-scope' },
         h('button', { class: 'co-chip' + (!this.pid ? ' on' : ''), onclick: () => this.set({ pid: null }) }, 'All projects'),
         ...(this.pid && !proj ? [h('button', { class: 'co-chip on' }, this.pid)] : []),
         ...(this.pid ? [] : d.projects).map(p => h('button', { class: 'co-chip', onclick: () => this.set({ pid: p.id }) }, p.name)),
@@ -79,10 +80,10 @@ export class CoachPanel {
   private habits(t: CoachRoll, d: Coach) {
     const list = t.habits.filter(x => x.save > 0.01 || x.kind === 'compacted');
     return h('div', { class: 'co-box' },
-      h('div', { class: 'co-bh' }, 'Habits that cost the most', this.kind ? h('button', { class: 'co-clear', onclick: () => this.set({ kind: null }) }, 'show all sessions') : null),
+      h('div', { class: 'co-bh' }, 'Habits that cost the most', this.kind ? h('button', { class: 'co-clear', 'data-key': 'co-clear', onclick: () => this.set({ kind: null }) }, 'show all sessions') : null),
       list.length ? list.map(x => {
         const on = this.kind === x.kind;
-        return h('div', { class: 'co-habit' + (on ? ' on' : ''), onclick: () => this.set({ kind: on ? null : x.kind }),
+        return h('div', { class: 'co-habit' + (on ? ' on' : ''), 'data-key': 'h:' + x.kind, onclick: () => this.set({ kind: on ? null : x.kind }),
           title: on ? 'Collapse' : 'Show where this happened and how to avoid it', 'aria-expanded': String(on) },
           h('div', { class: 'co-hrow' }, h('i', { class: 'co-caret' }, on ? '▾' : '▸'), h('b', {}, x.label), h('span', { class: 'co-n' }, `${x.sessions} session${x.sessions === 1 ? '' : 's'}`),
             h('span', { class: 'co-save' }, x.save > 0.01 ? '≈' + money(x.save) : '')),
@@ -123,7 +124,7 @@ export class CoachPanel {
       h('div', { class: 'co-bh' }, 'By project'),
       h('div', { class: 'co-ptab' },
         h('div', { class: 'co-pr hd' }, h('span', {}, 'Project'), h('span', {}, 'Spent'), h('span', {}, 'Cache'), h('span', {}, 'Start'), h('span', {}, 'Could save'), h('span', {}, 'Top habit')),
-        ...d.projects.map(p => h('div', { class: 'co-pr', onclick: () => this.set({ pid: p.id }), title: 'Analytics for this project' },
+        ...d.projects.map(p => h('div', { class: 'co-pr', 'data-key': 'cp:' + p.id, onclick: () => this.set({ pid: p.id }), title: 'Analytics for this project' },
           h('span', { class: 'co-pn' }, p.name), h('span', {}, money(p.cost)), h('span', {}, pct(p.hit)), h('span', {}, k(p.base)),
           h('span', { class: 'co-save' }, money(p.save)), h('span', { class: 'co-ph' }, p.habits.find(x => x.save > 0.01)?.label || '—')))));
   }
@@ -148,7 +149,7 @@ export class CoachPanel {
       h('span', { class: 'co-num', title: 'Peak context' }, k(s.peak)),
       h('span', { class: 'co-save co-num', title: 'Estimated saving with the habits below' }, s.save > 0.01 ? '≈' + money(s.save) : ''),
       h('span', { class: 'co-age' }, ago(s.last)));
-    return h('div', { class: 'co-sess', 'data-sid': s.id }, row, open ? this.detail(s) : null);
+    return h('div', { class: 'co-sess', 'data-sid': s.id, 'data-key': 'cs:' + s.id }, row, open ? this.detail(s) : null);
   }
 
   private detail(s: CoachSession) {
@@ -225,7 +226,8 @@ function chart(s: CoachSession) {
   });
   hit.addEventListener('mouseleave', () => { cross.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
   const kinds = [...new Set(marks.map(m => m.kind))];
-  return h('div', {}, wrap, h('div', { class: 'co-legend' },
+  // keyed: its hover listeners are added by hand (morph can't see them) and write into its own tip
+  return h('div', { 'data-key': 'chart' }, wrap, h('div', { class: 'co-legend' },
     h('span', {}, h('i', { style: { background: 'var(--cyan)' } }), 'context per API call'),
     ...kinds.map(kd => h('span', {}, h('i', { style: { background: MARK[kd] || '#8c8c8c' } }), LABEL[kd]))));
 }

@@ -1,10 +1,79 @@
 type Child = Node | string | number | null | undefined | false | Child[];
 
+// The listeners h() added to each element ("onclick,oninput,"), for morph() below.
+const ON = new WeakMap<Element, string>();
+
+// morph(el, ...children): put() for panels that redraw on a timer or a live message. Instead of
+// replacing everything, it keeps each old element that is unchanged (same HTML, same listeners),
+// so hover, focus, an open <select>, typed text and scroll positions survive the refresh.
+// Changed elements are swapped whole, never edited in place, because their listeners close over
+// the elements built with them (a Send button reads its own answer box). The rule that keeps
+// this safe:
+// - an element with `data-key` is one self-contained item (a card, a row, a task): its
+//   listeners refer only to itself and its own children. Items are matched by key and kept
+//   when unchanged, even when their neighbours change.
+// - an unkeyed container with no listeners of its own, same tag and attributes, is patched
+//   inside (a grid of keyed cards).
+// - when anything at one level changes, every unkeyed sibling that has listeners outside a
+//   keyed item is rebuilt too, since one of them may refer to the part that changed.
+export function morph(el: Element, ...children: Child[]) {
+  const fresh: Node[] = [];
+  const add = (c: Child) => { if (c == null || c === false) return; if (Array.isArray(c)) c.forEach(add); else fresh.push(c instanceof Node ? c : document.createTextNode(String(c))); };
+  children.forEach(add);
+  patch(el, fresh);
+  return el;
+}
+const keyOf = (n: Node) => n instanceof Element ? n.getAttribute('data-key') : null;
+function sig(n: Node) {
+  if (!(n instanceof Element)) return n.nodeType + ':' + n.nodeValue;
+  let s = n.outerHTML;
+  const walk = (e: Element) => { const o = ON.get(e); if (o) s += '|' + o; for (const c of e.children) walk(c); };
+  walk(n);
+  return s;
+}
+// listeners not enclosed in a keyed item (an item's own listeners count as enclosed)
+function loose(n: Node): boolean {
+  if (!(n instanceof Element)) return false;
+  const walk = (e: Element): boolean => { if (e !== n && e.hasAttribute('data-key')) return false; if (ON.has(e)) return true; for (const c of e.children) if (walk(c)) return true; return false; };
+  return n.hasAttribute('data-key') ? false : walk(n);
+}
+function plain(o: Element, n: Element) {
+  if (o.tagName !== n.tagName || ON.has(o) || ON.has(n) || o.attributes.length !== n.attributes.length) return false;
+  for (const a of n.attributes) if (o.getAttribute(a.name) !== a.value) return false;
+  return true;
+}
+function patch(el: Element, fresh: Node[]) {
+  const old = [...el.childNodes];
+  const byKey = new Map<string, Node>();
+  for (const o of old) { const k = keyOf(o); if (k != null && !byKey.has(k)) byKey.set(k, o); }
+  type Step = { n: Node; o?: Node; how: 'keep' | 'patch' | 'new' };
+  let changed = old.length !== fresh.length;
+  const steps: Step[] = fresh.map((n, i) => {
+    const k = keyOf(n);
+    let o: Node | undefined;
+    if (k != null) { o = byKey.get(k); byKey.delete(k); }
+    else if (old[i] && keyOf(old[i]) == null) o = old[i];
+    if (o === n) return { n, o, how: 'keep' };
+    if (!o || n.isConnected) { changed = true; return { n, how: 'new' }; }
+    if (sig(o) === sig(n)) { if (o !== old[i]) changed = true; return { n, o, how: 'keep' }; }
+    changed = true;
+    if (k == null && o instanceof Element && n instanceof Element && plain(o, n)) return { n, o, how: 'patch' };
+    return { n, how: 'new' };
+  });
+  if (changed) for (const s of steps) if (s.o && s.o !== s.n && keyOf(s.n) == null && loose(s.o)) { s.how = 'new'; s.o = undefined; }
+  const next = steps.map(s => {
+    if (s.how === 'patch') patch(s.o as Element, [...s.n.childNodes]);
+    return s.how === 'new' ? s.n : s.o!;
+  });
+  next.forEach((n, i) => { if (el.childNodes[i] !== n) el.insertBefore(n, el.childNodes[i] ?? null); });
+  while (el.childNodes.length > next.length) el.lastChild!.remove();
+}
+
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, any> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v == null || v === false) continue;
-    if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+    if (k.startsWith('on') && typeof v === 'function') { el.addEventListener(k.slice(2).toLowerCase(), v); ON.set(el, (ON.get(el) || '') + k + ','); }
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
     else if (k === 'class') el.className = v;
     else el.setAttribute(k, v === true ? '' : String(v));

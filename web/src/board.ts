@@ -3,7 +3,7 @@
 // alone (questions, secrets, manual steps, commands it was not allowed to run) shows up
 // in "Your to-do"; answering the last one sends the answers back and the session carries on.
 import { api, live, type Board, type BoardTask, type BoardAsk, type BoardStep, type ShipInfo, type ShipRecipe, type ShipStep } from './api';
-import { h, heldBy, ago, dur, money, autoGrow } from './util';
+import { h, morph, heldBy, ago, dur, money, autoGrow } from './util';
 import { notify } from './notify';
 import './board.css';
 
@@ -141,8 +141,9 @@ export class BoardPanel {
       this.model.value = models.some(m => m.id === keep) ? keep : '';
     }
     this.nameDefault();
-    this.todoEl.replaceChildren(...this.todo(d));
-    this.listEl.replaceChildren(...this.list(d));
+    // morph(): unchanged items stay put, with their typed text, open menus and hover (util.ts)
+    morph(this.todoEl, ...this.todo(d));
+    morph(this.listEl, ...this.list(d));
     this.restoreFocus(focus);
   }
 
@@ -202,7 +203,7 @@ export class BoardPanel {
     const key = t.id + ':seen', busy = this.busy.has(key);
     const line = t.tldr || (t.summary ? short(t.summary.split(/(?<=[.!?])\s/)[0], 140) : 'Done.');
     const s = t.ship, live = s?.state === 'live';
-    return h('div', { class: 'bd-item done' },
+    return h('div', { class: 'bd-item done', 'data-key': key },
       this.head(t, live ? 'Live' : 'Done'),
       h('div', { class: 'bd-q' }, line),
       this.answerBox(t),
@@ -240,7 +241,7 @@ export class BoardPanel {
     const key = t.id + ':route', busy = this.busy.has(key);
     const sel = h('select', { class: 'bd-sel', 'aria-label': 'Another project' }, h('option', { value: '' }, 'Another project…'), ...d.projects.map(p => h('option', { value: p.id }, p.name)));
     const picks = t.route?.picks || [];
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, 'Project?', 'alarm'),
       h('div', { class: 'bd-q' }, 'Which project is this task for?'),
       t.route?.why ? h('div', { class: 'bd-why' }, t.route.why, t.route.conf ? ` (${Math.round(t.route.conf * 100)}% sure)` : '') : null,
@@ -264,7 +265,7 @@ export class BoardPanel {
         this.render(); } }), name);
     const rest = d.projects.filter(p => !picks.some(x => x.pid === p.id));
     const n = ticked.size;
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, 'Projects?', 'alarm'),
       h('div', { class: 'bd-q' }, `The same change for ${picks.length} projects. Which should it run in?`),
       t.route?.why ? h('div', { class: 'bd-why' }, t.route.why) : null,
@@ -288,7 +289,7 @@ export class BoardPanel {
     const apart = many ? h('button', { class: 'chip ghost', disabled: busy, title: 'Show this question once per project, to answer each one differently',
       onclick: () => { this.apart.add(t.group!.id + ':' + (a.twin || a.id)); this.render(); } }, 'Answer each separately') : null;
     if (a.kind === 'permission') {
-      return h('div', { class: 'bd-item' },
+      return h('div', { class: 'bd-item', 'data-key': key },
         this.head(t, tag(KIND.permission), 'alarm', a.step, proj),
         reply,
         h('div', { class: 'bd-q' }, a.question, a.why ? h('span', { class: 'bd-why' }, ' ', a.why) : null),
@@ -304,7 +305,7 @@ export class BoardPanel {
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && box.value.trim()) { e.preventDefault(); send(box.value); } } });
     box.value = this.drafts.get(key) || ''; autoGrow(box);
     const manual = a.kind === 'secret' || a.kind === 'action';
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, tag(KIND[a.kind]), a.kind === 'approval' || a.kind === 'secret' ? 'alarm' : '', a.step, proj),
       reply,
       h('div', { class: 'bd-q' }, a.question),
@@ -322,7 +323,7 @@ export class BoardPanel {
     const key = t.id + ':review', busy = this.busy.has(key);
     const done = [...t.steps].filter(s => s.state === 'done' && s.runs.length).sort((a, b) => Math.max(...b.runs) - Math.max(...a.runs))[0];
     const nx = t.steps.find(s => s.state === 'todo' || s.state === 'needs-you');
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, 'Check', '', done?.n),
       h('div', { class: 'bd-q' }, done ? `Step ${done.n} is done: ${done.title}` : 'A step is done'),
       done?.summary ? h('div', { class: 'bd-why' }, done.summary) : null,
@@ -341,7 +342,7 @@ export class BoardPanel {
   // is checked, shipped and verified by the board on its own.
   private recipeItem(pid: string, ts: BoardTask[]) {
     const info = this.data?.ships[pid], name = ts[0].project || pid;
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': 'ship:' + pid },
       h('div', { class: 'bd-ihead' }, h('span', { class: 'bd-tag alarm' }, 'Ship?'), h('span', { class: 'bd-proj' }, name),
         h('span', { class: 'bd-task' }, `${ts.length} finished task${ts.length > 1 ? 's' : ''} wait${ts.length > 1 ? '' : 's'} to go live`)),
       h('div', { class: 'bd-q' }, `How does ${name} go live? Confirm it once: from then on every finished task there is checked, shipped and verified without asking you.`),
@@ -460,7 +461,7 @@ export class BoardPanel {
     ];
     const strip = h('div', { class: 'bd-fan-strip' }, ...ts.map(t => h('span', { class: 'bd-fan-p ' + t.state,
       title: `${t.project}: ${STATE[t.state]}${t.tldr ? '. ' + t.tldr : t.error ? '. ' + t.error : ''}` }, t.project || '?')));
-    return h('div', { class: 'bd-task-row bd-fan ' + st + (isOpen ? ' open' : '') },
+    return h('div', { class: 'bd-task-row bd-fan ' + st + (isOpen ? ' open' : ''), 'data-key': key },
       h('div', { class: 'bd-main', onclick: () => { if (isOpen) this.open.delete(key); else this.open.add(key); this.render(); } },
         h('span', { class: 'bd-state ' + st }, STATE[st]),
         h('span', { class: 'bd-proj' }, `${ts.length} projects`),
@@ -523,7 +524,7 @@ export class BoardPanel {
       : t.state === 'needs-you' ? `${t.open} thing${t.open === 1 ? '' : 's'} in your to-do${t.summary ? '. ' + t.summary : ''}`
       : t.state === 'done' && t.tldr ? t.tldr
       : t.error ? t.error : t.summary || (t.state === 'ready' ? 'Press Run to start a session' : '');
-    return h('div', { class: 'bd-task-row ' + t.state + (isOpen ? ' open' : '') },
+    return h('div', { class: 'bd-task-row ' + t.state + (isOpen ? ' open' : ''), 'data-key': 'row:' + t.id },
       h('div', { class: 'bd-main', onclick: () => { if (isOpen) this.open.delete(t.id); else this.open.add(t.id); this.render(); } },
         h('span', { class: 'bd-state ' + stateOf(t)[0] }, stateOf(t)[1]),
         h('span', { class: 'bd-proj' }, t.project || '—'),
