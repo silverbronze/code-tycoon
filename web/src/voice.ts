@@ -4,6 +4,7 @@
 // follow a session) it hands back to be done here.
 import { h } from './util';
 import './voice.css';
+import { SETTINGS_EVENT } from './settings';
 
 type Lang = 'auto' | 'en' | 'ru' | 'he';
 type UiAction = { do: 'overview' } | { do: 'open' | 'follow'; pid: string; sid: string | null; layer: string | null } | { do: 'layer'; layer: string };
@@ -32,9 +33,10 @@ export class Voice {
   constructor(private view: () => any) {
     this.btn = h('button', { class: 'vc-btn', title: 'Speak a command (Alt+V)', 'aria-label': 'Voice command', onclick: () => this.toggle() });
     this.btn.innerHTML = MIC;
-    this.lang = h('select', { class: 'vc-lang', title: 'The language you speak. Auto detects it.', onchange: () => lsSet(LANG_KEY, this.lang.value) },
+    this.lang = h('select', { class: 'vc-lang', title: 'The language you speak. Auto detects it.', 'aria-label': 'Voice language', onchange: () => lsSet(LANG_KEY, this.lang.value) },
       ...(Object.keys(LANG_LABEL) as Lang[]).map(l => h('option', { value: l }, LANG_LABEL[l])));
     this.lang.value = (lsGet(LANG_KEY) as Lang) || 'auto';
+    window.addEventListener(SETTINGS_EVENT, () => { this.lang.value = (lsGet(LANG_KEY) as Lang) || 'auto'; }); // changed in Settings
     this.panel = h('div', { class: 'vc-panel' });
     this.el = h('div', { class: 'vc' }, h('div', { class: 'vc-bar' }, this.lang, this.btn));
     // the replies live on <body>: docked in a header, they would sit under the map's own layers
@@ -123,8 +125,10 @@ export class Voice {
   private query() {
     const m = /^#\/p\/([^/]+)/.exec(location.hash);
     const v = this.view();
-    const q = new URLSearchParams({ lang: this.lang.value, mode: lsGet('vz-board-mode2') === 'ask' ? 'ask' : 'full',
-      auto: lsGet('vz-board-auto') === '0' ? '0' : '1', pause: lsGet('vz-board-pause') === '1' ? '1' : '0' });
+    // tasks start with the task form's defaults (all commands, start right away, no pauses) and its model
+    const q = new URLSearchParams({ lang: this.lang.value, mode: 'full', auto: '1', pause: '0' });
+    const model = lsGet('vz-board-model');
+    if (model) q.set('model', model);
     if (m) { q.set('pid', decodeURIComponent(m[1])); if (typeof v?.layer === 'string') q.set('layer', v.layer); }
     return q;
   }

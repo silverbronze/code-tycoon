@@ -1,5 +1,5 @@
 import { api, live, type Health } from './api';
-import { h, put, ago } from './util';
+import { h, put, morph, ago } from './util';
 
 const FACTOR_HINT: Record<string, string> = {
   shipping: 'Open Insights: what landed this week', tidiness: 'Open Review: uncommitted files, riskiest first',
@@ -33,8 +33,7 @@ export class HealthChip {
     this.data = d;
     this.opts.onData?.(d, prev);
     this.el.className = 'chip health ' + tone(d.score);
-    this.el.innerHTML = '';
-    put(this.el, h('i', { class: 'hl-dot' }), 'Health ', h('b', {}, d.score ?? '–'),
+    morph(this.el, h('i', { class: 'hl-dot' }), 'Health ', h('b', {}, d.score ?? '–'),
       d.streak.current ? h('span', { class: 'hl-streak', title: `${d.streak.current} days in a row with a commit` }, ` · ${d.streak.current}d streak`) : null);
     if (this.pop) this.fill();
   }
@@ -62,16 +61,16 @@ export class HealthChip {
   private fill() {
     const pop = this.pop, d = this.data;
     if (!pop) return;
-    pop.innerHTML = '';
-    if (!d) { put(pop, h('div', { class: 'pp-load' }, 'Loading…')); return this.place(); }
-    put(pop,
+    // morph(): unchanged rows stay the same elements (util.ts), so a refresh keeps hover
+    if (!d) { morph(pop, h('div', { class: 'pp-load' }, 'Loading…')); return this.place(); }
+    morph(pop,
       h('div', { class: 'hl-head' },
         h('div', { class: 'hl-score ' + tone(d.score) }, d.score ?? '–'),
         h('div', {}, h('div', { class: 'hl-grade' }, d.grade ? `City is ${d.grade}` : 'Not enough activity to score'),
           h('div', { class: 'pp-sub' }, `Last 7 days · updated ${ago(d.at)}`))),
       d.tip ? h('div', { class: 'pp-note' }, d.tip) : null,
       h('div', { class: 'pp-h' }, 'What the score is made of'),
-      d.factors.map(f => h('div', { class: 'pp-row hl-factor' + (f.score == null ? ' off' : '') + (this.opts.onFactor ? ' link' : ''),
+      d.factors.map(f => h('div', { class: 'pp-row hl-factor' + (f.score == null ? ' off' : '') + (this.opts.onFactor ? ' link' : ''), 'data-key': 'f:' + f.key,
         title: this.opts.onFactor ? FACTOR_HINT[f.key] : '', onclick: () => { if (this.opts.onFactor) { this.close(); this.opts.onFactor(f.key); } } },
         h('div', { class: 'pp-main' },
           h('div', { class: 'pp-t' }, f.label, h('span', { class: 'dim' }, ` · ${Math.round(f.weight * 100)}%`)),
@@ -84,7 +83,7 @@ export class HealthChip {
         h('span', { class: 'hl-medal' }, m.got ? '★' : '☆'), h('span', {}, m.label),
         m.got ? null : h('span', { class: 'pp-track hl-mtrack' }, h('span', { class: 'pp-bar', style: { width: `${Math.round(m.progress * 100)}%` } }))))),
       d.cosmetics?.length ? [h('div', { class: 'pp-h' }, 'Cosmetics (never change the score)'),
-        h('div', { class: 'hl-cos' }, d.cosmetics.map(c => h('button', { class: 'hl-cosb' + (c.on ? ' on' : '') + (c.unlocked ? '' : ' locked'), disabled: !c.unlocked,
+        h('div', { class: 'hl-cos' }, d.cosmetics.map(c => h('button', { class: 'hl-cosb' + (c.on ? ' on' : '') + (c.unlocked ? '' : ' locked'), 'data-key': 'c:' + c.key, disabled: !c.unlocked,
           title: c.unlocked ? (c.on ? 'Shown in the city. Click to hide' : 'Hidden. Click to show') : `Unlocks with: ${c.unlock}`,
           onclick: async () => { c.on = !c.on; this.fill(); await api.cosmetic(this.pid, c.key, c.on); this.opts.onData?.(d, d); } },
           h('i', {}), c.label, c.unlocked ? null : h('span', { class: 'dim' }, ` · ${c.unlock}`))))] : null);

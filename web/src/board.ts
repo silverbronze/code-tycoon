@@ -2,15 +2,15 @@
 // project and runs it in a real Claude Code session there. What the session cannot do
 // alone (questions, secrets, manual steps, commands it was not allowed to run) shows up
 // in "Your to-do"; answering the last one sends the answers back and the session carries on.
-import { api, live, type Board, type BoardTask, type BoardAsk, type BoardStep } from './api';
-import { h, ago, dur, money, autoGrow } from './util';
+import { api, live, type Board, type BoardTask, type BoardAsk, type BoardStep, type ShipInfo, type ShipRecipe, type ShipStep } from './api';
+import { h, morph, heldBy, ago, dur, money, autoGrow } from './util';
 import { notify } from './notify';
 import './board.css';
 
 const STATE: Record<BoardTask['state'], string> = { routing: 'Finding project', unrouted: 'Pick project', targets: 'Pick projects', ready: 'Ready', queued: 'Queued', running: 'Running',
   'needs-you': 'Needs you', done: 'Done', failed: 'Failed', stopped: 'Stopped', paused: 'Paused' };
 const KIND: Record<BoardAsk['kind'], string> = { decision: 'Decide', secret: 'Secret', action: 'Do this', info: 'Tell it', approval: 'Approve', permission: 'Allow?' };
-const AUTO_KEY = 'vz-board-auto', MODE_KEY = 'vz-board-mode2', PAUSE_KEY = 'vz-board-pause';
+const MODEL_KEY = 'vz-board-model';
 const MARK: Record<BoardStep['state'], string> = { todo: '○', running: '●', done: '✓', 'needs-you': '!', failed: '✕', stopped: '■' };
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch {} };
@@ -30,9 +30,7 @@ export class BoardPanel {
   private text: HTMLTextAreaElement;
   private fitText: () => void;
   private pick: HTMLSelectElement;
-  private mode: HTMLSelectElement;
-  private auto: HTMLInputElement;
-  private pause: HTMLInputElement;
+  private model: HTMLSelectElement;
   private addBtn: HTMLButtonElement;
   private addErr: HTMLElement;
   private todoEl: HTMLElement;
@@ -41,16 +39,12 @@ export class BoardPanel {
   private timer = 0;
 
   constructor() {
-    this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', placeholder: 'A task for any of your projects, a list of them, or one change for many (“in all my sites…”). Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
+    this.text = h('textarea', { class: 'bd-text', rows: 2, 'data-k': 'new', 'aria-label': 'New task', placeholder: 'A task for any of your projects, a list of them, or one change for many (“in all my sites…”). Code Tycoon splits a list into separate tasks, finds each one’s project and runs it in a Claude Code session there.',
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.add(); } } });
     this.fitText = autoGrow(this.text);
-    this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for' }, h('option', { value: '' }, 'Find the project for me'));
-    this.mode = h('select', { class: 'bd-sel', title: 'What the session may run without asking you. File edits are always allowed.',
-      onchange: () => lsSet(MODE_KEY, this.mode.value) },
-      h('option', { value: 'full' }, 'Allow all commands'), h('option', { value: 'ask' }, 'Ask me before commands'));
-    this.mode.value = lsGet(MODE_KEY) === 'ask' ? 'ask' : 'full';
-    this.auto = h('input', { type: 'checkbox', checked: lsGet(AUTO_KEY) !== '0', onchange: () => lsSet(AUTO_KEY, this.auto.checked ? '1' : '0') });
-    this.pause = h('input', { type: 'checkbox', checked: lsGet(PAUSE_KEY) === '1', onchange: () => lsSet(PAUSE_KEY, this.pause.checked ? '1' : '0') });
+    this.pick = h('select', { class: 'bd-sel', title: 'Which project the task is for', 'aria-label': 'Project', onchange: () => this.nameDefault() }, h('option', { value: '' }, 'Find the project for me'));
+    this.model = h('select', { class: 'bd-sel', title: 'The model the session runs on', 'aria-label': 'Model', onchange: () => lsSet(MODEL_KEY, this.model.value) },
+      h('option', { value: '' }, 'Project’s model'));
     this.addBtn = h('button', { class: 'chip go', onclick: () => this.add() }, 'Add task');
     this.addErr = h('div', { class: 'bd-err' });
     this.todoEl = h('div', { class: 'bd-todo' });
@@ -58,9 +52,7 @@ export class BoardPanel {
     this.el = h('section', { class: 'board' },
       h('h2', { class: 'ov-h' }, 'Tasks, all projects'),
       h('div', { class: 'bd-compose' }, this.text,
-        h('div', { class: 'bd-row' }, this.pick, this.mode,
-          h('label', { class: 'bd-auto', title: 'Start the session as soon as the project is known. Off, the task waits for Run.' }, this.auto, 'Start right away'),
-          h('label', { class: 'bd-auto', title: 'A task with several stages runs as a plan of steps. On, it stops after each step for you to check before it goes on.' }, this.pause, 'Pause after each step'),
+        h('div', { class: 'bd-row' }, this.pick, this.model,
           h('span', { class: 'bd-hint' }, 'Ctrl+Enter'), this.addBtn),
         this.addErr),
       this.todoEl, this.listEl);
@@ -75,6 +67,7 @@ export class BoardPanel {
         if ((t.state === 'needs-you' || t.state === 'unrouted' || t.state === 'targets' || t.state === 'paused') && was?.state !== t.state) this.alert(t);
         this.render();
       }
+      if (m.type === 'ship' && this.data) { this.data.ships = { ...this.data.ships, [m.pid]: m.info as ShipInfo }; this.render(); }
       if (m.type === 'board-removed' && this.data) { this.data.tasks = this.data.tasks.filter(x => x.id !== m.id); this.render(); }
     });
   }
@@ -101,7 +94,9 @@ export class BoardPanel {
     if (!f) return;
     const el = this.el.querySelector<HTMLTextAreaElement>(`[data-k="${CSS.escape(f.k)}"]`);
     if (!el) return;
-    el.focus();
+    // preventScroll: the box keeps focus while the user scrolls the page with the wheel, and a
+    // plain focus() on every 5 s refresh scrolled the overview back up to it
+    el.focus({ preventScroll: true });
     try { if (f.s != null) el.setSelectionRange(f.s, f.e ?? f.s); } catch {}
   }
 
@@ -110,7 +105,7 @@ export class BoardPanel {
     if (!text) { this.text.focus(); return; }
     this.addBtn.disabled = true; this.addErr.textContent = '';
     try {
-      await api.addTask({ text, pid: this.pick.value || null, mode: this.mode.value as 'ask' | 'full', autoRun: this.auto.checked, pause: this.pause.checked });
+      await api.addTask({ text, pid: this.pick.value || null, mode: 'full', autoRun: true, pause: false, model: this.model.value || null });
       this.text.value = ''; this.fitText(); this.pick.value = '';
     } catch (e) { this.addErr.textContent = (e as Error).message; }
     this.addBtn.disabled = false;
@@ -130,6 +125,7 @@ export class BoardPanel {
   private render() {
     const d = this.data;
     if (!d) return;
+    if (heldBy(this.el, () => this.render())) return; // a click in progress
     const focus = this.saveFocus();
     // project picker: keep the choice across refreshes
     const want = this.pick.value;
@@ -138,9 +134,35 @@ export class BoardPanel {
         ...d.projects.map(p => h('option', { value: p.id }, p.name)));
       this.pick.value = want;
     }
-    this.todoEl.replaceChildren(...this.todo(d));
-    this.listEl.replaceChildren(...this.list(d));
+    // model picker: the models this provider offers; the choice is kept per browser
+    const models = d.models || [];
+    if (this.model.options.length !== models.length + 1) {
+      const keep = this.model.options.length > 1 ? this.model.value : lsGet(MODEL_KEY) || '';
+      this.model.replaceChildren(h('option', { value: '' }, 'Project’s model'), ...models.map(m => h('option', { value: m.id }, m.label)));
+      this.model.value = models.some(m => m.id === keep) ? keep : '';
+    }
+    this.nameDefault();
+    // morph(): unchanged items stay put, with their typed text, open menus and hover (util.ts)
+    morph(this.todoEl, ...this.todo(d));
+    morph(this.listEl, ...this.list(d));
     this.restoreFocus(focus);
+  }
+
+  // The empty model choice names the model the task will run on: the picked project's latest
+  // session's model, or (project still to be found) the one most tracked projects use.
+  private nameDefault() {
+    const d = this.data, opt = this.model.options[0];
+    if (!d || !opt) return;
+    const p = d.projects.find(x => x.id === this.pick.value);
+    let text = 'Project’s model';
+    if (p?.model) text += ` (${p.model.label})`;
+    else {
+      const count = new Map<string, number>();
+      for (const x of d.projects) if (x.tracked && x.model) count.set(x.model.label, (count.get(x.model.label) || 0) + 1);
+      const top = [...count].sort((a, b) => b[1] - a[1]);
+      if (top.length) text += top.length === 1 ? ` (${top[0][0]})` : ` (mostly ${top[0][0]})`;
+    }
+    if (opt.textContent !== text) opt.textContent = text;
   }
 
   // ---------------------------------------------------------------- your to-do
@@ -158,16 +180,21 @@ export class BoardPanel {
       if (t.state === 'unrouted') items.push(this.routeItem(t, d));
       if (t.state === 'targets') items.push(this.targetsItem(t, d));
       if (t.state === 'paused') items.push(this.reviewItem(t));
+      let first = true; // a task's answer shows once, with its first open question
       for (const a of t.asks) {
         if (a.answer != null) continue;
         const k = twinKey(t, a), all = k ? twins.get(k)! : [];
         if (all.length > 1) { if (all[0].a === a) items.push(this.askItem(t, a, all)); }
-        else items.push(this.askItem(t, a));
+        else { items.push(this.askItem(t, a, [], first)); first = false; }
       }
       // finished, but its work never reached the main folder: that needs the user, it is not done
       if (stuck(t)) items.push(this.mergeItem(t));
-      else if (t.state === 'done' && t.seen === false) finished.push(this.doneItem(t));
+      else if (t.state === 'done' && t.seen === false && !shipPending(t)) finished.push(this.doneItem(t));
     }
+    // projects whose finished tasks wait for the user to confirm, once, how the project goes live
+    const waiting = new Map<string, BoardTask[]>();
+    for (const t of sorted) if (t.pid && t.state === 'done' && t.ship?.state === 'unconfirmed') waiting.set(t.pid, [...(waiting.get(t.pid) || []), t]);
+    for (const [pid, ts] of waiting) items.unshift(this.recipeItem(pid, ts));
     if (!items.length && !finished.length) return [];
     return [h('div', { class: 'bd-todo-h' }, h('b', {}, 'Your to-do'), items.length ? h('span', {}, items.length) : null,
       h('em', {}, items.length ? 'What the sessions can’t do without you. Answering a task’s last question sends the answers back and the session carries on.' : 'Finished tasks, in one line each.')),
@@ -178,9 +205,13 @@ export class BoardPanel {
   private doneItem(t: BoardTask) {
     const key = t.id + ':seen', busy = this.busy.has(key);
     const line = t.tldr || (t.summary ? short(t.summary.split(/(?<=[.!?])\s/)[0], 140) : 'Done.');
-    return h('div', { class: 'bd-item done' },
-      this.head(t, 'Done'),
+    const s = t.ship, live = s?.state === 'live';
+    return h('div', { class: 'bd-item done', 'data-key': key },
+      this.head(t, live ? 'Live' : 'Done'),
       h('div', { class: 'bd-q' }, line),
+      this.answerBox(t),
+      s ? h('div', { class: 'bd-why' }, live && s.proof?.url ? [h('a', { href: s.proof.url, target: '_blank', rel: 'noopener' }, s.proof.url), ' · '] : null, shipLine(t)) : null,
+      live && s.proof?.shot ? shotImg(t) : null,
       h('div', { class: 'bd-opts' },
         t.sid ? h('button', { class: 'chip', onclick: () => showOutput(t, this.data?.projects.find(p => p.id === t.pid)?.tracked ?? false) }, 'Full output') : null,
         h('button', { class: 'chip go', disabled: busy, title: 'Take it off the to-do', onclick: () => this.act(t, 'seen', {}, key) }, 'OK')),
@@ -202,6 +233,21 @@ export class BoardPanel {
       this.err(key));
   }
 
+  // The answer, when the task asked a question. Tasks from before the report had an "answer"
+  // (or a session that left it out) show the session's final reply when the task reads as a question.
+  private replies = new Map<string, string | null>();
+  private answerBox(t: BoardTask) {
+    let text = t.answer || null;
+    if (!text && t.sid && isQuestion(t.text)) {
+      if (!this.replies.has(t.id)) {
+        this.replies.set(t.id, null);
+        api.taskOutput(t.id).then(r => { this.replies.set(t.id, r.answer || r.text || null); if (r.answer || r.text) this.render(); }).catch(() => {});
+      }
+      text = this.replies.get(t.id) || null;
+    }
+    return text ? h('div', { class: 'bd-reply' }, ...mdBlocks(text)) : null;
+  }
+
   private head(t: BoardTask, tag: string, cls = '', step?: number | null, proj?: string) {
     const st = step != null ? t.steps.find(x => x.n === step) : null;
     return h('div', { class: 'bd-ihead' }, h('span', { class: 'bd-tag ' + cls }, tag), h('span', { class: 'bd-proj', title: proj }, proj ? short(proj, 60) : t.project || 'No project yet'),
@@ -211,9 +257,9 @@ export class BoardPanel {
 
   private routeItem(t: BoardTask, d: Board) {
     const key = t.id + ':route', busy = this.busy.has(key);
-    const sel = h('select', { class: 'bd-sel' }, h('option', { value: '' }, 'Another project…'), ...d.projects.map(p => h('option', { value: p.id }, p.name)));
+    const sel = h('select', { class: 'bd-sel', 'aria-label': 'Another project' }, h('option', { value: '' }, 'Another project…'), ...d.projects.map(p => h('option', { value: p.id }, p.name)));
     const picks = t.route?.picks || [];
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, 'Project?', 'alarm'),
       h('div', { class: 'bd-q' }, 'Which project is this task for?'),
       t.route?.why ? h('div', { class: 'bd-why' }, t.route.why, t.route.conf ? ` (${Math.round(t.route.conf * 100)}% sure)` : '') : null,
@@ -238,7 +284,7 @@ export class BoardPanel {
         this.render(); } }), name);
     const rest = d.projects.filter(p => !picks.some(x => x.pid === p.id));
     const n = ticked.size;
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, 'Projects?', 'alarm'),
       h('div', { class: 'bd-q' }, `The same change for ${picks.length} projects. Which should it run in?`),
       t.route?.why ? h('div', { class: 'bd-why' }, t.route.why) : null,
@@ -253,7 +299,8 @@ export class BoardPanel {
   }
 
   // all: the same question from other projects of a fan-out, answered together
-  private askItem(t: BoardTask, a: BoardAsk, all: { t: BoardTask; a: BoardAsk }[] = []) {
+  private askItem(t: BoardTask, a: BoardAsk, all: { t: BoardTask; a: BoardAsk }[] = [], withAnswer = false) {
+    const reply = withAnswer ? this.answerBox(t) : null;
     const key = t.id + ':' + a.id, busy = this.busy.has(key), many = all.length > 1;
     const send = (v: string) => this.act(t, 'answer', { ask: a.id, answer: v, all: many }, key);
     const proj = many ? all.map(x => x.t.project).join(', ') : undefined;
@@ -261,8 +308,9 @@ export class BoardPanel {
     const apart = many ? h('button', { class: 'chip ghost', disabled: busy, title: 'Show this question once per project, to answer each one differently',
       onclick: () => { this.apart.add(t.group!.id + ':' + (a.twin || a.id)); this.render(); } }, 'Answer each separately') : null;
     if (a.kind === 'permission') {
-      return h('div', { class: 'bd-item' },
+      return h('div', { class: 'bd-item', 'data-key': key },
         this.head(t, tag(KIND.permission), 'alarm', a.step, proj),
+        reply,
         h('div', { class: 'bd-q' }, a.question, a.why ? h('span', { class: 'bd-why' }, ' ', a.why) : null),
         a.cmd ? h('pre', { class: 'bd-cmd' }, a.cmd) : a.detail ? h('pre', { class: 'bd-cmd' }, a.detail) : null,
         h('div', { class: 'bd-opts' },
@@ -271,13 +319,14 @@ export class BoardPanel {
           h('button', { class: 'chip', disabled: busy, onclick: () => send('Deny') }, 'Deny'), apart),
         this.err(key));
     }
-    const box = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: a.kind === 'secret' ? 'Never paste the secret here. Put it where asked, then press Done.' : 'Your answer',
+    const box = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, 'aria-label': a.question ? 'Answer: ' + a.question : 'Your answer', placeholder: a.kind === 'secret' ? 'Never paste the secret here. Put it where asked, then press Done.' : 'Your answer',
       oninput: () => this.drafts.set(key, box.value),
       onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && box.value.trim()) { e.preventDefault(); send(box.value); } } });
     box.value = this.drafts.get(key) || ''; autoGrow(box);
     const manual = a.kind === 'secret' || a.kind === 'action';
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, tag(KIND[a.kind]), a.kind === 'approval' || a.kind === 'secret' ? 'alarm' : '', a.step, proj),
+      reply,
       h('div', { class: 'bd-q' }, a.question),
       a.why ? h('div', { class: 'bd-why' }, a.why) : null,
       a.options.length ? h('div', { class: 'bd-opts' }, ...a.options.map(o => h('button', { class: 'chip', disabled: busy, onclick: () => send(o) }, o))) : null,
@@ -293,7 +342,7 @@ export class BoardPanel {
     const key = t.id + ':review', busy = this.busy.has(key);
     const done = [...t.steps].filter(s => s.state === 'done' && s.runs.length).sort((a, b) => Math.max(...b.runs) - Math.max(...a.runs))[0];
     const nx = t.steps.find(s => s.state === 'todo' || s.state === 'needs-you');
-    return h('div', { class: 'bd-item' },
+    return h('div', { class: 'bd-item', 'data-key': key },
       this.head(t, 'Check', '', done?.n),
       h('div', { class: 'bd-q' }, done ? `Step ${done.n} is done: ${done.title}` : 'A step is done'),
       done?.summary ? h('div', { class: 'bd-why' }, done.summary) : null,
@@ -307,6 +356,82 @@ export class BoardPanel {
 
   private err(key: string) { const e = this.errors.get(key); return e ? h('div', { class: 'bd-err' }, e) : null; }
 
+  // ---------------------------------------------------------------- shipping
+  // A project's ship recipe, asked once: after the user confirms it, every finished task there
+  // is checked, shipped and verified by the board on its own.
+  private recipeItem(pid: string, ts: BoardTask[]) {
+    const info = this.data?.ships[pid], name = ts[0].project || pid;
+    return h('div', { class: 'bd-item', 'data-key': 'ship:' + pid },
+      h('div', { class: 'bd-ihead' }, h('span', { class: 'bd-tag alarm' }, 'Ship?'), h('span', { class: 'bd-proj' }, name),
+        h('span', { class: 'bd-task' }, `${ts.length} finished task${ts.length > 1 ? 's' : ''} wait${ts.length > 1 ? '' : 's'} to go live`)),
+      h('div', { class: 'bd-q' }, `How does ${name} go live? Confirm it once: from then on every finished task there is checked, shipped and verified without asking you.`),
+      this.recipeEditor(pid, info, true));
+  }
+
+  private recipeDrafts = new Map<string, { check: string; ship: string; url: string; expect: string; live: string; shot: boolean; base: ShipRecipe | null }>();
+  private recipeOpen = new Set<string>();
+  private recipeEditor(pid: string, info: ShipInfo | undefined, asking: boolean) {
+    const key = 'ship:' + pid, busy = this.busy.has(key);
+    if (info?.detecting && !info.recipe) return h('div', { class: 'bd-why' }, 'Reading the project to work out how it is checked and shipped…');
+    const r = info?.recipe || null;
+    let d = this.recipeDrafts.get(pid);
+    if (!d || (d.base !== r && !this.dirty.has(pid))) {
+      d = { check: stepsText(r?.check), ship: stepsText(r?.ship), url: r?.verify?.url || '', expect: r?.verify?.expect || 'ok', live: r?.live || '', shot: !!r?.screenshot, base: r };
+      this.recipeDrafts.set(pid, d);
+    }
+    const dd = d;
+    const edit = (k: 'check' | 'ship' | 'url' | 'expect' | 'live') => (e: Event) => { dd[k] = (e.target as HTMLInputElement).value; this.dirty.add(pid); };
+    const area = (k: 'check' | 'ship', ph: string) => {
+      const a = h('textarea', { class: 'bd-ans', rows: 2, 'data-k': key + ':' + k, 'aria-label': k === 'check' ? 'Check steps' : 'Ship steps', placeholder: ph, oninput: edit(k) });
+      a.value = dd[k]; autoGrow(a); return a;
+    };
+    const field = (k: 'url' | 'expect' | 'live', ph: string) => h('input', { class: 'bd-ans bd-in', 'data-k': key + ':' + k, 'aria-label': ({ url: 'Check URL', expect: 'Expected response', live: 'Live URL' } as const)[k], placeholder: ph, value: dd[k], oninput: edit(k) });
+    const recipe = (): ShipRecipe => ({
+      check: parseSteps(dd.check), ship: parseSteps(dd.ship),
+      verify: dd.url.trim() ? { url: dd.url.trim(), expect: dd.expect.trim() || 'ok', within: r?.verify?.within || 180 } : r?.verify?.self ? { self: true } : null,
+      live: dd.live.trim() || null, screenshot: dd.shot, notes: r?.notes || null });
+    const save = (b: { confirmed?: boolean; off?: boolean; recipe?: ShipRecipe }) => this.shipAct(pid, () => api.setShip(pid, b));
+    return h('div', { class: 'bd-recipe' },
+      info?.why || r?.notes ? h('div', { class: 'bd-why' }, [r?.notes, info?.why].filter(Boolean).join(' ')) : null,
+      h('label', { class: 'bd-rl' }, 'Checks that must pass first, one command per line'), area('check', 'npm test'),
+      h('label', { class: 'bd-rl' }, 'Ship steps, in order (empty: nothing to deploy, check only). Add “when: <regex>” to run a step only when a changed file matches'),
+      area('ship', 'npm run deploy'),
+      r?.verify?.self ? h('div', { class: 'bd-why' }, 'Live check: Code Tycoon answers on the new commit after the restart.') :
+        h('div', { class: 'bd-rrow' }, h('label', { class: 'bd-rl' }, 'Check that it is live at'), field('url', 'https://… (empty: no live check)'),
+          h('label', { class: 'bd-rl' }, 'expect'), field('expect', 'ok, sha, or text the page must show')),
+      h('div', { class: 'bd-rrow' }, h('label', { class: 'bd-rl' }, 'Where you open it'), field('live', 'https://…'),
+        h('label', { class: 'bd-auto' }, h('input', { type: 'checkbox', checked: dd.shot, onchange: (e: Event) => { dd.shot = (e.target as HTMLInputElement).checked; this.dirty.add(pid); } }), 'Screenshot it for the card')),
+      h('div', { class: 'bd-opts' },
+        h('button', { class: 'chip go', disabled: busy, onclick: () => save({ recipe: recipe(), confirmed: true, off: false }) }, asking ? 'Confirm and ship' : info?.confirmed ? 'Save' : 'Confirm'),
+        h('button', { class: 'chip', disabled: busy || info?.detecting, title: 'Read the project again and propose a recipe', onclick: () => { this.dirty.delete(pid); this.shipAct(pid, () => api.detectShip(pid)); } }, info?.detecting ? 'Working it out…' : 'Work it out again'),
+        info?.off ? h('button', { class: 'chip', disabled: busy, onclick: () => save({ off: false }) }, 'Ship this project again')
+          : h('button', { class: 'chip ghost', disabled: busy, title: 'Finished tasks here stay merged on this PC and are never deployed', onclick: () => save({ off: true }) }, 'Never ship this project')),
+      this.err(key));
+  }
+  // in a task's details: how its project ships, one click from editing
+  private recipeBox(t: BoardTask) {
+    const pid = t.pid!, info = this.data?.ships[pid], r = info?.recipe;
+    const isOpen = this.recipeOpen.has(pid);
+    const what = info?.off ? 'off for this project' : !r ? 'not set up yet' : `${info?.confirmed ? '' : 'not confirmed yet: '}${r.check.length ? r.check.map(s => s.run).join(', ') : 'no checks'} → ${r.ship.length ? r.ship.map(s => s.run).join(', ') : 'nothing to deploy'}${r.verify?.url ? ' → ' + r.verify.url : r.verify?.self ? ' → the app answers' : ''}`;
+    return h('div', { class: 'bd-shipbox' },
+      h('div', { class: 'bd-why' }, `Shipping ${t.project || ''}: ${what} `,
+        h('button', { class: 'chip', onclick: () => { if (isOpen) this.recipeOpen.delete(pid); else this.recipeOpen.add(pid); this.render(); } }, isOpen ? 'Close' : 'Edit')),
+      isOpen ? this.recipeEditor(pid, info, false) : null);
+  }
+
+  private dirty = new Set<string>(); // recipes the user is editing: a server update doesn't overwrite them
+  private async shipAct(pid: string, fn: () => Promise<ShipInfo>) {
+    const key = 'ship:' + pid;
+    if (this.busy.has(key)) return;
+    this.busy.add(key); this.errors.delete(key); this.render();
+    try {
+      const info = await fn();
+      if (this.data) this.data.ships = { ...this.data.ships, [pid]: info };
+      this.dirty.delete(pid); this.recipeDrafts.delete(pid); this.recipeOpen.delete(pid);
+    } catch (e) { this.errors.set(key, (e as Error).message); }
+    this.busy.delete(key); this.render();
+  }
+
   // ---------------------------------------------------------------- the tasks
   private list(d: Board) {
     if (!d.tasks.length) return [h('div', { class: 'bd-empty' }, 'No tasks yet. Write one above: the session runs on its own and lists here whatever it needs from you.')];
@@ -315,8 +440,8 @@ export class BoardPanel {
     for (const t of d.tasks) if (t.group) firstOf.set(t.group.id, Math.min(firstOf.get(t.group.id) ?? Infinity, t.created));
     const sorted = [...d.tasks].sort((a, b) => ((b.group ? firstOf.get(b.group.id)! : b.created) - (a.group ? firstOf.get(a.group.id)! : a.created))
       || ((a.group?.i ?? 0) - (b.group?.i ?? 0)));
-    // a done task stays up top until its branch is merged
-    const finished = (t: BoardTask) => t.state === 'done' && !unmerged(t);
+    // a done task stays up top until its branch is merged and shipped
+    const finished = (t: BoardTask) => t.state === 'done' && !shipPending(t);
     // the tasks of one fan-out are one entry, done when all of them are
     const entries: BoardTask[][] = [], fans = new Map<string, BoardTask[]>();
     for (const t of sorted) {
@@ -355,7 +480,7 @@ export class BoardPanel {
     ];
     const strip = h('div', { class: 'bd-fan-strip' }, ...ts.map(t => h('span', { class: 'bd-fan-p ' + t.state,
       title: `${t.project}: ${STATE[t.state]}${t.tldr ? '. ' + t.tldr : t.error ? '. ' + t.error : ''}` }, t.project || '?')));
-    return h('div', { class: 'bd-task-row bd-fan ' + st + (isOpen ? ' open' : '') },
+    return h('div', { class: 'bd-task-row bd-fan ' + st + (isOpen ? ' open' : ''), 'data-key': key },
       h('div', { class: 'bd-main', onclick: () => { if (isOpen) this.open.delete(key); else this.open.add(key); this.render(); } },
         h('span', { class: 'bd-state ' + st }, STATE[st]),
         h('span', { class: 'bd-proj' }, `${ts.length} projects`),
@@ -393,7 +518,8 @@ export class BoardPanel {
       t.state === 'ready' ? btn('Run', 'run', 'chip go') : null,
       (t.state === 'failed' || t.state === 'stopped') ? btn(t.runs.length ? 'Continue' : 'Run', t.runs.length ? 'again' : 'run', 'chip go', 'Resume the session where it stopped') : null,
       t.state === 'paused' ? btn('Continue', 'run', 'chip go', 'Go on with the next step') : null,
-      t.state === 'running' ? btn('Stop', 'stop') : null,
+      t.state === 'running' || shipBusy(t) ? btn('Stop', 'stop', 'chip', shipBusy(t) ? 'Stop shipping' : undefined) : null,
+      canShip(t) ? btn('Ship again', 'ship', 'chip go', 'Run the ship recipe again (after fixing something outside the code)') : null,
       t.state === 'queued' && t.wait ? h('button', { class: 'chip', disabled: busy, title: 'Start now without waiting for the task it depends on',
         onclick: (e: Event) => { e.stopPropagation(); this.act(t, 'run', { force: true }); } }, 'Start anyway') : null,
       t.state === 'queued' ? btn('Unqueue', 'stop', 'chip', t.wait ? 'Take it out of the queue' : 'Waits for another task in the same project') : null,
@@ -412,12 +538,14 @@ export class BoardPanel {
       : t.state === 'queued' && t.wait ? `Waits for “${short(t.wait.text, 70)}”${t.wait.project ? ` in ${t.wait.project}` : ''} to be done`
       : t.state === 'queued' ? `Waits for the task running in this project${t.tree ? '' : ': it is not a git repo, so its tasks share one folder'}`
       : t.state === 'done' && unmerged(t) ? mergeLine(t)!
+      : t.state === 'done' && t.ship && t.ship.state !== 'nothing' ? shipLine(t)!
+      : t.state === 'needs-you' && t.ship?.state === 'failed' ? shipLine(t)!
       : t.state === 'needs-you' ? `${t.open} thing${t.open === 1 ? '' : 's'} in your to-do${t.summary ? '. ' + t.summary : ''}`
       : t.state === 'done' && t.tldr ? t.tldr
       : t.error ? t.error : t.summary || (t.state === 'ready' ? 'Press Run to start a session' : '');
-    return h('div', { class: 'bd-task-row ' + t.state + (isOpen ? ' open' : '') },
+    return h('div', { class: 'bd-task-row ' + t.state + (isOpen ? ' open' : ''), 'data-key': 'row:' + t.id },
       h('div', { class: 'bd-main', onclick: () => { if (isOpen) this.open.delete(t.id); else this.open.add(t.id); this.render(); } },
-        stuck(t) ? h('span', { class: 'bd-state needs-you', title: mergeLine(t) || '' }, 'Not merged') : h('span', { class: 'bd-state ' + t.state }, STATE[t.state]),
+        stuck(t) ? h('span', { class: 'bd-state needs-you', title: mergeLine(t) || '' }, 'Not merged') : h('span', { class: 'bd-state ' + stateOf(t)[0] }, stateOf(t)[1]),
         h('span', { class: 'bd-proj' }, t.project || '—'),
         h('div', { class: 'bd-body' }, h('div', { class: 'bd-text-1' },
           t.group && !t.group.fan ? h('span', { class: 'bd-part', title: 'Split from: ' + short(t.group.source, 300) }, `${t.group.i + 1}/${t.group.n}`) : null, short(t.text, 160)), line ? h('div', { class: 'bd-line' }, short(line, 240)) : null),
@@ -430,7 +558,7 @@ export class BoardPanel {
 
   private detail(t: BoardTask, busy: boolean) {
     const key = t.id + ':note';
-    const note = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, placeholder: t.state === 'done' ? 'A follow-up for the same session' : 'Anything to add before it continues',
+    const note = h('textarea', { class: 'bd-ans', rows: 1, 'data-k': key, 'aria-label': t.state === 'done' ? 'Follow-up' : 'Note before it continues', placeholder: t.state === 'done' ? 'A follow-up for the same session' : 'Anything to add before it continues',
       oninput: () => this.drafts.set(key, note.value) });
     note.value = this.drafts.get(key) || ''; autoGrow(note);
     const answered = t.asks.filter(a => a.answer != null && a.answer !== '(closed)');
@@ -439,6 +567,10 @@ export class BoardPanel {
       h('div', { class: 'bd-full' }, t.text),
       t.route && t.project ? h('div', { class: 'bd-why' }, `Project: ${t.project}. ${t.route.why}`) : null,
       t.wt ? h('div', { class: 'bd-why' }, mergeLine(t)) : null,
+      t.ship ? h('div', { class: 'bd-why' }, t.ship.proof?.url ? [h('a', { href: t.ship.proof.url, target: '_blank', rel: 'noopener' }, t.ship.proof.url), ' · '] : null, shipLine(t)) : null,
+      t.ship?.log && t.ship.state !== 'live' ? h('pre', { class: 'bd-cmd' }, t.ship.log.slice(-1500)) : null,
+      t.ship?.proof?.shot ? shotImg(t) : null,
+      t.pid ? this.recipeBox(t) : null,
       t.group?.fan ? h('div', { class: 'bd-why' }, `The same change in ${t.group.n} projects: ${(t.group.names || []).join(', ')}`) : null,
       t.group && !t.group.fan ? h('div', { class: 'bd-split' }, h('span', { class: 'bd-why' }, `Part ${t.group.i + 1} of ${t.group.n}, split from what you wrote:`),
         h('div', { class: 'bd-src' }, t.group.source),
@@ -487,6 +619,71 @@ function mergeLine(t: BoardTask) {
   }
 }
 
+// ---------------------------------------------------------------- shipping (server/ship.mjs)
+const SHIP_BUSY = ['queued', 'checking', 'shipping', 'restarting', 'verifying'];
+const shipBusy = (t: BoardTask) => !!t.ship && SHIP_BUSY.includes(t.ship.state);
+// not finished yet: still merging, shipping, being fixed, or waiting for its project's recipe
+const shipPending = (t: BoardTask) => unmerged(t) || shipBusy(t) || t.ship?.state === 'fixing' || t.ship?.state === 'unconfirmed';
+const canShip = (t: BoardTask) => !!t.ship && ['failed', 'stopped'].includes(t.ship.state) && t.state !== 'running';
+// the state chip: a done task reads as shipping, live or not shipped
+function stateOf(t: BoardTask): [string, string] {
+  const s = t.ship?.state;
+  if (t.state !== 'done' || !s) return [t.state, STATE[t.state]];
+  if (s === 'live') return ['done', 'Live'];
+  if (SHIP_BUSY.includes(s)) return ['running', 'Shipping'];
+  if (s === 'unconfirmed') return ['paused', 'Not shipped'];
+  if (s === 'failed' || s === 'stopped') return ['failed', 'Not shipped'];
+  return ['done', 'Done'];
+}
+function shipLine(t: BoardTask) {
+  const s = t.ship;
+  if (!s) return null;
+  const at = s.step ? `: ${s.step}` : '';
+  switch (s.state) {
+    case 'queued': return 'Waits to ship: another task ships in this project first';
+    case 'checking': return 'Checking before shipping' + at;
+    case 'shipping': return 'Shipping' + at;
+    case 'restarting': return s.why || 'Restarting Code Tycoon on the new code';
+    case 'verifying': return 'Checking that it is live' + at;
+    case 'live': return s.proof ? `${s.proof.checked ? 'Live and checked' : 'Shipped (no live address to check)'}: ${s.proof.why}${s.proof.sha && !s.proof.why.includes(s.proof.sha) ? ` · commit ${s.proof.sha}` : ''}` : 'Live';
+    case 'fixing': return `Shipping failed at ${s.stage}${at}; ${t.state === 'needs-you' ? 'the session needs your answer to fix it' : `the session is fixing it (try ${s.tries} of 2)`}`;
+    case 'failed': return `Shipping failed at ${s.stage}${at}${s.back?.ok ? `. Rolled back (revert ${s.back.sha})` : s.back ? `. Could not roll back: ${s.back.why}` : ''}`;
+    case 'unconfirmed': return 'Not shipped yet: confirm once how this project goes live (in your to-do)';
+    case 'off': return 'Not deployed: shipping is off for this project';
+    case 'nothing': return 'Changed nothing, so there was nothing to ship';
+    case 'stopped': return 'Shipping stopped' + (s.why ? ': ' + s.why : '');
+  }
+}
+const shotImg = (t: BoardTask) => { const src = `/api/board/${encodeURIComponent(t.id)}/shot?t=${t.ship?.proof?.at || 0}`;
+  return h('a', { class: 'bd-shot', href: src, target: '_blank', rel: 'noopener', title: 'The live page after shipping' }, h('img', { src, alt: 'Screenshot of the live page', loading: 'lazy' })); };
+const stepsText = (xs?: ShipStep[]) => (xs || []).map(s => s.when ? `${s.run}   when: ${s.when}` : s.run).join('\n');
+const parseSteps = (txt: string): ShipStep[] => txt.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+  const m = l.match(/^(.*?)\s+when:\s*(.+)$/);
+  return m ? { run: m[1].trim(), when: m[2].trim() } : { run: l, when: null };
+});
+
+// an answer as DOM: markdown tables (runs of "| a | b |" lines) become tables, the rest inlineMd
+function mdBlocks(s: string) {
+  const out: Node[] = [], lines = s.split('\n');
+  const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+  for (let i = 0; i < lines.length;) {
+    if (/^\s*\|.*\|\s*$/.test(lines[i])) {
+      const rows: string[][] = [];
+      for (; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) if (!/^\s*\|[\s:|-]+\|\s*$/.test(lines[i])) rows.push(cells(lines[i]));
+      out.push(h('table', { class: 'bd-tbl' }, ...rows.map((r, k) => h('tr', {}, ...r.map(c => h(k ? 'td' : 'th', {}, ...inlineMd(c)))))));
+      continue;
+    }
+    const start = i;
+    while (i < lines.length && !/^\s*\|.*\|\s*$/.test(lines[i])) i++;
+    const txt = lines.slice(start, i).join('\n').replace(/^\n+|\n+$/g, '');
+    if (txt) out.push(h('div', {}, ...inlineMd(txt)));
+  }
+  return out;
+}
+
+// a task that asks something rather than orders a change ("What is the status…?", "how much…")
+const isQuestion = (s: string) => /\?\s*$/.test(s.trim()) || /^\s*(what|how|why|which|who|where|when|is|are|does|do|can|could|should|tell me|explain|check|list|show me)\b/i.test(s);
+
 // **bold** and `code` of a reply as DOM nodes (text only, never HTML); the rest stays as written
 function inlineMd(s: string) {
   return s.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/).map(p =>
@@ -507,6 +704,7 @@ function showOutput(t: BoardTask, tracked: boolean) {
       h('div', { class: 'bd-ihead' }, h('span', { class: 'bd-tag' }, 'Output'), h('span', { class: 'bd-proj' }, t.project || ''),
         h('span', { class: 'bd-task', title: t.text }, short(t.text, 120))),
       t.tldr ? h('div', { class: 'bd-q' }, t.tldr) : null,
+      t.answer ? h('div', { class: 'bd-reply' }, ...mdBlocks(t.answer)) : null,
       body,
       h('div', { class: 'bd-opts' },
         tracked && t.pid && t.sid ? h('button', { class: 'chip', onclick: () => { close(); location.hash = '#/p/' + encodeURIComponent(t.pid!) + '/s/' + encodeURIComponent(t.sid!); } }, 'Open the session') : null,

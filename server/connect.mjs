@@ -69,6 +69,28 @@ export async function deviceLogin(relay = DEFAULT_RELAY, { onCode } = {}) {
   throw new Error('the code expired before it was approved; run `code-tycoon tunnel login` again');
 }
 
+// Sign in from the app (POST /api/tunnel/signin): the same device-code flow, run in the background
+// while the page polls GET /api/tunnel. state: waiting (code + url to approve) | done | failed
+let signin = null;
+export const signinState = () => signin && { ...signin };
+export function startSignin(relay = DEFAULT_RELAY, onDone = () => {}) {
+  if (signin?.state === 'waiting' || signin?.state === 'starting') return signinState();
+  signin = { state: 'starting' };
+  deviceLogin(relay, { onCode: s => { signin = { state: 'waiting', code: s.user_code, url: s.verify_url, until: Date.now() + (s.expires_in || 600) * 1000 }; } })
+    .then(j => { signin = { state: 'done', login: j.login }; onDone(); },
+      e => { signin = { state: 'failed', error: e.message.replace(/; run `.*$/, '') }; });
+  return signinState();
+}
+// whether this PC holds an account token, and the login it was saved for (never the token itself)
+export function savedAccount() {
+  const t = readTunnel();
+  return t?.token ? { login: t.login || null, on: t.on !== false } : null;
+}
+export async function signOut() {
+  signin = null;
+  return forget();
+}
+
 // uninstall: tell the relay this PC is gone (best effort), then forget the token here
 export async function forget() {
   const t = readTunnel();

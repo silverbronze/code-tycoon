@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { api, live, type Prop, type City, type Timeline, type LiveSession, type LiveEvent, type Alert, type TaskT, type Changes, type Digest, type Tie, type Health, type Review, type Insights, type WeekStats, type OptJob } from './api';
 import { Mood } from './city/mood';
-import type { TaskFlags, FileHist } from './api';
+import type { TaskFlags, FileHist, Entry } from './api';
 import { Sky } from './city/sky';
 import { ENV } from './city/env';
 import { Stage } from './city/scene';
@@ -13,9 +13,18 @@ import { DomainMap } from './domain';
 import { applyLayout, hasLayout, resetLayout } from './city/layout';
 import { Pulse } from './pulse';
 import { HealthChip } from './health';
-import { h, put, ago, dur, clock, shortTime, bytes, tail, money } from './util';
+import { h, put, morph, heldBy, ago, dur, clock, shortTime, bytes, tail, money } from './util';
+import { settingsButton } from './settings';
 
 const SPEEDS = [1, 10, 60, 300, 1800, 7200];
+// entry points (schematic top band): what each kind is, in the inspector and tooltip
+const ENTRY_TEXT: Record<Entry['kind'], { kind: string; unit: string; desc: string }> = {
+  page: { kind: 'Pages', unit: 'Pages', desc: 'Pages a person opens in a browser. Requests start here and go down into the code below.' },
+  http: { kind: 'HTTP API', unit: 'Routes', desc: 'Routes other programs (or the app\'s own pages) call over HTTP.' },
+  cli: { kind: 'Command line', unit: 'Commands', desc: 'Commands a person or a script runs in a terminal.' },
+  hook: { kind: 'Hooks & webhooks', unit: 'Hooks', desc: 'Events another program sends in: webhooks, Claude Code hooks.' },
+  schedule: { kind: 'Schedules', unit: 'Schedules', desc: 'Work the clock starts: cron jobs, timers, scheduled workflows.' },
+};
 const ACTIVE_WINDOW = 15 * 60e3;   // replay: a session with no event for this long goes home
 const WARM_TAU = 20 * 60e3;
 const DAY = 86400e3;
@@ -87,7 +96,7 @@ export class CityView {
   private disposed = false;
 
   constructor(parent: HTMLElement, public pid: string, follow: string | null = null) {
-    this.root = h('div', { class: 'cityview' });
+    this.root = h('div', { class: 'cityview', role: 'main' });
     parent.appendChild(this.root);
     this.pendingFollow = follow;
     this.load();
@@ -238,7 +247,7 @@ export class CityView {
     e.modeBadge = h('span', { class: 'mode live' }, 'LIVE');
     const totalCost = this.data.sessions.reduce((s, x) => s + (x.cost || 0), 0);
     const header = h('header', { class: 'topbar glass' },
-      h('a', { class: 'back', href: '#/' }, '←'),
+      h('a', { class: 'back', href: '#/', 'aria-label': 'All projects', title: 'All projects' }, '←'),
       h('div', { class: 'ttl' }, h('h1', {}, c.project.name), h('div', { class: 'path' }, c.project.root)),
       h('div', { class: 'chips' },
         (this.health = new HealthChip(this.pid, { onData: (d, prev) => this.onHealth(d, prev), onFactor: k => this.openFactor(k) })).el,
@@ -251,14 +260,15 @@ export class CityView {
         totalCost ? h('span', { class: 'chip', title: 'All sessions at API list prices. A subscription is not billed per token; this shows relative spend.' }, h('b', {}, money(totalCost)), ' API-equiv.') : null),
       h('div', { class: 'spacer' }),
       h('span', { class: 'vc-slot' }), // the voice mic docks here (voice.ts)
+      settingsButton(),
       e.modeBadge,
       e.bell,
       c.project.isGit ? e.changesBtn : null,
       e.colorSel,
       e.levelChip = h('span', { class: 'chip ghost', title: 'Zoom out for modules, in for files' }, 'Level: ', e.lod),
-      h('button', { class: 'chip icon', title: 'Rotate left (Q)', onclick: () => this.viewStage().rotate(-1) }, '⟲'),
-      h('button', { class: 'chip icon', title: 'Rotate right (E)', onclick: () => this.viewStage().rotate(1) }, '⟳'),
-      h('button', { class: 'chip icon', title: 'Fit the map', onclick: () => this.layer === 'domain' ? this.domain.fit() : this.stage.flyTo(0, 0, (c.project.w + c.project.h) * 0.55) }, '⤢'));
+      h('button', { class: 'chip icon rot', title: 'Rotate left (Q)', 'aria-label': 'Rotate left', onclick: () => this.viewStage().rotate(-1) }, '⟲'),
+      h('button', { class: 'chip icon rot', title: 'Rotate right (E)', 'aria-label': 'Rotate right', onclick: () => this.viewStage().rotate(1) }, '⟳'),
+      h('button', { class: 'chip icon', title: 'Fit the map', 'aria-label': 'Fit the map', onclick: () => this.layer === 'domain' ? this.domain.fit() : this.stage.flyTo(0, 0, (c.project.w + c.project.h) * 0.55) }, '⤢'));
     e.header = header;
 
     e.drawer = h('div', { class: 'drawer glass' });
@@ -288,8 +298,8 @@ export class CityView {
     e.right = right;
     e.inspect.style.display = 'none'; e.digest.style.display = 'none'; e.reviewList.style.display = 'none'; e.insights.style.display = 'none';
 
-    e.play = h('button', { class: 'ctl play', title: 'Play / pause (space)', onclick: () => this.togglePlay() }, '▶');
-    e.speed = h('select', { class: 'ctl', title: 'Playback speed', onchange: (ev: Event) => { this.speed = Number((ev.target as HTMLSelectElement).value); } },
+    e.play = h('button', { class: 'ctl play', title: 'Play / pause (space)', 'aria-label': 'Play or pause', onclick: () => this.togglePlay() }, '▶');
+    e.speed = h('select', { class: 'ctl', title: 'Playback speed', 'aria-label': 'Playback speed', onchange: (ev: Event) => { this.speed = Number((ev.target as HTMLSelectElement).value); } },
       ...SPEEDS.map(s => h('option', { value: s, selected: s === this.speed }, s === 1 ? 'Real time' : `${s}×`)));
     e.clock = h('div', { class: 'clock' });
     e.goLive = h('button', { class: 'ctl golive', onclick: () => this.goLive() }, '● Live');
@@ -305,7 +315,7 @@ export class CityView {
     e.tl = h('div', { class: 'tlhost' });
     const bottom = h('footer', { class: 'bottombar glass' },
       h('div', { class: 'controls' },
-        h('button', { class: 'ctl', title: 'Replay from the first session', onclick: () => { this.setMode('replay'); this.seek(this.tl.t0); this.speed = Math.max(this.speed, 1800); (e.speed as HTMLSelectElement).value = String(this.speed); this.play(true); } }, '⏮'),
+        h('button', { class: 'ctl', title: 'Replay from the first session', 'aria-label': 'Replay from the first session', onclick: () => { this.setMode('replay'); this.seek(this.tl.t0); this.speed = Math.max(this.speed, 1800); (e.speed as HTMLSelectElement).value = String(this.speed); this.play(true); } }, '⏮'),
         e.play, e.speed, e.clock, e.gap, h('div', { class: 'spacer' }), rangeSeg, histSeg, legend, e.goLive),
       e.tl);
     e.bottom = bottom;
@@ -339,12 +349,16 @@ export class CityView {
     this.frameRect = frame;
     // on the domain layer its panel takes the left of that part; the floating bits move right of it
     const left = this.layer === 'domain' ? Math.min(frame.left + this.domain.panelWidth(), frame.right - 200) : frame.left;
-    // the machine/session pulse floats at the top of that open part
+    // the machine/session pulse floats at the top of that open part; where that part is too narrow
+    // (tablets, phones) it would wrap into a block over the panels, and the overview shows the same numbers
+    e.pulse.style.display = frame.right - left < 520 ? 'none' : '';
     Object.assign(e.pulse.style, { top: `${frame.top - box.top + 10}px`, left: `${(left + frame.right) / 2 - box.left}px`, transform: 'translateX(-50%)', maxWidth: `${Math.max(200, frame.right - left - 28)}px` });
     this.world.occluders = [e.header, e.left, e.right, e.bottom, e.drawer, e.pulse]
       .filter(x => x && x.offsetParent && x.style.display !== 'none').map(x => x.getBoundingClientRect());
-    Object.assign(e.layers.style, { left: `${left - box.left + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
-    Object.assign(e.compass.style, { right: `${box.right - frame.right + 14}px`, bottom: `${box.bottom - frame.bottom + 14}px` });
+    // the layer switch and compass sit on the open map's bottom edge: the domain panel's top when it is a bottom sheet
+    const sheet = this.layer === 'domain' ? this.domain?.sheetTop() ?? null : null, floor = sheet == null ? frame.bottom : Math.min(frame.bottom, sheet);
+    Object.assign(e.layers.style, { left: `${left - box.left + 14}px`, bottom: `${box.bottom - floor + 14}px` });
+    Object.assign(e.compass.style, { right: `${box.right - frame.right + 14}px`, bottom: `${box.bottom - floor + 14}px` });
     this.schem?.setFrame(frame);
     if (this.domain) this.domain.occluders = [e.pulse, e.layers, e.compass].filter(Boolean);
     this.domain?.setFrame(frame);
@@ -433,7 +447,7 @@ export class CityView {
   // The module or outside system a selection stands in (a file stands in its module).
   private placeRef(s: { tt: number; ti: number }): [number, number] | null {
     if (s.tt === 0) { const f = this.city.files[s.ti]; return f ? [1, f.m] : null; }
-    return s.tt === 1 || s.tt === 3 ? [s.tt, s.ti] : null;
+    return s.tt === 1 || s.tt === 3 || s.tt === 4 ? [s.tt, s.ti] : null;
   }
 
   private onKey = (ev: KeyboardEvent) => {
@@ -651,7 +665,7 @@ export class CityView {
   private async loadReview(quiet = false) {
     if (!this.city.project.isGit || this.disposed) return;
     const e = this.els.reviewList;
-    if (!this.review && !quiet) { e.innerHTML = ''; e.appendChild(h('div', { class: 'loading-sm' }, 'Checking uncommitted changes…')); }
+    if (!this.review && !quiet) morph(e, h('div', { class: 'loading-sm' }, 'Checking uncommitted changes…'));
     const r = await api.review(this.pid).catch(() => null);
     if (!r || this.disposed) return;
     this.review = r; this.reviewAt = Date.now();
@@ -661,17 +675,17 @@ export class CityView {
   }
   private renderReview() {
     const r = this.review!, e = this.els.reviewList;
-    e.innerHTML = '';
-    if (!r.isGit) { e.appendChild(h('div', { class: 'empty' }, 'Not a git repository, so there is nothing to review before a commit.')); return; }
-    if (!r.files.length) { e.appendChild(h('div', { class: 'empty' }, 'Working tree clean. Nothing waits for review.')); return; }
+    // morph() (util.ts): unchanged rows stay the same elements, so a refresh keeps hover and scroll
+    if (!r.isGit) { morph(e, h('div', { class: 'empty' }, 'Not a git repository, so there is nothing to review before a commit.')); return; }
+    if (!r.files.length) { morph(e, h('div', { class: 'empty' }, 'Working tree clean. Nothing waits for review.')); return; }
     const need = r.files.filter(f => f.level !== 'low').length;
     const icon = { high: '▲', medium: '●', low: '○' };
-    put(e,
+    morph(e,
       h('div', { class: 'rv-head' }, h('b', {}, need ? `${need} of ${r.files.length} files need a look` : `${r.files.length} uncommitted files, none risky`),
         h('div', { class: 'sub' }, 'Ranked by what the area holds, size of the change, whether the writing session tested after it, and leftovers.')),
       r.files.map(f => {
         const ws = f.sessions.map(s => this.sIndex.get(s)).filter((x): x is number => x != null);
-        return h('div', { class: 'rv-row ' + f.level, onclick: () => { if (f.ti != null) this.select({ tt: 0, ti: f.ti }, true); },
+        return h('div', { class: 'rv-row ' + f.level, 'data-key': 'rv:' + f.p, onclick: () => { if (f.ti != null) this.select({ tt: 0, ti: f.ti }, true); },
           onmouseenter: () => { if (f.ti != null) this.world.setMarks([{ tt: 0, ti: f.ti, color: ws.length ? this.colors[ws[0]] : NOBODY }]); } },
           h('div', { class: 'row' }, h('span', { class: 'rv-lv' }, icon[f.level]), h('span', { class: 'fp' }, f.p),
             h('span', { class: 'n' }, f.st === '??' ? 'new' : f.add || f.del ? `+${f.add} −${f.del}` : f.st)),
@@ -684,7 +698,7 @@ export class CityView {
 
   private async loadInsights() {
     const e = this.els.insights;
-    if (!this.insightsData) { e.innerHTML = ''; e.appendChild(h('div', { class: 'loading-sm' }, 'Reading this week…')); }
+    if (!this.insightsData) morph(e, h('div', { class: 'loading-sm' }, 'Reading this week…'));
     const r = await api.insights(this.pid).catch(() => null);
     if (!r || this.disposed) return;
     this.insightsData = r;
@@ -704,9 +718,9 @@ export class CityView {
       }
       return h('div', { class: 'kpi', title: tip }, h('div', { class: 'k' }, label), h('div', { class: 'v' }, cur, delta));
     };
-    const fileRow = (i: number, p: string, n: string) => h('div', { class: 'frow link', onclick: () => this.select({ tt: 0, ti: i }, true) }, h('span', { class: 'fp' }, p), h('span', { class: 'n' }, n));
-    e.innerHTML = '';
-    put(e,
+    const fileRow = (i: number, p: string, n: string) => h('div', { class: 'frow link', 'data-key': 'f:' + p, onclick: () => this.select({ tt: 0, ti: i }, true) }, h('span', { class: 'fp' }, p), h('span', { class: 'n' }, n));
+    // morph() (util.ts): unchanged rows stay the same elements, so a refresh keeps hover and scroll
+    morph(e,
       h('div', { class: 'sect' }, h('h3', {}, 'This week vs last week'),
         h('div', { class: 'kpis' },
           kpi('Cost per landed task', w.perLanded == null ? '–' : money(w.perLanded), w.perLanded, p.perLanded, 'down', 'API-equivalent spend divided by tasks whose edits reached a commit'),
@@ -722,16 +736,16 @@ export class CityView {
         d.untested ? h('div', { class: 'ptext' }, `${d.untested} code files were changed without a passing test, type check or build by the session that changed them (30 days). Colour: tested shows where.`) : null),
       d.suggestions.length ? h('div', { class: 'sect' }, h('h3', {}, 'Rules for CLAUDE.md'),
         h('div', { class: 'sub' }, 'Things you told sessions that are not in CLAUDE.md yet. Written there once, every session follows them.'),
-        d.suggestions.map(s => h('div', { class: 'sugg' }, h('div', { class: 'ptext' }, '“' + s.text + '”'),
+        d.suggestions.map(s => h('div', { class: 'sugg', 'data-key': 'sg:' + s.text }, h('div', { class: 'ptext' }, '“' + s.text + '”'),
           h('div', { class: 'row' }, h('span', { class: 'dim' }, s.n > 1 ? `said in ${s.n} tasks` : 'stated as a rule'),
             h('button', { class: 'chip mini', onclick: (ev: Event) => { navigator.clipboard?.writeText('- ' + s.text); (ev.target as HTMLElement).textContent = 'Copied'; } }, 'Copy line'))))) : null,
       d.hot.length ? h('div', { class: 'sect' }, h('h3', { class: 'warn' }, 'Rewritten again and again (30 days)'),
         h('div', { class: 'sub' }, 'Where sessions keep going back. Worth settling the design once, or a CLAUDE.md note.'),
         d.hot.map(x => fileRow(x.i, x.p, `${x.tasks} tasks`)),
-        h('button', { class: 'chip mini', onclick: () => this.openFactor('stability') }, 'Show on map')) : null,
+        h('button', { class: 'chip mini', 'data-key': 'map', onclick: () => this.openFactor('stability') }, 'Show on map')) : null,
       d.growing.length ? h('div', { class: 'sect' }, h('h3', {}, 'Growing fast (30 days)'),
         d.growing.map(x => fileRow(x.i, x.p, `+${x.g} lines · ${bytes(x.size)}`)),
-        h('button', { class: 'chip mini', onclick: () => { this.colorMode = 'growth'; (this.els.colorSel as HTMLSelectElement).value = 'growth'; this.applyColorMode(); } }, 'Show on map')) : null,
+        h('button', { class: 'chip mini', 'data-key': 'map', onclick: () => { this.colorMode = 'growth'; (this.els.colorSel as HTMLSelectElement).value = 'growth'; this.applyColorMode(); } }, 'Show on map')) : null,
       d.prompts ? this.promptSection(d.prompts) : null,
       this.depSection(d.deps),
       h('div', { class: 'sub dim' }, `Updated ${ago(d.at)}. Advice only: none of these numbers feed the health score.`));
@@ -742,7 +756,7 @@ export class CityView {
     const s = p.stats;
     const ex = (x: { id: string; prompt: string; cost: number; why?: string }, cls: string) => {
       const ti = this.taskIndex.get(x.id);
-      return h('div', { class: 'pex ' + cls + (ti != null ? ' link' : ''), onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
+      return h('div', { class: 'pex ' + cls + (ti != null ? ' link' : ''), 'data-key': 'px:' + x.id, onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
         h('div', { class: 'ptext' }, '“' + x.prompt + (x.prompt.length >= 220 ? '…' : '') + '”'),
         h('div', { class: 'dim' }, (x.why ? x.why + ' · ' : 'landed · ') + money(x.cost)));
     };
@@ -767,7 +781,7 @@ export class CityView {
       weeks.map(w => h('div', { class: 'dep-wk' }, h('div', { class: 'dim' }, wk(w.week)),
         w.added.map(a => {
           const ti = a.task ? this.taskIndex.get(a.task.id) : undefined;
-          return h('div', { class: 'frow' + (ti != null ? ' link' : ''), title: `${a.file} · commit ${a.commit}`, onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
+          return h('div', { class: 'frow' + (ti != null ? ' link' : ''), 'data-key': 'dep:' + a.name + ':' + a.commit, title: `${a.file} · commit ${a.commit}`, onclick: ti != null ? () => this.openTask(this.data.tasks[ti]) : null },
             h('span', { class: 'dep add' }, '+ ' + a.name), h('span', { class: 'n' }, a.task ? a.task.title.slice(0, 40) : a.file));
         }),
         w.removed.map(a => h('div', { class: 'frow', title: `${a.file} · commit ${a.commit}` }, h('span', { class: 'dep del' }, '− ' + a.name), h('span', { class: 'n' }, a.file))))));
@@ -1122,12 +1136,14 @@ export class CityView {
 
   renderSessions() {
     if (!this.els.sessions) return;
+    if (heldBy(this.els.sessions, () => this.renderSessions())) return; // a click in progress
     const list = this.sessionsAt();
     const e = this.els;
-    e.sessHead.innerHTML = '';
-    e.sessHead.append(h('span', {}, this.mode === 'live' ? 'Open sessions' : 'At this moment'), h('span', { class: 'count' }, list.length));
-    e.sessions.innerHTML = '';
-    if (!list.length) e.sessions.appendChild(h('div', { class: 'empty' }, this.mode === 'live' ? 'No open sessions in this project. Start Claude Code here and it will appear.' : 'No session active at this moment.'));
+    morph(e.sessHead, h('span', {}, this.mode === 'live' ? 'Open sessions' : 'At this moment'), h('span', { class: 'count' }, list.length));
+    // built off-page, then morph(): unchanged cards stay the same elements (util.ts), so the
+    // hovered card and its mouseenter survive a refresh
+    const out: HTMLElement[] = [];
+    if (!list.length) out.push(h('div', { class: 'empty' }, this.mode === 'live' ? 'No open sessions in this project. Start Claude Code here and it will appear.' : 'No session active at this moment.'));
     if (this.mode === 'live') {
       // grouped by what they need from you; the longest wait first. Sessions going in
       // circles (edit loop, a check failing again and again, cost far over the usual)
@@ -1137,10 +1153,11 @@ export class CityView {
         const g = list.filter(s => state === 'stuck' ? stuck.has(s.id) : s.live!.state === state && !stuck.has(s.id))
           .sort((a, b) => state === 'working' || state === 'stuck' ? b.lastTs - a.lastTs : a.live!.since - b.live!.since);
         if (!g.length) continue;
-        e.sessions.appendChild(h('div', { class: 'sgroup ' + state, title: state === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, label, h('span', {}, g.length)));
-        for (const s of g) e.sessions.appendChild(this.sessionCard(s));
+        out.push(h('div', { class: 'sgroup ' + state, title: state === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, label, h('span', {}, g.length)));
+        for (const s of g) out.push(this.sessionCard(s));
       }
-    } else for (const s of list) e.sessions.appendChild(this.sessionCard(s));
+    } else for (const s of list) out.push(this.sessionCard(s));
+    morph(e.sessions, ...out);
     if (this.hoverSid && this.world) { if (list.some(s => s.id === this.hoverSid)) this.markSession(this.hoverSid); else { this.hoverSid = null; this.world.setMarks([]); } }
   }
 
@@ -1160,7 +1177,7 @@ export class CityView {
       if (last) actionText = last.label ? `${VERB[last.kind] || last.kind} ${last.label}` : last.kind === 'cmd' ? 'Running a command' : VERB[last.kind] || last.kind;
     }
     const fp = L ? this.footprint(s.id) : [];
-    const card = h('div', { class: 'scard' + (this.focusSession === s.id ? ' focus' : ''), style: { '--c': color },
+    const card = h('div', { class: 'scard' + (this.focusSession === s.id ? ' focus' : ''), 'data-key': 's:' + s.id, style: { '--c': color },
       onclick: () => this.focusOn(this.focusSession === s.id ? null : s.id),
       onmouseenter: () => { this.hoverSid = s.id; this.markSession(s.id); } },
       h('div', { class: 'stitle' }, meta?.title || L?.title || s.id.slice(0, 8)),
@@ -1238,14 +1255,12 @@ export class CityView {
   renderLog() {
     const e = this.els;
     if (!e.log) return;
+    if (heldBy(e.log, () => this.renderLog())) return; // a click in progress
     const q = this.logQuery;
     const tasks = this.data.tasks;
     const out: HTMLElement[] = [];
-    e.filterChip.innerHTML = '';
-    if (this.focusSession) {
-      const si = this.sIndex.get(this.focusSession)!;
-      e.filterChip.append(h('span', { class: 'fchip', style: { '--c': this.colorStr[si] } }, 'Session: ' + (this.data.sessions[si]?.title || ''), h('button', { onclick: () => this.focusOn(null) }, '×')));
-    }
+    const si0 = this.focusSession ? this.sIndex.get(this.focusSession)! : -1;
+    morph(e.filterChip, this.focusSession ? h('span', { class: 'fchip', 'data-key': 'fchip', style: { '--c': this.colorStr[si0] } }, 'Session: ' + (this.data.sessions[si0]?.title || ''), h('button', { onclick: () => this.focusOn(null) }, '×')) : null);
     const limitT = this.mode === 'live' ? Infinity : this.t;
     // live: each open session's current task leads the log, marked with what the session is doing
     // (the sessions column is hidden on the domain map, so this is where they show there)
@@ -1263,9 +1278,10 @@ export class CityView {
       if (q && !((t.title || '') + ' ' + t.prompt).toLowerCase().includes(q)) continue;
       out.push(this.taskRow(t));
     }
-    e.log.innerHTML = '';
-    if (!out.length) e.log.appendChild(h('div', { class: 'empty' }, q ? 'No task matches.' : 'No tasks yet.'));
-    e.log.append(...out);
+    // morph() (util.ts): unchanged rows stay the same elements, so the log keeps hover and
+    // scroll while sessions work
+    if (!out.length) out.push(h('div', { class: 'empty' }, q ? 'No task matches.' : 'No tasks yet.'));
+    morph(e.log, ...out);
   }
 
   // The open sessions' current tasks (live only), the ones that need you first, then working, then your turn.
@@ -1291,7 +1307,7 @@ export class CityView {
     const active = t.ts <= this.t && this.t <= (t.end || t.ts) + 60e3;
     const [r, w, c, x, a] = t.n;
     const st = L ? (L.state !== 'needs-you' && isStuck(L) ? 'stuck' : L.state) : null, act = L ? this.liveAction(L) : '';
-    return h('div', { class: 'task' + (active ? ' active' : '') + (L ? ' live ' + st : ''), 'data-sid': L ? L.id : null, style: { '--c': si >= 0 ? this.colorStr[si] : '#888' }, onclick: () => this.openTask(t) },
+    return h('div', { class: 'task' + (active ? ' active' : '') + (L ? ' live ' + st : ''), 'data-key': 't:' + t.id, 'data-sid': L ? L.id : null, style: { '--c': si >= 0 ? this.colorStr[si] : '#888' }, onclick: () => this.openTask(t) },
       h('div', { class: 'row' }, h('span', { class: 'dot' }),
         L ? h('span', { class: 'state ' + (st === 'stuck' ? 'needs-you' : st), title: st === 'stuck' ? 'Editing the same file again and again, a check failing 3+ times in a row, or a task costing 4× your usual' : '' }, st === 'stuck' ? 'Stuck?' : stateLabel(st!)) : null,
         h('span', { class: 'when' }, shortTime(t.ts)), h('span', { class: 'len' }, L ? dur(Date.now() - L.since) : dur((t.end || t.ts) - t.ts))),
@@ -1417,7 +1433,7 @@ export class CityView {
   private async loadDigest(summarize = false, error?: string) {
     const e = this.els.digest;
     const from = this.digestDay, to = from + DAY - 1;
-    if (!this.digestData || this.digestData.from !== from) { e.innerHTML = ''; e.appendChild(h('div', { class: 'loading-sm' }, 'Loading…')); }
+    if (!this.digestData || this.digestData.from !== from) morph(e, h('div', { class: 'loading-sm' }, 'Loading…'));
     const d = await api.digest(this.pid, from, to, summarize).catch(() => null);
     if (!d || this.disposed || from !== this.digestDay) return;
     this.digestData = d;
@@ -1431,11 +1447,11 @@ export class CityView {
     const tieList = (list: Tie[], which: 'day' | 'week') => list.length ? h('div', { class: 'sect' },
       h('h3', {}, which === 'day' ? `New connections (${list.length})` : `New connections this week (${list.length})`,
         h('button', { class: 'chip mini' + (this.tiesShown === which ? ' on' : ''), onclick: () => { this.tiesShown = this.tiesShown === which ? null : which; this.world.showTies(this.tiesShown ? list : null); this.renderDigest(); } }, this.tiesShown === which ? 'Hide on map' : 'Show on map')),
-      ...list.map(t => h('div', { class: 'frow link tie', onclick: () => this.select({ tt: t.a[0], ti: t.a[1] }, true) },
+      ...list.map(t => h('div', { class: 'frow link tie', 'data-key': 'tie:' + t.an + '>' + t.bn, onclick: () => this.select({ tt: t.a[0], ti: t.a[1] }, true) },
         h('span', { class: 'fp' }, `${t.an} → ${t.bn}`), h('span', { class: 'n' }, `${t.why} · ${shortTime(t.born)}`)))) : null;
-    e.innerHTML = '';
-    put(e,
-      h('div', { class: 'dg-nav' }, h('button', { class: 'chip icon', onclick: () => go(-1) }, '‹'), h('b', {}, label),
+    // morph() (util.ts): unchanged rows stay the same elements, so a refresh keeps hover and scroll
+    morph(e,
+      h('div', { class: 'dg-nav', 'data-key': 'dg-nav' }, h('button', { class: 'chip icon', onclick: () => go(-1) }, '‹'), h('b', {}, label),
         h('button', { class: 'chip icon', disabled: d.from >= today, onclick: () => go(1) }, '›')),
       h('div', { class: 'stats' }, stat('Tasks', d.tasks.length), stat('Sessions', d.sessions.length), stat('Commits', d.commits.length), stat('API-equiv.', money(d.cost))),
       this.dayHealth(d.from),
@@ -1445,11 +1461,11 @@ export class CityView {
           : d.summarizing ? h('div', { class: 'loading-sm' }, 'Writing the recap…')
           : h('div', {}, error ? h('div', { class: 'empty' }, 'Could not write the recap: ' + error) : null,
             h('button', { class: 'chip', onclick: () => this.loadDigest(true) }, '✎ Write a recap'))),
-      d.modules.length ? h('div', { class: 'sect' }, h('h3', {}, 'Busiest modules'), ...d.modules.map(m => h('div', { class: 'frow link', onclick: () => this.select({ tt: 1, ti: m.i }, true) }, h('span', { class: 'fp ltr' }, m.name), h('span', { class: 'n' }, `✎ ${m.n}`)))) : null,
+      d.modules.length ? h('div', { class: 'sect' }, h('h3', {}, 'Busiest modules'), ...d.modules.map(m => h('div', { class: 'frow link', 'data-key': 'm:' + m.i, onclick: () => this.select({ tt: 1, ti: m.i }, true) }, h('span', { class: 'fp ltr' }, m.name), h('span', { class: 'n' }, `✎ ${m.n}`)))) : null,
       d.shared.length ? h('div', { class: 'sect' }, h('h3', { class: 'warn' }, `Edited by several sessions (${d.shared.length})`),
-        ...d.shared.map(x => h('div', { class: 'frow link', onclick: () => this.select({ tt: 0, ti: x.i }, true) }, h('span', { class: 'fp' }, x.p), h('span', { class: 'n' }, `${x.sessions.length} sessions`)))) : null,
+        ...d.shared.map(x => h('div', { class: 'frow link', 'data-key': 'sh:' + x.p, onclick: () => this.select({ tt: 0, ti: x.i }, true) }, h('span', { class: 'fp' }, x.p), h('span', { class: 'n' }, `${x.sessions.length} sessions`)))) : null,
       tieList(d.ties, 'day'), tieList(d.tiesWeek.filter(t => !d.ties.some(x => x.an === t.an && x.bn === t.bn)), 'week'),
-      d.commits.length ? h('div', { class: 'sect' }, h('h3', {}, 'Commits'), ...d.commits.map(c => h('div', { class: 'frow link', onclick: () => this.openCommit(c.h) }, h('span', { class: 'fp ltr' }, c.s), h('span', { class: 'n' }, shortTime(c.ts))))) : null,
+      d.commits.length ? h('div', { class: 'sect' }, h('h3', {}, 'Commits'), ...d.commits.map(c => h('div', { class: 'frow link', 'data-key': 'c:' + c.h, onclick: () => this.openCommit(c.h) }, h('span', { class: 'fp ltr' }, c.s), h('span', { class: 'n' }, shortTime(c.ts))))) : null,
       d.tasks.length ? h('div', { class: 'sect' }, h('h3', {}, 'Tasks'), ...d.tasks.slice().reverse().map(t => { const ti = this.taskIndex.get(t.id); return ti != null ? this.taskRow(this.data.tasks[ti]) : null; })) : null);
   }
 
@@ -1469,14 +1485,15 @@ export class CityView {
   // keepTab: a click on the map leaves Review / Insights / Digest open; Inspect fills behind it.
   private async select(s: { tt: number; ti: number } | null, fly = false, keepTab = false) {
     this.selected = s;
-    this.world.showSelection(s);
+    const en = s?.tt === 4 ? this.city.entries?.[s.ti] : undefined; // an entry point (schematic only): the city shows its module
+    this.world.showSelection(en ? { tt: 1, ti: en.m } : s);
     this.schem?.setSelected(s ? this.placeRef(s) : null);
     if (!s) return;
     if (!keepTab || this.curTab === 'log') this.tab('inspect');
     const e = this.els.inspect;
     e.innerHTML = '';
     const c = this.city;
-    const pos = this.world.position(s.tt, s.ti);
+    const pos = en ? this.world.position(1, en.m) : this.world.position(s.tt, s.ti);
     if (fly && pos) this.stage.flyTo(pos.x, pos.z, Math.min(this.stage.viewSize, 40));
     if (s.tt === 0) {
       const f = c.files[s.ti]; const m = c.modules[f.m];
@@ -1539,6 +1556,20 @@ export class CityView {
         this.tiesSection(3, s.ti),
         x.top?.length ? h('div', { class: 'sect' }, h('h3', {}, 'Most visited sites'), ...x.top.map(([site, n]) => h('div', { class: 'frow' }, h('span', { class: 'fp' }, site), h('span', { class: 'n' }, '×' + n)))) : null,
         x.refs.length ? h('div', { class: 'sect' }, h('h3', {}, `Code that names it (${x.refCount})`), ...x.refs.slice(0, 25).map(fileRow)) : null);
+    } else if (s.tt === 4 && en) {
+      const m = c.modules[en.m];
+      const what = ENTRY_TEXT[en.kind], dn = c.districts[m.district]?.name;
+      let name = m.title || m.label;
+      if (dn && name.endsWith(' · ' + dn)) name = name.slice(0, -3 - dn.length);
+      const fileRow = (p: string) => { const fi = this.fileIndex.get(p.toLowerCase()); return h('div', { class: 'frow' + (fi != null ? ' link' : ''), onclick: fi != null ? () => this.select({ tt: 0, ti: fi }, true) : null }, h('span', { class: 'fp' }, p)); };
+      put(e, h('div', { class: 'ihead' }, h('div', { class: 'kicker' }, 'Entry point · ', what.kind),
+          h('h2', {}, name), h('div', { class: 'sub mono' }, m.id || '(root)')),
+        h('div', { class: 'sect' }, h('div', { class: 'ptext' }, what.desc)),
+        h('div', { class: 'stats' }, stat(what.unit, en.n), stat('Files', en.files.length)),
+        h('div', { class: 'sect' }, h('h3', {}, en.n > en.items.length ? `${what.unit} (first ${en.items.length} of ${en.n})` : what.unit),
+          ...en.items.map(t => h('div', { class: 'frow' }, h('span', { class: 'fp ltr' }, t)))),
+        h('div', { class: 'sect' }, h('h3', {}, 'Declared in'), ...en.files.map(fileRow),
+          h('div', { class: 'frow link', onclick: () => this.select({ tt: 1, ti: en.m }, true) }, h('span', { class: 'fp ltr' }, `Open the module ${name}`))));
     }
   }
 
@@ -1699,6 +1730,7 @@ export class CityView {
     }
     else if (hit.tt === 1) { const m = c.modules[hit.ti]; html = `<b>${esc(m.title || m.label)}</b><span class="mono">${esc(m.id.replace('#wh:', ''))}</span><span>${m.warehouse ? (m.onDisk || m.files) + ' data files' : m.files + ' files'}</span>`; }
     else if (hit.tt === 3) { const x = c.externals[hit.ti]; html = `<b>${esc(x.label)}</b><span>${x.n} calls${x.refCount ? ` · named in ${x.refCount} files` : ''}</span>`; }
+    else if (hit.tt === 4) { const en = c.entries?.[hit.ti]; if (!en) return; const m = c.modules[en.m], w = ENTRY_TEXT[en.kind]; html = `<b>${esc(w.kind)} · ${esc(m?.title || m?.label || '')}</b><span>${en.n} ${esc(w.unit.toLowerCase())}</span>${en.items.slice(0, 4).map(t => `<span class="mono">${esc(t)}</span>`).join('')}`; }
     else if (hit.tt === 2) { const d = c.districts[hit.ti]; html = `<b>${esc(d.name)}</b><span>District · click for its properties</span>${d.props.filter(p => !p.basic).slice(0, 3).map(p => `<span>${esc(p.k)}: ${esc(p.v.slice(0, 4).map(v => v.t).join(', '))}</span>`).join('')}`; }
     tip.innerHTML = html;
     tip.style.opacity = '1';

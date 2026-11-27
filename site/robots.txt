@@ -2,3 +2,4 @@ User-agent: *
 Allow: /
 
 Sitemap: https://codetycoon.dev/sitemap.xml
+Sitemap: https://codetycoon.dev/blog/sitemap.xml

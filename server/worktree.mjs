@@ -218,3 +218,21 @@ export function finishMerge(w) {
   if (!c.ok && !/nothing to commit/.test(c.out)) throw new Error('commit failed: ' + c.out.slice(0, 300));
 }
 export function abortMerge(w) { tryGit(w.dir, ['merge', '--abort']); }
+
+// Undo a task's merges on the main folder's branch (newest first), as new revert commits.
+// Like mergeIntoBase, it does not run git at all when uncommitted changes touch the same files.
+// -> { ok, sha } | { ok: false, why }
+export function revertMerges(top, shas) {
+  const files = new Set();
+  for (const s of shas) for (const f of tryGit(top, ['diff', '--name-only', `${s}^1`, s]).out.split('\n').filter(Boolean)) files.add(f);
+  let st = '';
+  try { st = execFileSync('git', ['-C', top, 'status', '--porcelain', '-z', '--untracked-files=all'], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }); } catch {}
+  const dirty = st.split('\0').filter(Boolean).map(s => /^.. /.test(s) ? s.slice(3) : s).filter(f => files.has(f));
+  if (dirty.length) return { ok: false, why: 'uncommitted changes in the main folder touch the same files: ' + dirty.slice(0, 3).join(', ') };
+  for (const s of [...shas].reverse()) {
+    const parents = tryGit(top, ['rev-list', '--parents', '-n', '1', s]).out.split(/\s+/).length - 1;
+    const r = tryGit(top, ['revert', '--no-edit', ...(parents > 1 ? ['-m', '1'] : []), s]);
+    if (!r.ok) { tryGit(top, ['revert', '--abort']); return { ok: false, why: 'git revert failed: ' + r.out.split('\n').find(l => l.trim())?.slice(0, 200) }; }
+  }
+  return { ok: true, sha: tryGit(top, ['rev-parse', '--short', 'HEAD']).out };
+}

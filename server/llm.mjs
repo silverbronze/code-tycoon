@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
-import { findClaudeCli, isWin } from './paths.mjs';
+import { findClaudeCli, isWin, CLAUDE_DIR } from './paths.mjs';
 import { costOf } from './prices.mjs';
 
 const isClaudeModel = m => /claude|opus|sonnet|haiku|fable|mythos/i.test(m || '');
@@ -80,6 +80,34 @@ export function modelLabel(want) {
   if (!m) return 'your default model';
   return /^(haiku|sonnet|opus|fable)$/.test(m) ? m[0].toUpperCase() + m.slice(1) : m.replace(/^claude-/, '');
 }
+
+// The models a task can run on with this provider: the current families plus any model a
+// session has used (`seen`, newest first). [{ id, label }]
+const CLAUDE_MODELS = ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+export function modelChoices(seen = [], prov = provider()) {
+  const ok = prov === 'codex' ? isCodexModel : isClaudeModel;
+  const base = prov === 'codex' ? [CODEX.def, CODEX.map, CODEX.small] : CLAUDE_MODELS;
+  const ids = [...new Set([...base, ...seen.filter(ok)])];
+  return ids.map(id => ({ id, label: prettyModel(id) }));
+}
+// "claude-opus-5-5" → "Opus 5.5", "sonnet" → "Sonnet"
+export function prettyModel(m) {
+  const c = m.match(/^claude-([a-z]+)-(\d+)-(\d+)/);
+  if (c) return `${c[1][0].toUpperCase()}${c[1].slice(1)} ${c[2]}.${c[3]}`;
+  return /^(haiku|sonnet|opus|fable)(\[1m\])?$/i.test(m) ? m[0].toUpperCase() + m.slice(1) : m.replace(/^claude-/, '');
+}
+// The model a job without a model id ends up on: the Codex default, or the `model` in the
+// user's Claude Code settings (null = Claude Code's own default, which we can't name).
+export function defaultModel(prov = provider()) {
+  if (prov === 'codex') return CODEX.def;
+  try { return JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'settings.json'), 'utf8')).model || null; } catch { return null; }
+}
+// What a task with no model choice runs on in this project: [id or null, label]
+export function effectiveModel(projectModelId, prov = provider()) {
+  const m = modelFor(projectModelId, prov) || defaultModel(prov);
+  return m ? { id: m, label: prettyModel(m) } : { id: null, label: 'Claude Code default' };
+}
+export function isModelFor(m, prov = provider()) { return typeof m === 'string' && m.length <= 80 && /^[\w.:\-\[\]]+$/.test(m) && (prov === 'codex' ? isCodexModel(m) : isClaudeModel(m)); }
 
 // ------------------------------------------------------------------ run
 const firstJson = text => { const m = String(text || '').match(/\{[\s\S]*\}/); try { return m ? JSON.parse(m[0]) : {}; } catch { return {}; } };

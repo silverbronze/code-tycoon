@@ -1,10 +1,10 @@
 import { api, live, type Project, type OpenSession, type Weekly, type Setup, type SyncStatus } from './api';
-import { h, put, ago, bytes, dur, tail, money } from './util';
-import { notify } from './notify';
+import { h, put, morph, heldBy, ago, bytes, dur, tail, money } from './util';
 import { Pulse } from './pulse';
 import { CoachPanel } from './coach';
 import { BoardPanel } from './board';
 import { SetupAuditPanel } from './setupaudit';
+import { settings, settingsButton } from './settings';
 
 const VERB: Record<string, string> = { write: 'Editing', read: 'Reading', search: 'Searching', touch: 'Touching', cmd: 'Running', remote: 'Calling', skill: 'Using skill', spawn: 'Spawning agent', ask: 'Asking you', other: 'Using' };
 const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Working'], ['waiting', 'Your turn'], ['idle', 'Idle']];
@@ -12,6 +12,7 @@ const GROUPS: [string, string][] = [['needs-you', 'Needs you'], ['working', 'Wor
 export class Overview {
   root: HTMLDivElement;
   private timer = 0;
+  private soon = 0;
   private off: (() => void) | null = null;
   private showAll = false;
   private confirmUntrack: string | null = null;
@@ -25,68 +26,64 @@ export class Overview {
   private setupError = '';
 
   constructor(parent: HTMLElement) {
-    this.root = h('div', { class: 'overview' });
+    this.root = h('div', { class: 'overview', role: 'main' });
     parent.appendChild(this.root);
     this.render();
     api.setup().then(s => { this.setup = s; this.render(); }).catch(() => {});
     this.timer = window.setInterval(() => this.render(), 5000);
     live.subscribe(null);
-    this.off = live.on(m => { if (m.type === 'session' || m.type === 'indexed' || m.type === 'sync') this.render(); });
+    // live messages come in bursts while sessions work: one rebuild per burst
+    this.off = live.on(m => { if ((m.type === 'session' || m.type === 'indexed' || m.type === 'sync') && !this.soon) this.soon = window.setTimeout(() => { this.soon = 0; this.render(); }, 400); });
+    settings.onSetupChange.push(this.onSetup);
   }
+
+  // a switch flipped in Settings: the setup box follows at once
+  private onSetup = (s: Setup) => { this.setup = s; this.render(); };
 
   async render() {
     let res;
     try { res = await api.projects(this.showAll); } catch { return; }
+    if (heldBy(this.root, () => this.render())) return; // a click in progress
     const ps = res.projects as (Project & { spark: number[] | null })[];
     const tracked = ps.filter(p => p.tracked), other = ps.filter(p => !p.tracked);
     const scroll = this.root.scrollTop;
-    const focus = this.board.saveFocus(); // re-adding the board below would drop the caret mid-typing
     const others = [
-      h('div', { class: 'ov-h2row' }, h('h2', { class: 'ov-h' }, 'Other projects with Claude Code history'),
+      h('div', { class: 'ov-h2row', 'data-key': 'showall' }, h('h2', { class: 'ov-h' }, 'Other projects with Claude Code history'),
         h('label', { class: 'showall' }, h('input', { type: 'checkbox', checked: this.showAll, onchange: (e: Event) => { this.showAll = (e.target as HTMLInputElement).checked; this.render(); } }), 'include temp & headless folders')),
       h('div', { class: 'grid small' }, ...other.map(p => this.card(p))),
     ];
-    this.root.innerHTML = '';
-    put(this.root,
-      h('div', { class: 'ov-hero' },
-        h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-light.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
-        // settings, as switches, not numbers
-        h('div', { class: 'ov-switches' },
-          notify.supported ? this.switch(notify.on, 'Desktop alerts', 'Desktop notifications when a session needs you or two sessions edit one file, while this tab is in the background',
-            async () => { await notify.toggle(); this.render(); }) : null,
-          this.setupToggle('hooks', 'Live updates', 'Claude Code tells Code Tycoon about every step the moment it happens (adds a hook to ~/.claude/settings.json, a backup is kept). Off, sessions show up a few seconds late from their transcripts.'),
-          this.setupToggle('autostart', 'Start at login', 'Start Code Tycoon hidden when you log in, so this page is always there at http://127.0.0.1:4400'))),
-      this.pulse.el,
-      this.setupBanner(),
-      // Tasks for any project, and the to-do of what their sessions need from you
-      this.board.el,
-      // Projects first, tracked and untracked together, so the ones still to open are
-      // on screen without scrolling past sessions and coaching.
-      tracked.length ? [h('h2', { class: 'ov-h' }, 'Tracked'), h('div', { class: 'grid' }, ...tracked.map(p => this.card(p)))] : null,
-      others,
-      this.setupAudit.el,
-      res.sessions.length ? this.openSessions(res.sessions) : null,
-      tracked.length ? this.coach.el : null,
-    );
-    this.root.scrollTop = scroll;
-    this.board.restoreFocus(focus);
+    // The panels with their own state (pulse, board, setup audit, coaching) are built once and
+    // never leave the page: taking one out and putting it back closed an open dropdown (the
+    // board's model picker) and dropped the caret. Only the slots between them are rebuilt.
+    if (!this.slots) {
+      const slot = () => h('div', { class: 'ov-slot' });
+      this.slots = { hero: slot(), setup: slot(), projects: slot(), sessions: slot() };
+      // Tasks for any project, and the to-do of what their sessions need from you; then the
+      // projects, tracked and untracked together, so the ones still to open are on screen
+      // without scrolling past sessions and coaching.
+      put(this.root, this.slots.hero, this.pulse.el, this.slots.setup, this.board.el,
+        this.slots.projects, this.setupAudit.el, this.slots.sessions, this.coach.el);
+    }
+    // morph(): unchanged cards and rows stay the same elements (util.ts), so a refresh
+    // doesn't reset hover, focus or an open menu
+    const s = this.slots;
+    morph(s.hero, h('div', { class: 'ov-hero', 'data-key': 'hero' },
+      h('div', { class: 'brand' }, h('div', {}, h('h1', {}, h('img', { src: '/logo-light.svg', alt: 'Code Tycoon' })), h('p', {}, 'Your projects as living cities. Every Claude Code session is a light moving through them.'))),
+      // the account and every switch live in Settings (settings.ts)
+      h('div', { class: 'ov-switches' }, settingsButton(true))));
+    morph(s.setup, this.setupBanner());
+    morph(s.projects, tracked.length ? [h('h2', { class: 'ov-h' }, 'Tracked'), h('div', { class: 'grid' }, ...tracked.map(p => this.card(p)))] : null, others);
+    morph(s.sessions, res.sessions.length ? this.openSessions(res.sessions) : null);
+    this.coach.el.style.display = tracked.length ? '' : 'none';
+    // only when it moved: writing scrollTop cancels a smooth scroll in progress (Page Down, Space)
+    if (this.root.scrollTop !== scroll) this.root.scrollTop = scroll;
   }
+  private slots: Record<'hero' | 'setup' | 'projects' | 'sessions', HTMLElement> | null = null;
 
   private async changeSetup(change: Partial<Record<'hooks' | 'autostart', boolean>>) {
     this.setupBusy = true; this.setupError = ''; this.render();
     try { this.setup = await api.setSetup(change); } catch (e) { this.setupError = (e as Error).message; }
     this.setupBusy = false; this.render();
-  }
-
-  private setupToggle(k: 'hooks' | 'autostart', label: string, tip: string) {
-    const on = this.setup?.[k];
-    if (on == null) return null;
-    return this.switch(on, label, tip, () => this.changeSetup({ [k]: !on }), this.setupBusy);
-  }
-
-  private switch(on: boolean, label: string, tip: string, onclick: () => void, busy = false) {
-    return h('button', { class: 'ov-switch' + (on ? ' on' : ''), role: 'switch', 'aria-checked': String(on), title: tip, disabled: busy, onclick },
-      h('i', {}), label);
   }
 
   // First run: both switches in one place, until they are on or put off for later.
@@ -118,7 +115,7 @@ export class Overview {
       return [h('div', { class: 'os-group' }, label, h('span', {}, g.length)), ...g.map(s => {
         const act = s.action ? `${VERB[s.action.kind] || 'Using'} ${s.action.path ? tail(s.action.path, 2) : s.action.target || s.action.detail || s.action.tool}` : '';
         const go = s.tracked ? () => { location.hash = '#/p/' + encodeURIComponent(s.pid) + '/s/' + encodeURIComponent(s.id); } : null;
-        return h('div', { class: 'os-row ' + s.state + (go ? ' link' : ''), onclick: go, title: go ? 'Open the project and follow this session' : 'Track the project to open it' },
+        return h('div', { class: 'os-row ' + s.state + (go ? ' link' : ''), 'data-key': 'os:' + s.id, onclick: go, title: go ? 'Open the project and follow this session' : 'Track the project to open it' },
           h('span', { class: 'state ' + s.state }, label),
           h('span', { class: 'os-proj' }, s.project || '—'),
           // where it runs, in the title: the project column is hidden at phone width
@@ -144,7 +141,7 @@ export class Overview {
       if (chip) chip.textContent = 'Indexing…';
       try { await api.track(p.id); go(); } finally { this.opening.delete(p.id); }
     };
-    return h('div', { class: 'pcard' + (p.tracked ? ' tracked' : ' openable') + (p.open ? ' live' : ''), onclick: p.tracked ? go : trackOpen,
+    return h('div', { class: 'pcard' + (p.tracked ? ' tracked' : ' openable') + (p.open ? ' live' : ''), 'data-key': 'p:' + p.id, onclick: p.tracked ? go : trackOpen,
       title: p.tracked ? null : 'Track & open' },
       h('div', { class: 'row' },
         h('h3', {}, p.name),
@@ -224,7 +221,7 @@ export class Overview {
       cell('wait', w.waitMedian ? dur(w.waitMedian) : '–', w.waitMedian, p.waitMedian, 'down', 'Median time a finished turn waited for your next prompt'));
   }
 
-  dispose() { clearInterval(this.timer); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.setupAudit.dispose(); this.root.remove(); }
+  dispose() { clearInterval(this.timer); settings.onSetupChange = settings.onSetupChange.filter(f => f !== this.onSetup); this.off?.(); this.pulse.dispose(); this.coach.dispose(); this.board.dispose(); this.setupAudit.dispose(); this.root.remove(); }
 }
 
 function spark(v: number[]) {

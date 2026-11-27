@@ -21,7 +21,7 @@ const all = (re, txt, g = 1) => { const out = []; for (const m of txt.matchAll(r
 const count = (re, txt) => (txt.match(re) || []).length;
 
 // route of a Next.js / file-based page or handler: app/(shop)/p/[id]/page.tsx -> /p/[id]
-function fileRoute(p) {
+export function fileRoute(p) {
   const m = /(?:^|\/)(app|pages)\/(.*)$/.exec(p);
   if (!m) return null;
   let r = m[2].replace(/\.(t|j)sx?$|\.mdx?$/, '');
@@ -31,7 +31,7 @@ function fileRoute(p) {
   return '/' + r;
 }
 const METHOD = '(get|post|put|patch|delete)';
-function endpoints(txt, p) {
+export function endpoints(txt, p) {
   const out = [];
   for (const m of txt.matchAll(new RegExp(`\\b(?:app|router|api|server|fastify)\\.${METHOD}\\(\\s*['"\`]([^'"\`]+)`, 'g'))) out.push(m[1].toUpperCase() + ' ' + m[2]);
   for (const m of txt.matchAll(new RegExp(`@(?:app|router|bp|api)\\.${METHOD}\\(\\s*['"]([^'"]+)`, 'g'))) out.push(m[1].toUpperCase() + ' ' + m[2]);

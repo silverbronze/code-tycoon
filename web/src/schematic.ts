@@ -1,13 +1,15 @@
-import type { City } from './api';
+import type { City, Entry } from './api';
 import { StreetGrid, type Pt } from './city/route';
 import { h } from './util';
 
 // The schematic layer: the project as an architecture diagram for developers. It
 // does not copy the city's floor plan; it lays itself out by these rules.
 //
-//  1. Top to bottom is dependency order. Districts that import more than they are
-//     imported sit higher, foundations lower, and outside systems fill the bottom
-//     band grouped by kind. Import arrows mostly point down.
+//  1. Top to bottom is dependency order. Entry points (pages, HTTP routes, CLI
+//     commands, hooks, schedules: server/entries.mjs) fill a band on top, grouped by
+//     kind, each tied down (green) to the module that declares it. Districts that
+//     import more than they are imported sit higher, foundations lower, and outside
+//     systems fill the bottom band grouped by kind. Import arrows mostly point down.
 //  2. Every card has the same size. Size never stands for a number; numbers are
 //     written on the card.
 //  3. Text sits inside its card at a readable screen size, or is not drawn. Zoomed
@@ -51,11 +53,12 @@ import { h } from './util';
 //     one diagonal, straight in. In an island each tie keeps its own lane, ordered so no
 //     two cross.
 
-type Ref = [number, number];
-type Kind = 'module' | 'store' | 'host' | 'service' | 'web' | 'local';
-type EdgeType = 'imp' | 'ref' | 'work';
+type Ref = [number, number]; // [1, module], [3, outside system], [4, entry point]
+type EKind = Entry['kind'];
+type Kind = 'module' | 'store' | 'host' | 'service' | 'web' | 'local' | EKind;
+type EdgeType = 'imp' | 'ref' | 'work' | 'ent';
 interface SNode { ref: Ref; kind: Kind; title: string; sub: string; meta: string; pri: number; born: number; box: number; x: number; y: number }
-interface SBox { name: string; hue: number; born: number; outside: boolean; members: number[]; cols: number; x: number; y: number; w: number; h: number }
+interface SBox { name: string; hue: number; born: number; outside: boolean; top: boolean; members: number[]; cols: number; x: number; y: number; w: number; h: number }
 interface SEdge { a: number; b: number; type: EdgeType; w: number; born: number; dir: number } // dir 1: a -> b, -1: b -> a, 0 none, 2 both
 interface Bundle { a: number; b: number; type: EdgeType; ab: number; ba: number; n: number; born: number; top: boolean; pts: Pt[] | null }
 interface Pulse { a: number; b: number; t: number; color: string }
@@ -68,7 +71,9 @@ interface Focus { i: number; me: R; cards: FCard[]; heads: FHead[]; x0: number; 
 // parent: the island it was opened from (a neighbour clicked there), hung right under it and tied to that card.
 interface Island { id: number; f: Focus; opened: Set<string>; oy: number; oyD: number; t0: number; from: Pt | null; parent: number }
 
-const COL: Record<EdgeType, string> = { imp: '#d98a1c', ref: '#8a5cf0', work: '#1798bd' };
+const COL: Record<EdgeType, string> = { imp: '#d98a1c', ref: '#8a5cf0', work: '#1798bd', ent: '#2f9e5b' };
+const ENT = { stroke: '#2f9e5b', fill: '#f0f8f3' };
+const UNIT: Record<EKind, [string, string]> = { page: ['page', 'pages'], http: ['route', 'routes'], cli: ['command', 'commands'], hook: ['hook', 'hooks'], schedule: ['schedule', 'schedules'] };
 const NODE: Record<Kind, { stroke: string; fill: string; label: string; group: string }> = {
   module: { stroke: '', fill: '#ffffff', label: 'Module', group: '' },
   store: { stroke: '#c98a2e', fill: '#fdf7ee', label: 'Data store', group: '' },
@@ -76,7 +81,14 @@ const NODE: Record<Kind, { stroke: string; fill: string; label: string; group: s
   service: { stroke: '#7f55e0', fill: '#f5f1fd', label: 'Service (MCP / tool)', group: 'Services' },
   web: { stroke: '#2a9e8f', fill: '#eef8f6', label: 'Web research', group: 'Web research' },
   local: { stroke: '#8a8f99', fill: '#f4f4f5', label: 'Local folder', group: 'Local folders' },
+  // entry points: the band above the code (rule 1), one card per kind and module
+  page: { ...ENT, label: 'Entry point', group: 'Pages' },
+  http: { ...ENT, label: 'Entry point', group: 'HTTP API' },
+  cli: { ...ENT, label: 'Entry point', group: 'Command line' },
+  hook: { ...ENT, label: 'Entry point', group: 'Hooks & webhooks' },
+  schedule: { ...ENT, label: 'Entry point', group: 'Schedules' },
 };
+const isEntry = (k: Kind): k is EKind => k === 'page' || k === 'http' || k === 'cli' || k === 'hook' || k === 'schedule';
 const UI = "'Space Grotesk', system-ui, sans-serif", MONO = "'JetBrains Mono', Consolas, monospace";
 // layout, in world units (one unit is a pixel at zoom 1)
 const CW = 176, CH = 46, GAP = 14, PAD = 14, HEAD = 36, DGAP = 72, G = 18; // G: routing cell, one lane (wide enough that lines side by side read as two)
@@ -84,7 +96,7 @@ const DGAP_MIN = 100, LANES_X = 6, LANES_Y = 8; // gutters: the narrowest, and h
 const JOG = 6 * G; // a jog this short between two straight runs becomes a 45° diagonal (rule 8)
 const BG = '#f7f7f5';
 const REACH = 130; // islands: from the module's side to its neighbours
-const TOP: Record<EdgeType, number> = { imp: 10, ref: 6, work: 8 }; // overview connectors per kind
+const TOP: Record<EdgeType, number> = { imp: 10, ref: 6, work: 8, ent: 8 }; // overview connectors per kind
 const FOCUS_WORK = 12; // changed-together ties drawn for a focused card
 const FOCUS_CARDS = 14; // more ties than this and a hovered card is wired to districts instead of cards
 const FOCUS_FOLD = 8; // a focus section longer than this folds its districts
@@ -102,12 +114,12 @@ export class Schematic {
   el: HTMLDivElement;
   private canvas: HTMLCanvasElement; private ctx: CanvasRenderingContext2D;
   private nodes: SNode[] = []; private nodeOf = new Map<string, number>();
-  private boxes: SBox[] = []; private bandY = 0;
+  private boxes: SBox[] = []; private bandY = 0; private topY: number | null = null; // the bands: code / outside systems, entry points / code
   private edges: SEdge[] = []; private incident: number[][] = [];
   private bundles: Bundle[] = []; private grid: StreetGrid | null = null;
   private view: View = { cx: 0, cy: 0, s: 0.5 };
   private frameRect = { left: 0, top: 0, right: 800, bottom: 600 };
-  private show: Record<EdgeType, boolean> = { imp: true, ref: false, work: false }; // overview only: a card shows all its ties
+  private show: Record<EdgeType, boolean> = { imp: true, ref: false, work: false, ent: true }; // overview only: a card shows all its ties
   private hoverFold: FCard | null = null; private hover = -1; private hoverBox = -1; private sel = -1;
   private pinBox = -1; private pinning = false; // the district picked by a click, and the onPick(null) that picking it sends
   private active = new Map<number, string[]>();
@@ -133,9 +145,10 @@ export class Schematic {
     const shape = (k: Kind) => h('div', { class: 'lg-row static' }, h('i', { class: 'lg-node ' + k }), NODE[k].label);
     this.legend = h('div', { class: 'sch-legend glass' },
       h('div', { class: 'lg-h' }, 'Connections'),
-      tog('imp', 'Imports  (→ imported)'), tog('ref', 'Names a system  (→ system)'), tog('work', 'Changed together', true),
+      tog('imp', 'Imports  (→ imported)'), tog('ref', 'Names a system  (→ system)'), tog('work', 'Changed together', true), tog('ent', 'Comes in through  (→ module)'),
       h('div', { class: 'lg-note' }, 'Click a district to see all of its ties and how many there are (hover previews one). Zoom in and click a card to float its connections out below. Scroll to zoom, drag to move.'),
       h('div', { class: 'lg-h' }, 'Cards'),
+      h('div', { class: 'lg-row static' }, h('i', { class: 'lg-node entry' }), 'Entry point (band on top)'),
       shape('module'), shape('store'), shape('host'), shape('service'), shape('web'), shape('local')) as HTMLDivElement;
     this.zoomBox = h('div', { class: 'sch-zoom glass' },
       h('button', { title: 'Zoom in', onclick: () => this.zoomBy(1.4) }, '+'),
@@ -167,7 +180,25 @@ export class Schematic {
     c.externals.forEach((e, i) => this.add({ ref: [3, i], kind: e.type, title: e.label, sub: NODE[e.type].label,
       meta: `${e.n} calls${e.refCount ? ` · in ${e.refCount} files` : ''}`, pri: Math.log2(2 + e.n) + Math.log2(1 + e.refCount),
       born: e.born, box: -1, x: 0, y: 0 }));
+    // entry points: the module's name, what comes in (routes, commands...), how many
+    (c.entries || []).forEach((en, i) => {
+      const m = c.modules[en.m];
+      if (!m) return;
+      const sample = en.items.map(t => en.kind === 'http' ? t.replace(/^ANY /, '') : t).slice(0, 6).join(' · ');
+      const dn = c.districts[m.district]?.name ?? '';
+      let title = m.title || m.label.split('/').pop() || m.label || '(root)';
+      if (dn && title.endsWith(' · ' + dn)) title = title.slice(0, -3 - dn.length); // a split module names its district once
+      this.add({ ref: [4, i], kind: en.kind, title, sub: sample,
+        meta: `${en.n} ${UNIT[en.kind][en.n === 1 ? 0 : 1]}`, pri: Math.log2(2 + en.n), born: m.born, box: -1, x: 0, y: 0 });
+    });
     this.incident = this.nodes.map(() => []);
+    // an entry point comes in through the module that declares it
+    (c.entries || []).forEach((en, i) => {
+      const a = this.idx([4, i]), b = this.idx([1, en.m]);
+      if (a < 0 || b < 0) return;
+      this.incident[a].push(this.edges.length); this.incident[b].push(this.edges.length);
+      this.edges.push({ a, b, type: 'ent', w: 1 + Math.log2(1 + en.n), born: this.nodes[a].born, dir: 1 });
+    });
 
     // ties between cards: an import is an import even when the files also change together
     const dir = new Map<string, number>(); // which way imports go, from the file graph
@@ -191,11 +222,11 @@ export class Schematic {
     }
 
     // containers: districts, then one group per kind of outside system
-    c.districts.forEach(d => this.boxes.push({ name: d.name, hue: d.hue, born: Infinity, outside: false, members: [], cols: 1, x: 0, y: 0, w: 0, h: 0 }));
+    c.districts.forEach(d => this.boxes.push({ name: d.name, hue: d.hue, born: Infinity, outside: false, top: false, members: [], cols: 1, x: 0, y: 0, w: 0, h: 0 }));
     const group = new Map<Kind, number>();
     this.nodes.forEach((n, i) => {
       if (n.box < 0) {
-        if (!group.has(n.kind)) { group.set(n.kind, this.boxes.length); this.boxes.push({ name: NODE[n.kind].group, hue: 0, born: Infinity, outside: true, members: [], cols: 1, x: 0, y: 0, w: 0, h: 0 }); }
+        if (!group.has(n.kind)) { group.set(n.kind, this.boxes.length); this.boxes.push({ name: NODE[n.kind].group, hue: 0, born: Infinity, outside: true, top: isEntry(n.kind), members: [], cols: 1, x: 0, y: 0, w: 0, h: 0 }); }
         n.box = group.get(n.kind)!;
       }
       const bx = this.boxes[n.box]; bx.members.push(i); bx.born = Math.min(bx.born, n.born ?? 0);
@@ -222,7 +253,7 @@ export class Schematic {
       u.n++; if (fwd) u.ab++; if (back) u.ba++; u.born = Math.min(u.born, e.born ?? 0);
     }
     this.bundles = [...by.values()];
-    for (const t of ['imp', 'ref', 'work'] as EdgeType[])
+    for (const t of ['imp', 'ref', 'work', 'ent'] as EdgeType[])
       this.bundles.filter(u => u.type === t).sort((x, y) => y.n - x.n).slice(0, TOP[t]).forEach(u => u.top = u.n >= 3);
   }
 
@@ -244,8 +275,9 @@ export class Schematic {
     }
     const code = this.boxes.map((_, i) => i).filter(i => !this.boxes[i].outside && this.boxes[i].members.length);
     code.sort((x, y) => +!tied.has(x) - +!tied.has(y) || (imp.get(y) || 0) - (imp.get(x) || 0) || x - y);
-    const outside = this.boxes.map((_, i) => i).filter(i => this.boxes[i].outside);
-    const area = [...code, ...outside].reduce((s, i) => s + (this.boxes[i].w + DGAP) * (this.boxes[i].h + DGAP), 0);
+    const outside = this.boxes.map((_, i) => i).filter(i => this.boxes[i].outside && !this.boxes[i].top);
+    const entry = this.boxes.map((_, i) => i).filter(i => this.boxes[i].top && this.boxes[i].members.length);
+    const area = [...entry, ...code, ...outside].reduce((s, i) => s + (this.boxes[i].w + DGAP) * (this.boxes[i].h + DGAP), 0);
     const maxW = Math.max(...this.boxes.map(b => b.w), Math.sqrt(area * 1.7));
     const rowsOf = (list: number[]) => {
       const out: number[][] = []; let row: number[] = [], w = 0;
@@ -257,12 +289,14 @@ export class Schematic {
       if (row.length) out.push(row);
       return out;
     };
-    const codeRows = rowsOf(code), rows = [...codeRows, ...rowsOf(outside)];
+    // rows top to bottom: entry points, code, outside systems; c0..c1 are the code rows
+    const entryRows = rowsOf(entry), codeRows = rowsOf(code), rows = [...entryRows, ...codeRows, ...rowsOf(outside)];
+    const c0 = entryRows.length, c1 = c0 + codeRows.length;
     const rowOf = new Map<number, number>();
     rows.forEach((r, k) => r.forEach(i => rowOf.set(i, k)));
 
     // how strongly containers are tied, and how many drawn lines leave each one
-    const WT: Record<EdgeType, number> = { imp: 1, ref: 0.6, work: 0.3 };
+    const WT: Record<EdgeType, number> = { imp: 1, ref: 0.6, work: 0.3, ent: 0.8 };
     const tie = new Map<number, Map<number, number>>(), lanes = new Map<number, number>();
     for (const u of this.bundles) {
       const w = WT[u.type] * Math.log2(1 + u.n);
@@ -297,9 +331,10 @@ export class Schematic {
     if (rows.length) {
       const hub = code.reduce((b, i) => b < 0 || deg(i) > deg(b) ? i : b, -1), hr = hub >= 0 ? rowOf.get(hub)! : 0;
       rows[hr] = outwards(rows[hr]); pack(rows[hr]); rows[hr].forEach(i => placed.add(i));
-      const near = rows.map((_, k) => k).filter(k => k !== hr && k < codeRows.length).sort((a, b) => Math.abs(a - hr) - Math.abs(b - hr) || a - b);
+      const near = rows.map((_, k) => k).filter(k => k !== hr && k >= c0 && k < c1).sort((a, b) => Math.abs(a - hr) - Math.abs(b - hr) || a - b);
       for (const k of near) order(k, false);
-      for (let k = codeRows.length; k < rows.length; k++) order(k, false);
+      for (let k = c0 - 1; k >= 0; k--) order(k, false); // entry points over the code they come in through
+      for (let k = c1; k < rows.length; k++) order(k, false);
       for (let pass = 0; pass < 2; pass++) rows.forEach((_, k) => { if (k !== hr) order(k, true); });
     }
 
@@ -311,11 +346,13 @@ export class Schematic {
     }).length);
     let y = 0;
     rows.forEach((row, k) => {
-      if (k === codeRows.length) { this.bandY = y - (k ? gapY(k - 1) : DGAP) / 2 + 6; y += DGAP * 0.4; }
+      if (k === c1) { this.bandY = y - (k ? gapY(k - 1) : DGAP) / 2 + 6; y += DGAP * 0.4; }
+      if (k === c0 && c0) { this.topY = y - gapY(k - 1) / 2 + 6; y += DGAP * 0.4; }
       row.forEach(i => this.boxes[i].y = y);
       y += Math.max(...row.map(i => this.boxes[i].h)) + gapY(k);
     });
-    if (rows.length === codeRows.length) this.bandY = y - (rows.length ? gapY(rows.length - 1) : DGAP) / 2 + 6;
+    if (!c0) this.topY = null;
+    if (rows.length === c1) this.bandY = y - (rows.length ? gapY(rows.length - 1) : DGAP) / 2 + 6;
     for (const b of this.boxes) b.members.forEach((m, k) => {
       const n = this.nodes[m];
       n.x = b.x + PAD + (k % b.cols) * (CW + GAP); n.y = b.y + HEAD + Math.floor(k / b.cols) * (CH + GAP);
@@ -717,6 +754,15 @@ export class Schematic {
       const ox = this.sx(Math.min(...this.boxes.filter(b => b.members.length).map(b => b.x)));
       ctx.fillText(spaced('OUTSIDE SYSTEMS  ↓'), Math.max(12, ox), by - 5);
     }
+    // and between the entry points and the code they come in through
+    const ty = this.topY == null ? -1e9 : this.sy(this.topY);
+    if (ty > -20 && ty < H + 20) {
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)'; ctx.lineWidth = 1; ctx.setLineDash([2, 6]);
+      ctx.beginPath(); ctx.moveTo(0, ty); ctx.lineTo(W, ty); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = `600 10.5px ${UI}`; ctx.fillStyle = 'rgba(0, 0, 0, 0.45)'; ctx.textBaseline = 'bottom';
+      const ox = this.sx(Math.min(...this.boxes.filter(b => b.members.length).map(b => b.x)));
+      ctx.fillText(spaced('ENTRY POINTS  ↑'), Math.max(12, ox), ty - 5);
+    }
 
     // containers
     this.boxes.forEach((b, i) => {
@@ -777,7 +823,7 @@ export class Schematic {
     // Counts are not printed along the lines of the overview (rule 9): only the lines of a hovered district or card carry them.
     const pills: { at: Run[]; t: string; c: string }[] = [];
     const lw = Math.min(3, Math.max(1.4, 12 * s * 0.4));
-    for (const type of ['work', 'ref', 'imp'] as EdgeType[]) for (const u of shownBundles) {
+    for (const type of ['work', 'ref', 'ent', 'imp'] as EdgeType[]) for (const u of shownBundles) {
       if (u.type !== type) continue;
       if (!u.pts) this.routeBundle(u);
       if (!u.pts || u.pts.length < 2) continue;
@@ -822,7 +868,7 @@ export class Schematic {
         if (horiz) { c[0][1] += off; c[1][1] += off; } else { c[0][0] += off; c[1][0] += off; }
       });
     }
-    for (const type of ['work', 'ref', 'imp'] as EdgeType[]) ties.forEach((t, k) => {
+    for (const type of ['work', 'ref', 'ent', 'imp'] as EdgeType[]) ties.forEach((t, k) => {
       if (t.type !== type) return;
       const pts = octo(curves[k]).map(p => this.sp(p));
       ctx.globalAlpha = type === 'work' ? 0.75 : 0.95;
@@ -941,7 +987,7 @@ export class Schematic {
 
   private buildFocus(f: number, opened: Set<string>): Focus {
     type It = { i: number; out: boolean; inn: boolean; w: number };
-    const by: It[] = [], imp: It[] = [], names: It[] = [], namedBy: It[] = [], work: It[] = [];
+    const by: It[] = [], imp: It[] = [], names: It[] = [], namedBy: It[] = [], work: It[] = [], from: It[] = [], into: It[] = [];
     for (const k of this.incident[f]) {
       const e = this.edges[k], mine = e.a === f, o = mine ? e.b : e.a;
       if (!this.alive(e.born) || !this.alive(this.nodes[o].born)) continue;
@@ -949,11 +995,12 @@ export class Schematic {
       const it = { i: o, out, inn, w: e.w };
       if (e.type === 'imp') (inn && !out ? by : imp).push(it);
       else if (e.type === 'ref') (this.boxes[this.nodes[o].box].outside ? names : namedBy).push(it);
+      else if (e.type === 'ent') (mine ? into : from).push(it); // an entry point's own card, or a module it comes in through
       else work.push(it);
     }
     work.sort((a, b) => b.w - a.w); work.length = Math.min(work.length, FOCUS_WORK);
     type Sec = [string, It[], EdgeType];
-    const L: Sec[] = [['Imported by', by, 'imp'], ['Named by', namedBy, 'ref']], Rt: Sec[] = [['Imports', imp, 'imp'], ['Names systems', names, 'ref']];
+    const L: Sec[] = [['Comes in from', from, 'ent'], ['Imported by', by, 'imp'], ['Named by', namedBy, 'ref']], Rt: Sec[] = [['Comes in through', into, 'ent'], ['Imports', imp, 'imp'], ['Names systems', names, 'ref']];
     (by.length + namedBy.length <= imp.length + names.length ? L : Rt).push(['Changed together', work, 'work']);
 
     const w = CW + 70, hh = CH * 2 + 24, me: R = { x: -w / 2, y: -hh / 2, w, h: hh };
@@ -1142,7 +1189,7 @@ export class Schematic {
     ctx.font = `600 ${9.5 * Math.max(1, lh)}px ${MONO}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${NODE[n.kind].label.toUpperCase()} · ${this.boxes[n.box].name}`, maxW), tx, y + hh * 0.2);
     ctx.font = `600 ${Math.max(12, 16 * lh)}px ${UI}`; ctx.fillStyle = '#111111'; ctx.fillText(clip(ctx, n.title, maxW), tx, y + hh * 0.42);
     ctx.font = `400 ${Math.max(10, 11 * lh)}px ${MONO}`; ctx.fillStyle = '#7a7a7a';
-    if (!this.boxes[n.box].outside) ctx.fillText(clip(ctx, n.sub, maxW), tx, y + hh * 0.62);
+    if (!this.boxes[n.box].outside || this.boxes[n.box].top) ctx.fillText(clip(ctx, n.sub, maxW), tx, y + hh * 0.62);
     ctx.fillStyle = '#555555'; ctx.fillText(clip(ctx, n.meta, maxW), tx, y + hh * 0.8);
   }
 
@@ -1156,7 +1203,7 @@ export class Schematic {
     const ix = x + 10, maxW = w - 18;
     ctx.textBaseline = 'middle';
     if (tier === 1) { ctx.font = `600 11px ${UI}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${b.name} · ${g.n}  ▸`, maxW), ix, y + hh / 2 + 0.5); return; }
-    ctx.font = `600 12.5px ${UI}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${b.name} · ${g.n} ${b.outside ? 'systems' : 'modules'}  ▸`, maxW), ix, y + hh * 0.34);
+    ctx.font = `600 12.5px ${UI}`; ctx.fillStyle = st; ctx.fillText(clip(ctx, `${b.name} · ${g.n} ${b.top ? 'entry points' : b.outside ? 'systems' : 'modules'}  ▸`, maxW), ix, y + hh * 0.34);
     ctx.font = `400 10px ${UI}`; ctx.fillStyle = '#7a7a7a'; ctx.fillText(clip(ctx, g.names, maxW), ix, y + hh * 0.7);
   }
 
@@ -1179,7 +1226,7 @@ export class Schematic {
     ctx.font = `600 12.5px ${UI}`; ctx.fillStyle = '#111111'; ctx.fillText(clip(ctx, n.title, maxW), ix, y + hh * 0.34);
     ctx.font = `400 10px ${MONO}`; ctx.fillStyle = '#8c8c8c';
     const meta = n.meta, mw = Math.min(ctx.measureText(meta).width, maxW * 0.55);
-    if (n.box >= 0 && !this.boxes[n.box].outside) ctx.fillText(clip(ctx, n.sub, maxW - mw - 10), ix, y + hh * 0.7); // the path; an outside group already names the kind
+    if (n.box >= 0 && (!this.boxes[n.box].outside || this.boxes[n.box].top)) ctx.fillText(clip(ctx, n.sub, maxW - mw - 10), ix, y + hh * 0.7); // the path; an outside group already names the kind
     ctx.fillStyle = '#5c5c5c'; ctx.textAlign = 'right'; ctx.fillText(clip(ctx, meta, mw), x + w - 8, y + hh * 0.7); ctx.textAlign = 'left';
   }
 
@@ -1191,6 +1238,12 @@ export class Schematic {
     else if (k === 'service') { ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; ctx.moveTo(Math.cos(a) * 3.2, Math.sin(a) * 3.2); ctx.lineTo(Math.cos(a) * 5.2, Math.sin(a) * 5.2); } ctx.stroke(); }
     else if (k === 'local') { ctx.beginPath(); folderPath(ctx, -5, -4, 10, 8); ctx.stroke(); }
     else if (k === 'store') { ctx.beginPath(); cylinderPath(ctx, -4.5, -5, 9, 10); ctx.stroke(); ctx.beginPath(); ctx.ellipse(0, -3.2, 4.5, 1.8, 0, 0, Math.PI); ctx.stroke(); }
+    // entry points: a page, an arrow in, a prompt, a hook, a clock
+    else if (k === 'page') { ctx.strokeRect(-5, -4.5, 10, 9); ctx.beginPath(); ctx.moveTo(-5, -1.5); ctx.lineTo(5, -1.5); ctx.stroke(); }
+    else if (k === 'http') { ctx.beginPath(); ctx.moveTo(-5.5, 0); ctx.lineTo(3, 0); ctx.moveTo(0, -3); ctx.lineTo(3, 0); ctx.lineTo(0, 3); ctx.moveTo(5, -5); ctx.lineTo(5, 5); ctx.stroke(); }
+    else if (k === 'cli') { ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(-1, 0); ctx.lineTo(-5, 4); ctx.moveTo(0.5, 4.5); ctx.lineTo(5.5, 4.5); ctx.stroke(); }
+    else if (k === 'hook') { ctx.beginPath(); ctx.moveTo(2.5, -5); ctx.lineTo(2.5, 1.5); ctx.arc(-0.5, 1.5, 3, 0, Math.PI); ctx.lineTo(-3.5, -0.5); ctx.stroke(); }
+    else if (k === 'schedule') { ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.moveTo(0, -3); ctx.lineTo(0, 0); ctx.lineTo(2.5, 1.5); ctx.stroke(); }
     ctx.restore();
   }
 

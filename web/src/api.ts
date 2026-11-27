@@ -27,12 +27,16 @@ export interface External {
   id: string; label: string; type: 'host' | 'service' | 'web' | 'local'; n: number; x: number; z: number; w: number; h: number;
   district: number; born: number; first?: number; last?: number; refs: string[]; refCount: number; top: [string, number][] | null;
 }
+// An entry point, one per kind and module: `m` is the module that declares it, `items` what it
+// lists (routes, commands, pages, hook events, schedules), at most 40 of `n`.
+export interface Entry { kind: 'page' | 'http' | 'cli' | 'hook' | 'schedule'; m: number; n: number; items: string[]; files: string[] }
 // A tie between two places ([tt, ti]: 1 module/store, 3 outside system): imports,
 // files changed in the same task or commit, and code that names a system.
 export interface Link { a: [number, number]; b: [number, number]; w: number; born: number; road: boolean; imp: number; task: number; commit: number; ref: number }
 export interface City {
   project: { id: string; name: string; root: string; isGit: boolean; depth: number; w: number; h: number; t0: number };
   districts: District[]; modules: Module[]; files: FileB[]; externals: External[];
+  entries?: Entry[]; // where people, programs and the clock come into the code; absent from servers before 2026-11-26
   links: Link[]; fileEdges: [number, number][];
   commits: { h: string; ts: number; s: string; n: number }[];
 }
@@ -231,6 +235,8 @@ export interface BoardAsk {
   step?: number | null; tool?: string; cmd?: string | null; detail?: string | null; answer: string | null; answeredAt?: number;
   // twin: the first of the same open question in the other projects of a fan-out; auto: answered with the answer given in that project
   twin?: string; auto?: string;
+  // board: a note from the board itself (a failed ship to fix); shipAsk: shipping gave up, what now
+  board?: boolean; shipAsk?: boolean;
 }
 export interface BoardStep { n: number; title: string; after: number[]; state: 'todo' | 'running' | 'done' | 'needs-you' | 'failed' | 'stopped'; summary: string | null; cost: number; runs: number[] }
 export interface BoardRun { n: number; step?: number | null; started: number; ended: number | null; sid: string | null; cost: number; status: string; summary: string | null; error: string | null }
@@ -241,6 +247,8 @@ export interface BoardTask {
   asks: BoardAsk[]; summary: string | null; error: string | null; open: number;
   // tldr: one line on what was done; seen: false while a finished task's TL;DR waits in the to-do
   tldr?: string | null; seen?: boolean;
+  // answer: the full answer when the task asked a question (kept across later runs)
+  answer?: string | null;
   // group: the text it was split from (i of n); after/wait: the task it waits for, while that one isn't done
   group: { id: string; i: number; n: number; source: string; fan?: boolean; names?: string[] } | null; after: string | null;
   // fan: one change for several projects, waiting (state 'targets') for the user to confirm them
@@ -250,12 +258,24 @@ export interface BoardTask {
   steps: BoardStep[]; pause: boolean;
   // tree: works in a git worktree of its own (wt), merged into the main folder's branch when done
   tree?: boolean; wt?: BoardTree | null;
+  // ship: after the merge, the project's ship recipe puts it live and checks it (server/ship.mjs)
+  ship?: BoardShip | null;
 }
+export type ShipState = 'queued' | 'checking' | 'shipping' | 'restarting' | 'verifying' | 'live' | 'fixing' | 'failed' | 'unconfirmed' | 'off' | 'nothing' | 'stopped';
+export interface BoardShip {
+  state: ShipState; tries: number; shas: string[]; files: string[] | null; at: number;
+  stage?: 'check' | 'ship' | 'verify' | null; step?: string | null; log?: string | null; why?: string | null; sha?: string | null; started?: number;
+  proof?: { why: string; url: string | null; sha: string | null; shot: boolean; checked: boolean; at: number } | null;
+  back?: { ok: boolean; sha?: string; why?: string; reship?: string } | null;
+}
+export interface ShipStep { run: string; when: string | null }
+export interface ShipRecipe { check: ShipStep[]; ship: ShipStep[]; verify: { url?: string; expect?: string; within?: number; self?: boolean } | null; live: string | null; screenshot: boolean; notes: string | null }
+export interface ShipInfo { recipe: ShipRecipe | null; confirmed: boolean; off: boolean; source: 'detected' | 'you' | null; at: number | null; why: string | null; detecting: boolean }
 export interface BoardTree {
   dir: string; branch: string; base: string; top: string;
   merge?: { state: 'working' | 'waiting' | 'resolving' | 'conflict' | 'merged' | 'nothing' | 'failed'; why?: string; files?: string[]; sha?: string; into?: string; at?: number };
 }
-export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean }[] }
+export interface Board { tasks: BoardTask[]; projects: { id: string; name: string; root: string; tracked: boolean; model?: { id: string | null; label: string } }[]; ships: Record<string, ShipInfo>; models?: { id: string; label: string }[] }
 
 const enc = encodeURIComponent;
 const post = (url: string, body?: unknown) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -283,17 +303,19 @@ export const api = {
   setSync: async (pid: string, b: { pull?: boolean; push?: boolean }) => { const r = await post(`/api/projects/${enc(pid)}/sync`, b), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as SyncStatus; },
   syncNow: async (pid: string, how: 'now' | 'rebase') => { const r = await post(`/api/projects/${enc(pid)}/sync/${how}`, {}), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d; },
   board: () => get<Board>('/api/board'),
-  addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean }) => {
+  addTask: async (b: { text: string; pid?: string | null; mode: 'ask' | 'full'; autoRun: boolean; pause?: boolean; model?: string | null }) => {
     const r = await post('/api/board', b), d = await r.json();
     if (!r.ok) throw new Error(d.error || String(r.status));
     return d as { task: BoardTask };
   },
-  taskOutput: (id: string) => get<{ sid: string; pid: string | null; project: string | null; tldr: string | null; summary: string | null; text: string | null }>(`/api/board/${enc(id)}/output`),
-  taskAction: async (id: string, action: 'route' | 'run' | 'again' | 'answer' | 'stop' | 'mode' | 'close' | 'delete' | 'join' | 'pause' | 'seen' | 'merge' | 'fan', b: Record<string, unknown> = {}) => {
+  taskOutput: (id: string) => get<{ sid: string; pid: string | null; project: string | null; tldr: string | null; summary: string | null; answer: string | null; text: string | null }>(`/api/board/${enc(id)}/output`),
+  taskAction: async (id: string, action: 'route' | 'run' | 'again' | 'answer' | 'stop' | 'mode' | 'close' | 'delete' | 'join' | 'pause' | 'seen' | 'merge' | 'fan' | 'ship', b: Record<string, unknown> = {}) => {
     const r = await post(`/api/board/${enc(id)}/${action}`, b), d = await r.json();
     if (!r.ok) throw new Error(d.error || String(r.status));
     return d as { task?: BoardTask; ok?: boolean };
   },
+  setShip: async (pid: string, b: { recipe?: ShipRecipe; confirmed?: boolean; off?: boolean }) => { const r = await post(`/api/board/ship/${enc(pid)}`, b), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as ShipInfo; },
+  detectShip: async (pid: string) => { const r = await post(`/api/board/ship/${enc(pid)}/detect`, {}), d = await r.json(); if (!r.ok) throw new Error(d.error || String(r.status)); return d as ShipInfo; },
   track: (id: string) => post(`/api/projects/${enc(id)}/track`),
   untrack: (id: string) => post(`/api/projects/${enc(id)}/untrack`),
   coach: (days: number, pid?: string | null) => get<Coach>(`/api/coach?days=${days}${pid ? '&pid=' + enc(pid) : ''}`),

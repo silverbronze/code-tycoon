@@ -50,12 +50,12 @@ function context(page) {
   const done = b.tasks.filter(t => t.state === 'done').sort((a, c) => c.updated - a.updated).slice(0, 5);
   const task = t => ({ id: t.id, project: t.project, state: t.state, text: short(t.text, 200),
     steps: t.steps?.length ? `${t.steps.filter(s => s.state === 'done').length}/${t.steps.length} done` : undefined,
-    summary: t.summary ? short(t.summary, 200) : undefined,
+    summary: t.summary ? short(t.summary, 200) : undefined, answer: t.answer ? short(t.answer, 800) : undefined,
     asks: t.asks.filter(a => a.answer == null).map(a => ({ id: a.id, kind: a.kind, question: short(a.question, 240), options: a.options?.length ? a.options : undefined, cmd: a.cmd ? short(a.cmd, 160) : undefined })) });
   return {
     page: page?.pid ? { project: page.pid, name: names.get(page.pid) || null, layer: page.layer || null } : { overview: true },
     projects: b.projects.map(p => ({ id: p.id, name: p.name, tracked: p.tracked })),
-    tasks: live.map(task), recentlyDone: done.map(t => ({ id: t.id, project: t.project, text: short(t.text, 120) })),
+    tasks: live.map(task), recentlyDone: done.map(t => ({ id: t.id, project: t.project, text: short(t.text, 120), answer: t.answer ? short(t.answer, 800) : undefined })),
     sessions: openSessions().slice(0, 30).map(s => ({ id: s.id, project: s.pid, name: names.get(s.pid) || null, title: short(s.title, 100), state: s.state })),
   };
 }
@@ -114,7 +114,7 @@ function act(actions, ctx, prefs) {
     }
     let r;
     if (a.do === 'add') {
-      r = create({ text: a.text, pid: pids.has(a.pid) ? a.pid : null, mode: prefs.mode, autoRun: prefs.autoRun !== false, pause: !!prefs.pause });
+      r = create({ text: a.text, pid: pids.has(a.pid) ? a.pid : null, mode: prefs.mode, autoRun: prefs.autoRun !== false, pause: !!prefs.pause, model: prefs.model });
       if (r.task) did.push({ do: 'add', task: r.task.id, text: short(r.task.text, 120) });
     } else {
       const id = String(a.task || '');
